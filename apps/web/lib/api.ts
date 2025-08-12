@@ -22,13 +22,35 @@ export const api = {
   async getSpec(id: string): Promise<MethodSpec> {
     return json(await fetch(`${BASE}/methods/${id}/spec`));
   },
-  async createRun(methodId: string, data: FormData): Promise<{ run_id: string }> {
-    return json(await fetch(`${BASE}/runs?method=${encodeURIComponent(methodId)}`, {
-      method: "POST",
-      body: data,
-    }));
+  async createRun(
+    methodId: string,
+    data: FormData
+  ): Promise<{ run_id: string }> {
+    return json(
+      await fetch(`${BASE}/runs?method=${encodeURIComponent(methodId)}`, {
+        method: "POST",
+        body: data,
+      })
+    );
   },
-  async getRunStatus(id: string): Promise<{ status: string; progress?: number; message?: string }> {
+  async getRunStatus(
+    id: string
+  ): Promise<{ status: string; progress?: number; message?: string }> {
     return json(await fetch(`${BASE}/runs/${id}/status`));
+  },
+
+  async getRunResult(
+    id: string
+  ): Promise<{
+    ok: boolean;
+    trees: string[];
+    clones: any;
+    stats: any;
+    annotations: any;
+    figures: any;
+  }> {
+    const res = await fetch(`${BASE}/runs/${id}/result`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
   },
 };

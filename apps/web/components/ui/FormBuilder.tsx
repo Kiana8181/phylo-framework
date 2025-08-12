@@ -1,4 +1,6 @@
 "use client";
+
+import { useEffect, useMemo } from "react";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -14,69 +16,163 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 
-type Schema = any;
+// ---- Minimal JSON-Schema-ish typing ----
+type JSONSchema = {
+  type?: string;
+  title?: string;
+  description?: string;
+  enum?: string[];
+  default?: unknown;
+  properties?: Record<string, JSONSchema>;
+  required?: string[];
+  uiHints?: { order?: string[] };
+};
 
-function zodFromJsonSchema(schema: Schema) {
+// ---- Helpers ----
+function zodFromJsonSchema(schema: JSONSchema) {
   const props = schema.properties ?? {};
-  const shape: Record<string, any> = {};
-  for (const [key, def] of Object.entries<any>(props)) {
-    let zt: any;
-    if (def.enum) zt = z.enum(def.enum as [string, ...string[]]);
-    else if (def.type === "number" || def.type === "integer") zt = z.number();
-    else if (def.type === "boolean") zt = z.boolean();
-    else zt = z.string();
-    if (!(schema.required ?? []).includes(key)) zt = zt.optional();
+  const required = new Set(schema.required ?? []);
+  const shape: Record<string, z.ZodTypeAny> = {};
+
+  for (const [key, def] of Object.entries(props)) {
+    let zt: z.ZodTypeAny;
+
+    if (def.enum && def.enum.length) {
+      // Cast to tuple for z.enum
+      zt = z.enum(def.enum as [string, ...string[]]);
+    } else if (def.type === "number" || def.type === "integer") {
+      // Accept "", null, undefined -> undefined; otherwise cast to number
+      zt = z.preprocess(
+        (v) => (v === "" || v == null ? undefined : Number(v)),
+        z.number()
+      );
+    } else if (def.type === "boolean") {
+      zt = z.boolean();
+    } else {
+      zt = z.string();
+    }
+
+    if (!required.has(key)) zt = zt.optional();
     shape[key] = zt;
   }
+
   return z.object(shape);
 }
 
+function defaultsFromSchema(
+  schema: JSONSchema,
+  overrides?: Record<string, any>
+) {
+  const props = schema.properties ?? {};
+  const out: Record<string, any> = {};
+
+  for (const [k, def] of Object.entries(props)) {
+    if (overrides && k in overrides) {
+      out[k] = overrides[k];
+      continue;
+    }
+    if ("default" in def!) {
+      out[k] = def!.default;
+      continue;
+    }
+    if (def!.enum) {
+      out[k] = undefined; // lets Select show placeholder
+      continue;
+    }
+    if (def!.type === "boolean") {
+      out[k] = false;
+      continue;
+    }
+    if (def!.type === "number" || def!.type === "integer") {
+      out[k] = undefined; // keeps number input controlled via ""
+      continue;
+    }
+    out[k] = ""; // text-like
+  }
+
+  return out;
+}
+
+// ---- Component ----
 export default function FormBuilder({
   schema,
   onSubmit,
   defaults,
 }: {
-  schema: Schema;
+  schema: JSONSchema;
   defaults?: Record<string, any>;
   onSubmit: (values: Record<string, any>) => void;
 }) {
-  const zodSchema = zodFromJsonSchema(schema);
-  const { control, handleSubmit } = useForm({
+  const zodSchema = useMemo(() => zodFromJsonSchema(schema), [schema]);
+  const formDefaults = useMemo(
+    () => defaultsFromSchema(schema, defaults),
+    [schema, defaults]
+  );
+
+  const { control, handleSubmit, reset } = useForm({
     resolver: zodResolver(zodSchema),
-    defaultValues: defaults ?? {},
+    defaultValues: formDefaults,
   });
+
+  // If schema or defaults change, keep fields controlled from first render
+  useEffect(() => {
+    reset(defaultsFromSchema(schema, defaults));
+  }, [schema, defaults, reset]);
 
   const props = schema.properties ?? {};
   const order = schema.uiHints?.order ?? Object.keys(props);
 
   return (
-    <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+    <form
+      onSubmit={handleSubmit((data) => onSubmit(data))}
+      className="space-y-4"
+    >
       {order.map((name: string) => {
-        const def = props[name];
+        const def = props[name]!;
         const type = def.enum ? "enum" : def.type;
+
         return (
           <div key={name} className="grid gap-2">
             <Label>{def.title ?? name}</Label>
+
             <Controller
               name={name as any}
               control={control}
+              defaultValue={formDefaults[name]} // extra safety
               render={({ field }) => {
+                // Boolean -> Switch
                 if (type === "boolean") {
                   return (
                     <Switch
-                      checked={!!field.value}
+                      checked={Boolean(field.value)}
                       onCheckedChange={field.onChange}
                     />
                   );
                 }
+
+                // Number / Integer -> controlled number input (value never undefined)
                 if (type === "number" || type === "integer") {
-                  return <Input type="number" {...field} />;
+                  return (
+                    <Input
+                      type="number"
+                      value={field.value ?? ""} // controlled
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        field.onChange(v === "" ? undefined : Number(v));
+                      }}
+                      onBlur={field.onBlur}
+                      name={field.name}
+                      ref={field.ref}
+                    />
+                  );
                 }
+
+                // Enum -> controlled Select
                 if (type === "enum") {
                   return (
                     <Select
+                      value={(field.value ?? undefined) as string | undefined}
                       onValueChange={field.onChange}
-                      defaultValue={field.value}
                     >
                       <SelectTrigger>
                         <SelectValue placeholder="Select" />
@@ -91,15 +187,27 @@ export default function FormBuilder({
                     </Select>
                   );
                 }
-                return <Input {...field} />;
+
+                // Fallback text input -> controlled
+                return (
+                  <Input
+                    value={field.value ?? ""}
+                    onChange={field.onChange}
+                    onBlur={field.onBlur}
+                    name={field.name}
+                    ref={field.ref}
+                  />
+                );
               }}
             />
+
             {def.description && (
               <p className="text-xs text-muted-foreground">{def.description}</p>
             )}
           </div>
         );
       })}
+
       <Button type="submit">Run</Button>
     </form>
   );
