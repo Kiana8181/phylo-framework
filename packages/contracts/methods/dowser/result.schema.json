@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["ok", "trees", "clones", "annotations", "stats"],
+  "properties": {
+    "ok": { "type": "boolean" },
+    "trees": { "type": "array", "items": { "type": "string" } },
+    "figures": {
+      "type": ["object", "null"],
+      "properties": {
+        "png_base64": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": true
+    },
+    "annotations": {
+      "type": "array",
+      "items": {
+        "type": ["array", "null"],
+        "items": {
+          "type": "object",
+          "properties": {
+            "label": { "type": "string" },
+            "c_call": { "type": ["string", "null"] }
+          },
+          "additionalProperties": true
+        }
+      }
+    },
+    "clones": {
+      "type": "object",
+      "required": ["clone_id", "seqs"],
+      "properties": {
+        "clone_id": { "type": "array", "items": { "type": "string" } },
+        "seqs":     { "type": "array", "items": { "type": "integer" } }
+      }
+    },
+    "stats": {
+      "type": "object",
+      "properties": {
+        "n_clones":   { "type": ["integer", "null"] },
+        "n_trees":    { "type": ["integer", "null"] },
+        "total_seqs": { "type": ["integer", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "render": { "type": ["string", "null"] }
+  },
+  "additionalProperties": true
+}

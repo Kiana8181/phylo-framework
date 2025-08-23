@@ -1,0 +1,10 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "tree_model": { "type": "string", "enum": ["mp", "ml", "igphyml"], "title": "Tree model", "default": "mp" },
+    "minseq":     { "type": "integer", "title": "Min seq per clone", "default": 3 },
+    "nproc":      { "type": "integer", "title": "Threads", "default": 1 }
+  },
+  "required": ["tree_model"]
+}

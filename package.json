@@ -1,6 +1,14 @@
 {
   "name": "phylo-framework",
   "private": true,
-  "version": "0.1.0",
-  "workspaces": ["apps/*"]
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm -w @phylo/contracts run build && npm -w web run build",
+    "dev:web": "npm -w web run dev",
+    "dev:api": "uvicorn apps.api.main:app --reload --host 0.0.0.0 --port 8000",
+    "lint": "npm -w web run lint"
+  }
 }

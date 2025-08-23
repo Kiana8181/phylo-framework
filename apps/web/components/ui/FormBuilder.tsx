@@ -16,7 +16,6 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 
-// ---- Minimal JSON-Schema-ish typing ----
 type JSONSchema = {
   type?: string;
   title?: string;
@@ -28,7 +27,6 @@ type JSONSchema = {
   uiHints?: { order?: string[] };
 };
 
-// ---- Helpers ----
 function zodFromJsonSchema(schema: JSONSchema) {
   const props = schema.properties ?? {};
   const required = new Set(schema.required ?? []);
@@ -38,10 +36,8 @@ function zodFromJsonSchema(schema: JSONSchema) {
     let zt: z.ZodTypeAny;
 
     if (def.enum && def.enum.length) {
-      // Cast to tuple for z.enum
       zt = z.enum(def.enum as [string, ...string[]]);
     } else if (def.type === "number" || def.type === "integer") {
-      // Accept "", null, undefined -> undefined; otherwise cast to number
       zt = z.preprocess(
         (v) => (v === "" || v == null ? undefined : Number(v)),
         z.number()
@@ -76,7 +72,7 @@ function defaultsFromSchema(
       continue;
     }
     if (def!.enum) {
-      out[k] = undefined; // lets Select show placeholder
+      out[k] = undefined;
       continue;
     }
     if (def!.type === "boolean") {
@@ -84,16 +80,15 @@ function defaultsFromSchema(
       continue;
     }
     if (def!.type === "number" || def!.type === "integer") {
-      out[k] = undefined; // keeps number input controlled via ""
+      out[k] = undefined;
       continue;
     }
-    out[k] = ""; // text-like
+    out[k] = "";
   }
 
   return out;
 }
 
-// ---- Component ----
 export default function FormBuilder({
   schema,
   onSubmit,
@@ -114,7 +109,6 @@ export default function FormBuilder({
     defaultValues: formDefaults,
   });
 
-  // If schema or defaults change, keep fields controlled from first render
   useEffect(() => {
     reset(defaultsFromSchema(schema, defaults));
   }, [schema, defaults, reset]);
@@ -138,9 +132,8 @@ export default function FormBuilder({
             <Controller
               name={name as any}
               control={control}
-              defaultValue={formDefaults[name]} // extra safety
+              defaultValue={formDefaults[name]}
               render={({ field }) => {
-                // Boolean -> Switch
                 if (type === "boolean") {
                   return (
                     <Switch
@@ -150,12 +143,11 @@ export default function FormBuilder({
                   );
                 }
 
-                // Number / Integer -> controlled number input (value never undefined)
                 if (type === "number" || type === "integer") {
                   return (
                     <Input
                       type="number"
-                      value={field.value ?? ""} // controlled
+                      value={field.value ?? ""}
                       onChange={(e) => {
                         const v = e.target.value;
                         field.onChange(v === "" ? undefined : Number(v));
@@ -167,7 +159,6 @@ export default function FormBuilder({
                   );
                 }
 
-                // Enum -> controlled Select
                 if (type === "enum") {
                   return (
                     <Select
@@ -188,7 +179,6 @@ export default function FormBuilder({
                   );
                 }
 
-                // Fallback text input -> controlled
                 return (
                   <Input
                     value={field.value ?? ""}

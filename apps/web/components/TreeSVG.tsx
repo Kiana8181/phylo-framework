@@ -1,7 +1,7 @@
 // apps/web/components/TreeSVG.tsx
 "use client";
 
-import { useMemo, useRef } from "react";
+import { useMemo, useRef, useState } from "react";
 import { parseNewick, NewickNode } from "@/lib/newick";
 
 type Anno = { label: string; c_call?: string };
@@ -13,9 +13,9 @@ type Props = {
   filename?: string;
   fontSize?: number;
   strokeWidth?: number;
-  showLabels?: boolean; // default false (match Dowser PNG style)
-  annotations?: Anno[]; // [{label, c_call}] per tree (from backend)
-  colorMap?: Record<string, string>; // map isotype -> color hex
+  showLabels?: boolean; // default false
+  annotations?: Anno[];
+  colorMap?: Record<string, string>;
 };
 
 type LNode = NewickNode & { parent?: LNode; x?: number; y?: number };
@@ -38,6 +38,12 @@ function sanitizeNewick(s: string): string {
   return x;
 }
 
+// lightweight text-width estimator (good enough for margin sizing)
+function estimateTextWidth(label: string, fontSize: number) {
+  // ~0.6em per character is a decent approximation for sans fonts
+  return Math.ceil(fontSize * 0.6 * (label?.length ?? 0));
+}
+
 export default function TreeSVG({
   newick,
   width = 900,
@@ -45,11 +51,12 @@ export default function TreeSVG({
   filename = "tree",
   fontSize = 12,
   strokeWidth = 1,
-  showLabels = false,
+  showLabels: showLabelsProp = false,
   annotations,
   colorMap,
 }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
+  const [showLabels, setShowLabels] = useState<boolean>(showLabelsProp);
 
   // Annotation lookup by leaf label
   const annoByLabel = useMemo(() => {
@@ -60,25 +67,40 @@ export default function TreeSVG({
     return m;
   }, [annotations]);
 
+  const colors = { ...DEFAULT_COLORS, ...(colorMap ?? {}) };
+
   const layout = useMemo(() => {
     const input = sanitizeNewick(newick);
     const root = parseNewick(input) as LNode;
 
-    const margin = { top: 20, right: 160, bottom: 20, left: 20 };
+    // We'll compute leaves early to size the label margin if needed
+    const tmpLeaves: LNode[] = [];
+    (function collectLeaves(n: LNode) {
+      if (!n.children || n.children.length === 0) tmpLeaves.push(n);
+      else n.children.forEach((c) => collectLeaves(c as LNode));
+    })(root);
+
+    // dynamic right margin when labels are visible
+    const longestLabelLen =
+      tmpLeaves.length === 0
+        ? 0
+        : Math.max(...tmpLeaves.map((n) => (n.name ?? "").length));
+    const labelPad = 10; // space between plot and labels
+    const labelArea =
+      showLabels && longestLabelLen
+        ? Math.max(
+            160,
+            estimateTextWidth("W".repeat(longestLabelLen), fontSize) + 18
+          )
+        : 20;
+
+    const margin = { top: 20, right: labelArea, bottom: 20, left: 20 };
     const innerW = Math.max(1, width - margin.left - margin.right);
     const innerH = Math.max(1, height - margin.top - margin.bottom);
 
-    // Collect leaves in DFS order
-    const leaves: LNode[] = [];
-    function collectLeaves(n: LNode) {
-      if (!n.children || n.children.length === 0) leaves.push(n);
-      else n.children.forEach((c) => collectLeaves(c as LNode));
-    }
-    collectLeaves(root);
-
     // y positions (equally spaced)
-    const yStep = leaves.length > 1 ? innerH / (leaves.length - 1) : 0;
-    leaves.forEach((leaf, i) => (leaf.y = margin.top + i * yStep));
+    const yStep = tmpLeaves.length > 1 ? innerH / (tmpLeaves.length - 1) : 0;
+    tmpLeaves.forEach((leaf, i) => (leaf.y = margin.top + i * yStep));
 
     // longest path length for x scaling
     function pathLen(n: LNode): number {
@@ -122,8 +144,7 @@ export default function TreeSVG({
       })(root);
     }
 
-    // Build edges (rectangular): vertical at parent.x spanning children y,
-    // plus horizontal from parent.x to child.x at child.y
+    // Build edges (rectangular)
     const edges: Array<{ x1: number; y1: number; x2: number; y2: number }> = [];
     function walkEdges(n: LNode) {
       if (!n.children || !n.children.length) return;
@@ -147,8 +168,12 @@ export default function TreeSVG({
       else n.children.forEach((c) => collect(c as LNode));
     })(root);
 
-    return { root, edges, leafNodes, margin };
-  }, [newick, width, height]);
+    // label anchor x: right outside plotting area so labels never sit "inside" the plot
+    const plotRightX = width - margin.right; // end of branches
+    const labelX = plotRightX + labelPad;
+
+    return { root, edges, leafNodes, margin, labelX };
+  }, [newick, width, height, fontSize, showLabels]);
 
   // Downloads
   function downloadSVG() {
@@ -200,8 +225,6 @@ export default function TreeSVG({
     URL.revokeObjectURL(url);
   }
 
-  const colors = { ...DEFAULT_COLORS, ...(colorMap ?? {}) };
-
   return (
     <div className="w-full">
       <svg
@@ -212,7 +235,11 @@ export default function TreeSVG({
         role="img"
       >
         {/* branches */}
-        <g stroke="currentColor" strokeWidth={strokeWidth}>
+        <g
+          stroke="currentColor"
+          strokeWidth={strokeWidth}
+          vectorEffect="non-scaling-stroke"
+        >
           {layout.edges.map((e, i) => (
             <line key={i} x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2} />
           ))}
@@ -228,13 +255,29 @@ export default function TreeSVG({
           })}
         </g>
 
-        {/* optional tip labels */}
+        {/* labels outside + leader lines */}
         {showLabels && (
           <g fontSize={fontSize} fill="currentColor">
             {layout.leafNodes.map((n, i) => (
-              <text key={i} x={(n.x ?? 0) + 6} y={(n.y ?? 0) - fontSize * 0.5}>
-                {n.name ?? ""}
-              </text>
+              <g key={i}>
+                <line
+                  x1={n.x!}
+                  y1={n.y!}
+                  x2={Math.round(layout.labelX) - 4}
+                  y2={n.y!}
+                  stroke="currentColor"
+                  strokeWidth={0.5}
+                  opacity={0.4}
+                  vectorEffect="non-scaling-stroke"
+                />
+                <text
+                  x={Math.round(layout.labelX)}
+                  y={n.y!}
+                  dominantBaseline="middle" // <-- aligns text vertically to the tip
+                >
+                  {n.name ?? ""}
+                </text>
+              </g>
             ))}
           </g>
         )}
@@ -258,6 +301,16 @@ export default function TreeSVG({
           className="rounded border px-3 py-1 text-sm"
         >
           Download Newick
+        </button>
+
+        <button
+          onClick={() => setShowLabels((v) => !v)}
+          className="ml-auto rounded border px-3 py-1 text-sm"
+          aria-pressed={showLabels}
+          aria-label="Toggle labels"
+          title="Toggle tip labels"
+        >
+          {showLabels ? "Hide labels" : "Show labels"}
         </button>
       </div>
     </div>

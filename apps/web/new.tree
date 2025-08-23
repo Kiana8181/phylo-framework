@@ -1,0 +1,165 @@
+├── .env.local
+├── .gitignore
+├── .next
+│  ├── app-build-manifest.json
+│  ├── build-manifest.json
+│  ├── cache
+│  │  ├── .rscinfo
+│  │  ├── chrome-devtools-workspace-uuid
+│  │  ├── swc
+│  │  │  └── plugins
+│  │  │    └── v7_linux_x86_64_17.0.0
+│  │  └── webpack
+│  │    ├── client-development
+│  │    │  ├── 0.pack.gz
+│  │    │  ├── 1.pack.gz
+│  │    │  ├── 10.pack.gz
+│  │    │  ├── 11.pack.gz
+│  │    │  ├── 12.pack.gz
+│  │    │  ├── 13.pack.gz
+│  │    │  ├── 14.pack.gz
+│  │    │  ├── 15.pack.gz
+│  │    │  ├── 16.pack.gz
+│  │    │  ├── 17.pack.gz
+│  │    │  ├── 2.pack.gz
+│  │    │  ├── 3.pack.gz
+│  │    │  ├── 4.pack.gz
+│  │    │  ├── 5.pack.gz
+│  │    │  ├── 6.pack.gz
+│  │    │  ├── 7.pack.gz
+│  │    │  ├── 8.pack.gz
+│  │    │  ├── 9.pack.gz
+│  │    │  ├── index.pack.gz
+│  │    │  └── index.pack.gz.old
+│  │    ├── client-development-fallback
+│  │    │  ├── 0.pack.gz
+│  │    │  ├── 1.pack.gz
+│  │    │  ├── index.pack.gz
+│  │    │  └── index.pack.gz.old
+│  │    └── server-development
+│  │      ├── 0.pack.gz
+│  │      ├── 1.pack.gz
+│  │      ├── 10.pack.gz
+│  │      ├── 11.pack.gz
+│  │      ├── 12.pack.gz
+│  │      ├── 13.pack.gz
+│  │      ├── 14.pack.gz
+│  │      ├── 15.pack.gz
+│  │      ├── 16.pack.gz
+│  │      ├── 17.pack.gz
+│  │      ├── 2.pack.gz
+│  │      ├── 3.pack.gz
+│  │      ├── 4.pack.gz
+│  │      ├── 5.pack.gz
+│  │      ├── 6.pack.gz
+│  │      ├── 7.pack.gz
+│  │      ├── 8.pack.gz
+│  │      ├── 9.pack.gz
+│  │      ├── index.pack.gz
+│  │      └── index.pack.gz.old
+│  ├── package.json
+│  ├── prerender-manifest.json
+│  ├── react-loadable-manifest.json
+│  ├── routes-manifest.json
+│  ├── server
+│  │  ├── app
+│  │  │  ├── favicon.ico
+│  │  │  │  └── route.js
+│  │  │  ├── page_client-reference-manifest.js
+│  │  │  └── page.js
+│  │  ├── app-paths-manifest.json
+│  │  ├── interception-route-rewrite-manifest.js
+│  │  ├── middleware-build-manifest.js
+│  │  ├── middleware-manifest.json
+│  │  ├── middleware-react-loadable-manifest.js
+│  │  ├── next-font-manifest.js
+│  │  ├── next-font-manifest.json
+│  │  ├── pages-manifest.json
+│  │  ├── server-reference-manifest.js
+│  │  ├── server-reference-manifest.json
+│  │  ├── vendor-chunks
+│  │  │  ├── @floating-ui.js
+│  │  │  ├── @hookform.js
+│  │  │  ├── @radix-ui.js
+│  │  │  ├── @swc.js
+│  │  │  ├── @tanstack.js
+│  │  │  ├── aria-hidden.js
+│  │  │  ├── class-variance-authority.js
+│  │  │  ├── clsx.js
+│  │  │  ├── get-nonce.js
+│  │  │  ├── lucide-react.js
+│  │  │  ├── next.js
+│  │  │  ├── react-hook-form.js
+│  │  │  ├── react-remove-scroll-bar.js
+│  │  │  ├── react-remove-scroll.js
+│  │  │  ├── react-style-singleton.js
+│  │  │  ├── tailwind-merge.js
+│  │  │  ├── tslib.js
+│  │  │  ├── use-callback-ref.js
+│  │  │  ├── use-sidecar.js
+│  │  │  └── zod.js
+│  │  └── webpack-runtime.js
+│  ├── static
+│  │  ├── chunks
+│  │  │  ├── _app-pages-browser_node_modules_tanstack_query-devtools_build_DevtoolsComponent_EDEL3XIZ_js.js
+│  │  │  ├── _app-pages-browser_node_modules_tanstack_query-devtools_build_DevtoolsPanelComponent_RN252AT2_js.js
+│  │  │  ├── app
+│  │  │  │  ├── layout.js
+│  │  │  │  └── page.js
+│  │  │  ├── app-pages-internals.js
+│  │  │  ├── main-app.js
+│  │  │  ├── polyfills.js
+│  │  │  └── webpack.js
+│  │  ├── css
+│  │  │  └── app
+│  │  │    └── layout.css
+│  │  ├── development
+│  │  │  ├── _buildManifest.js
+│  │  │  └── _ssgManifest.js
+│  │  └── webpack
+│  │    └── 633457081244afec._.hot-update.json
+│  ├── trace
+│  └── types
+│    ├── app
+│    │  ├── layout.ts
+│    │  └── page.ts
+│    ├── cache-life.d.ts
+│    └── package.json
+├── app
+│  ├── favicon.ico
+│  ├── globals.css
+│  ├── layout.tsx
+│  ├── page.tsx
+│  └── providers.tsx
+├── components
+│  └── ui
+│    ├── button.tsx
+│    ├── card.tsx
+│    ├── form.tsx
+│    ├── FormBuilder.tsx
+│    ├── input.tsx
+│    ├── label.tsx
+│    ├── select.tsx
+│    ├── slider.tsx
+│    ├── switch.tsx
+│    ├── textarea.tsx
+│    └── TreeSVG.tsx
+├── components.json
+├── eslint.config.mjs
+├── lib
+│  ├── api.ts
+│  ├── newick.ts
+│  └── utils.ts
+├── next-env.d.ts
+├── next.config.ts
+├── package.json
+├── postcss.config.mjs
+├── public
+│  ├── file.svg
+│  ├── globe.svg
+│  ├── next.svg
+│  ├── vercel.svg
+│  └── window.svg
+├── README.md
+├── tailwind.config.ts
+└── tsconfig.json
