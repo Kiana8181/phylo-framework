@@ -1,5 +1,6 @@
 import type { AxiosRequestConfig, AxiosResponse } from "axios";
 import { http } from "./client";
+import { isEnvelope } from "@phylo/contracts";
 
 export enum Method {
   Get = "get",
@@ -23,12 +24,6 @@ export type ServiceHandlerParams<TBody = unknown> = {
 };
 
 const requestCache = new Map<string, true>();
-
-function isEnvelope(
-  x: any
-): x is { status: "success" | "error"; data: any; message?: string } {
-  return x && typeof x === "object" && "status" in x && "data" in x;
-}
 
 export async function serviceHandler<TResp = any, TBody = unknown>({
   method,

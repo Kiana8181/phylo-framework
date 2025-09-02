@@ -1,12 +1,12 @@
 import { serviceHandler, Method } from "@/lib/http/serviceHandler";
-import type { MethodInfo, MethodSpec } from "@/types/api";
+import { API_ROUTES, type MethodInfo, type MethodSpec } from "@phylo/contracts";
 
 export const MethodsApi = {
   list: () =>
-    serviceHandler<MethodInfo[]>({ method: Method.Get, url: "/methods" }),
+    serviceHandler<MethodInfo[]>({ method: Method.Get, url: API_ROUTES.methods() }),
   spec: (id: string) =>
     serviceHandler<MethodSpec>({
       method: Method.Get,
-      url: `/methods/${id}/spec`,
+      url: API_ROUTES.methodSpec(id),
     }),
 };

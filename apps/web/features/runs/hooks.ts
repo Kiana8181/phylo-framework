@@ -1,6 +1,6 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { RunsApi } from "./api";
-import type { RunStatus, RunResult, CreateRunResponse } from "@/types/api";
+import type { RunStatus, RunResult, CreateRunResponse } from "@phylo/contracts";
 import { notify } from "@/lib/notify";
 import { useEffect, useRef } from "react";
 

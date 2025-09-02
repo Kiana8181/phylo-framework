@@ -12,7 +12,7 @@ import {
   useRunStatus,
 } from "@/features/runs/hooks";
 import { cleanNewick } from "@/lib/newick";
-import type { MethodInfo } from "@/types/api";
+import type { MethodInfo } from "@phylo/contracts";
 import { useEffect, useMemo, useState } from "react";
 
 export default function Home() {

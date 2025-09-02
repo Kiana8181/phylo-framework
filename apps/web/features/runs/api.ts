@@ -1,5 +1,5 @@
 import { serviceHandler, Method } from "@/lib/http/serviceHandler";
-import type { CreateRunResponse, RunResult, RunStatus } from "@/types/api";
+import { API_ROUTES, type CreateRunResponse, type RunResult, type RunStatus } from "@phylo/contracts";
 
 export const RunsApi = {
   create: (
@@ -8,7 +8,7 @@ export const RunsApi = {
   ) =>
     serviceHandler<CreateRunResponse, any>({
       method: Method.Post,
-      url: `/runs`,
+      url: API_ROUTES.createRun(methodId),
       params: { method: methodId },
       data: form instanceof FormData ? form : (form as any),
       hasFile: true,
@@ -17,11 +17,11 @@ export const RunsApi = {
   status: (id: string) =>
     serviceHandler<RunStatus>({
       method: Method.Get,
-      url: `/runs/${id}/status`,
+      url: API_ROUTES.runStatus(id),
     }),
   result: (id: string) =>
     serviceHandler<RunResult>({
       method: Method.Get,
-      url: `/runs/${id}/result`,
+      url: API_ROUTES.runResult(id),
     }),
 };

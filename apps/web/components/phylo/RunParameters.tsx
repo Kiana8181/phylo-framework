@@ -3,7 +3,7 @@
 import { Card } from "@/components/ui/card";
 import FormBuilder from "@/components/ui/FormBuilder";
 import FileInput from "@/components/common/FileInput";
-import type { MethodSpec } from "@/types/api";
+import type { MethodSpec } from "@phylo/contracts";
 
 export default function RunParameters({
   spec,

@@ -1,7 +1,7 @@
 "use client";
 
 import { Card } from "@/components/ui/card";
-import type { MethodInfo } from "@/types/api";
+import type { MethodInfo } from "@phylo/contracts";
 
 export default function MethodsGrid({
   methods,
