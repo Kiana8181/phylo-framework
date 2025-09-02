@@ -1,0 +1,5 @@
+{
+  "requiresFile": true,
+  "maxFiles": 1,
+  "order": ["tree_model", "minseq", "nproc"]
+}

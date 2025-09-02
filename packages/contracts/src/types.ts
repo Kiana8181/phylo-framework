@@ -1,6 +1,3 @@
-// Shared domain types mirrored across apps.
-// Keep minimal and stable.
-
 export type MethodInfo = { id: string; name: string; version: string };
 
 export type MethodSpec = {
@@ -8,7 +5,7 @@ export type MethodSpec = {
   name: string;
   version: string;
   accepts: string[];
-  paramSchema: any; // JSON Schema object (rendered by FormBuilder)
+  paramSchema: any;
   uiHints?: Record<string, any>;
 };
 
