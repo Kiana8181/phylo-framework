@@ -1,35 +1,72 @@
-# services/dowser/plumber.R
 #* @apiTitle Dowser microservice
 #* @apiDescription Build BCR lineage trees with Dowser (requires AIRR-like input).
 
 library(plumber)
+SER <- plumber::serializer_json(
+  auto_unbox = TRUE,
+  null = "null",
+  na = "null",
+  dataframe = "rows"
+)
+
 library(jsonlite)
 library(dowser)
 library(alakazam)
 library(ape)
+library(jsonvalidate)
 
-# ---------- /spec ----------
-#* @serializer json list(auto_unbox=TRUE)
-#* @get /spec
-function() {
-  list(
-    id = "dowser",
-    name = "Dowser",
-    version = as.character(utils::packageVersion("dowser")),
-    accepts = c("text/csv", "text/tab-separated-values", "application/x-rds", "application/x-rda", "text/fasta"),
-    paramSchema = list(
-      `$schema` = "http://json-schema.org/draft-07/schema#",
-      type = "object",
-      properties = list(
-        tree_model = list(enum = c("mp", "ml", "igphyml"), title = "Tree model", default = "mp"),
-        minseq     = list(type = "integer", title = "Min seq per clone", default = 3),
-        nproc      = list(type = "integer", title = "Threads", default = 1)
-      ),
-      required = list("tree_model")
-    ),
-    uiHints = list(order = c("tree_model", "minseq", "nproc"))
-  )
+# ---------------------------
+# Config & Contracts loading
+# ---------------------------
+CONTRACTS_DIR <- Sys.getenv("CONTRACTS_DIR", "packages/contracts")
+METHOD_DIR    <- file.path(CONTRACTS_DIR, "methods", "dowser")
+
+PARAM_SCHEMA_PATH   <- file.path(METHOD_DIR, "param.schema.json")
+RESULT_SCHEMA_PATH  <- file.path(METHOD_DIR, "result.schema.json")
+SPEC_JSON_PATH      <- file.path(METHOD_DIR, "spec.json")
+UI_JSON_PATH        <- file.path(METHOD_DIR, "ui.json")
+ROUTES_JSON_PATH    <- file.path(METHOD_DIR, "service.routes.json")
+
+read_json_or <- function(path, default = NULL) {
+  if (file.exists(path)) {
+    tryCatch(jsonlite::fromJSON(path, simplifyVector = FALSE),
+             error = function(e) default)
+  } else default
 }
+
+PARAM_SCHEMA  <- read_json_or(PARAM_SCHEMA_PATH, list(type="object", properties=list(), required=list()))
+RESULT_SCHEMA <- RESULT_SCHEMA_PATH  # jsonvalidate accepts a path
+
+SPEC_JSON     <- read_json_or(SPEC_JSON_PATH, list())
+UI_JSON       <- read_json_or(UI_JSON_PATH, list())
+ROUTES        <- read_json_or(ROUTES_JSON_PATH, list(spec="/spec", run="/run"))
+
+# Merge helpers (shallow)
+merge_list <- function(a, b) { # values in b override a
+  a[names(b)] <- b
+  a
+}
+
+# Default accepts (only used if not provided in contracts/spec.json)
+DEFAULT_ACCEPTS <- c(
+  "text/csv",
+  "text/tab-separated-values",
+  "application/x-rds",
+  "application/x-rda",
+  "text/fasta"
+)
+
+# Default UI hints (only used if not provided in contracts/ui.json)
+DEFAULT_UI <- list(
+  requiresFile = TRUE,
+  maxFiles = 1,
+  order = c("tree_model", "minseq", "nproc")
+)
+
+# ---------------------------
+# Shared helpers
+# ---------------------------
+`%||%` <- function(a, b) if (is.null(a) || length(a) == 0 || (is.character(a) && !nzchar(a))) b else a
 
 to_newick <- function(phy) {
   tf <- tempfile(fileext = ".nwk")
@@ -45,32 +82,36 @@ encode_png <- function(plot, width = 900, height = 520, dpi = 100) {
   jsonlite::base64_enc(readBin(tf, "raw", n = file.info(tf)$size))
 }
 
-# ---------- /run ----------
-#* @serializer json list(auto_unbox=TRUE)
-#* @post /run
-function(req, res) {
+# ---------------------------
+# Handlers (impl)
+# ---------------------------
+spec_handler_impl <- function() {
+  # name/version: prefer contracts/spec.json, fall back to package version for dowser
+  pkg_ver <- as.character(utils::packageVersion("dowser"))
+  name    <- SPEC_JSON$name %||% "Dowser"
+  version <- SPEC_JSON$version %||% pkg_ver
+
+  accepts <- SPEC_JSON$accepts
+  if (is.null(accepts) || !length(accepts)) accepts <- DEFAULT_ACCEPTS
+
+  ui_hints <- merge_list(DEFAULT_UI, UI_JSON)
+
+  list(
+    id = "dowser",
+    name = name,
+    version = version,
+    accepts = accepts,
+    paramSchema = PARAM_SCHEMA,
+    uiHints = ui_hints
+  )
+}
+
+run_handler_impl <- function(req, res) {
   # ---- libs ----
   library(jsonlite)
   library(readr)
   library(dowser)
   library(ape)
-
-  # ---- helpers ----
-  `%||%` <- function(a, b) if (is.null(a) || length(a) == 0 || (is.character(a) && !nzchar(a))) b else a
-
-  to_newick <- function(phy) {
-    tf <- tempfile(fileext = ".nwk")
-    on.exit(if (file.exists(tf)) unlink(tf), add = TRUE)
-    ape::write.tree(phy, file = tf)
-    paste(readLines(tf, warn = FALSE), collapse = "")
-  }
-
-  encode_png <- function(plot, width = 900, height = 520, dpi = 100) {
-    tf <- tempfile(fileext = ".png")
-    on.exit(if (file.exists(tf)) unlink(tf), add = TRUE)
-    ggplot2::ggsave(tf, plot = plot, width = width / 100, height = height / 100, dpi = dpi, bg = "white")
-    jsonlite::base64_enc(readBin(tf, "raw", n = file.info(tf)$size))
-  }
 
   tryCatch(
     {
@@ -82,7 +123,7 @@ function(req, res) {
       if (length(raw_params) > 1) raw_params <- raw_params[[1]]
       p <- tryCatch(jsonlite::fromJSON(raw_params), error = function(e) list())
       if (is.null(p$minseq)) p$minseq <- 3L
-      if (is.null(p$nproc)) p$nproc <- 1L
+      if (is.null(p$nproc))  p$nproc  <- 1L
 
       # ---- find file part ----
       f <- NULL
@@ -137,39 +178,18 @@ function(req, res) {
         load_ok <- TRUE
       } else {
         # last-resort guesses
-        try(
-          {
-            db <- readRDS(f$datapath)
-            load_ok <- TRUE
-          },
-          silent = TRUE
-        )
+        try({ db <- readRDS(f$datapath); load_ok <- TRUE }, silent = TRUE)
         if (!load_ok) {
-          try(
-            {
-              e <- new.env()
-              load(f$datapath, envir = e)
-              db <- e[[ls(e)[1]]]
-              load_ok <- TRUE
-            },
-            silent = TRUE
-          )
-        }
-        if (!load_ok) {
-          try(
-            {
-              db <- suppressMessages(readr::read_tsv(f$datapath, show_col_types = FALSE))
-            },
-            silent = TRUE
-          )
+          try({
+            e <- new.env(); load(f$datapath, envir = e)
+            db <- e[[ls(e)[1]]]; load_ok <- TRUE
+          }, silent = TRUE)
         }
         if (is.null(db)) {
-          try(
-            {
-              db <- suppressMessages(readr::read_csv(f$datapath, show_col_types = FALSE))
-            },
-            silent = TRUE
-          )
+          try({ db <- suppressMessages(readr::read_tsv(f$datapath, show_col_types = FALSE)) }, silent = TRUE)
+        }
+        if (is.null(db)) {
+          try({ db <- suppressMessages(readr::read_csv(f$datapath, show_col_types = FALSE)) }, silent = TRUE)
         }
       }
 
@@ -197,7 +217,6 @@ function(req, res) {
       if (!"c_call" %in% names(db)) db$c_call <- "unknown"
 
       # ---- clones & trees ----
-      # NOTE: use dowser::formatClones (not alakazam)
       clones <- dowser::formatClones(db, traits = "c_call", minseq = as.integer(p$minseq))
       trees_tbl <- dowser::getTrees(clones, nproc = as.integer(p$nproc))
 
@@ -231,7 +250,7 @@ function(req, res) {
         total_seqs = nrow(db)
       )
 
-      list(
+      result <- list(
         ok = TRUE,
         trees = unname(newicks),
         clones = clones_meta,
@@ -240,6 +259,18 @@ function(req, res) {
         stats = stats,
         render = if (is.null(figures_b64)) NULL else "plotTrees_c_call_tipsize2"
       )
+
+      # validate result with contracts schema (path)
+      if (!jsonvalidate::json_validate(
+        jsonlite::toJSON(result, auto_unbox = TRUE, null = "null"),
+        RESULT_SCHEMA_PATH,
+        verbose = TRUE
+      )) {
+        res$status <- 500
+        return(list(ok = FALSE, error = "Result does not match schema"))
+      }
+
+      return(result)
     },
     error = function(e) {
       res$status <- 500
@@ -247,3 +278,17 @@ function(req, res) {
     }
   )
 }
+
+STRICT_CONTRACT <- tolower(Sys.getenv("STRICT_CONTRACT_ROUTES", "true")) %in% c("1","true","yes")
+
+#* @plumber
+function(pr) {
+  if (!STRICT_CONTRACT) {
+    pr$handle("GET",  "/spec", serializer = SER, function(req, res) spec_handler_impl())
+    pr$handle("POST", "/run",  serializer = SER, function(req, res) run_handler_impl(req, res))
+  }
+  pr$handle("GET",  ROUTES$spec, serializer = SER, function(req, res) spec_handler_impl())
+  pr$handle("POST", ROUTES$run,  serializer = SER, function(req, res) run_handler_impl(req, res))
+  pr
+}
+
