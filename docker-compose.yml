@@ -1,0 +1,95 @@
+# docker-compose.yml  (only showing the service blocks)
+
+x-env-common: &env_common
+  CONTRACTS_DIR: /contracts
+  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+  METHOD_DOWSER_URL: http://dowser:8001
+  HTTP_CLIENT_TIMEOUT: "600"
+  SPEC_TIMEOUT: "60"
+
+services:
+  # --- UI: DEV ---
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    image: phylo-web:latest
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://api:8000
+    depends_on: [api]
+    ports: ["3000:3000"]
+    volumes:
+      - type: bind
+        source: .
+        target: /srv
+      - type: bind
+        source: ./packages/contracts
+        target: /contracts
+        read_only: true
+    command: npm -w web run dev -- -p 3000
+    profiles: ["dev"]
+
+  # --- UI: PROD ---
+  web-prod:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    image: phylo-web:latest
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://api:8000
+    depends_on: [api-prod]
+    ports: ["3000:3000"]
+    profiles: ["prod"]
+    # no volumes; image is self-contained
+
+  # --- API: DEV ---
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    image: phylo-api:latest
+    environment:
+      <<: *env_common
+    depends_on: [dowser]
+    ports: ["8000:8000"]
+    volumes:
+      - type: bind
+        source: ./packages/contracts
+        target: /contracts
+        read_only: true
+    command: uvicorn apps.api.main:app --host 0.0.0.0 --port 8000 --reload
+    profiles: ["dev"]
+
+  # --- API: PROD ---
+  api-prod:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    image: phylo-api:latest
+    environment:
+      <<: *env_common
+    depends_on: [dowser]
+    ports: ["8000:8000"]
+    volumes:
+      - type: bind
+        source: ./packages/contracts
+        target: /contracts
+        read_only: true
+    command: uvicorn apps.api.main:app --host 0.0.0.0 --port 8000
+    profiles: ["prod"]
+
+  dowser:
+    build:
+      context: ./services/dowser
+      dockerfile: Dockerfile
+    image: phylo-dowser:latest
+    environment:
+      CONTRACTS_DIR: /contracts
+      STRICT_CONTRACT_ROUTES: ${STRICT_CONTRACT_ROUTES:-true}
+    volumes:
+      - type: bind
+        source: ./packages/contracts
+        target: /contracts
+        read_only: true
+    expose: ["8001"]
+    profiles: ["dev","prod"]
