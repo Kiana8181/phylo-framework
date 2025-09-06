@@ -240,9 +240,10 @@ run_handler_impl <- function(req, res) {
       })
 
       clones_meta <- list(
-        clone_id = as.character(clones$clone_id),
-        seqs     = as.integer(clones$seqs)
+        clone_id = unname(as.list(as.character(clones$clone_id))),
+        seqs     = unname(as.list(as.integer(clones$seqs)))
       )
+
 
       stats <- list(
         n_clones   = length(unique(db$clone_id)),

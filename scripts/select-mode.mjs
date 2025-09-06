@@ -6,7 +6,10 @@ import path from "node:path";
 const ROOT = path.resolve(process.cwd());
 const run = (cmd, args) =>
   new Promise((resolve, reject) => {
-    const p = spawn(cmd, args, { stdio: "inherit", shell: process.platform === "win32" });
+    const isSh = cmd.endsWith(".sh");
+    const spawnCmd = isSh ? "bash" : cmd;
+    const spawnArgs = isSh ? [cmd, ...(args || [])] : (args || []);
+    const p = spawn(spawnCmd, spawnArgs, { stdio: "inherit", shell: false });
     p.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`${cmd} exited ${code}`))));
   });
 
