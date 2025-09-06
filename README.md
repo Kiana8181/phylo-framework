@@ -48,7 +48,7 @@ python -m pip install -r apps/api/requirements.txt
 2. **Make helper scripts executable** (they are expected at the repo root):
 
 ```bash
-chmod +x ./run.sh ./dev-with-docker.sh ./dev-with-local-r.sh
+chmod +x ./run.sh ./scripts/dev-with-docker.sh ./scripts/dev-with-local-r.sh
 ```
 
 3. **Run the interactive menu** (uses Inquirer under the hood):
