@@ -222,7 +222,7 @@ pip install -r apps/api/requirements.txt
 npm -w @phylo/contracts run build
 ```
 
-### 3) Start a method service (Dowser) — pick ONE option
+### 3.1) Start a method service (Dowser) — pick ONE option
 
 #### Option A — Docker (recommended; no local R needed)
 
@@ -258,6 +258,87 @@ Rscript -e 'setwd("services/dowser"); Sys.setenv(CONTRACTS_DIR="../../packages/c
 ```
 
 Keep this terminal open; it’s your method server.
+
+### 3.2) Start a method service (GCtree) — pick ONE option
+
+#### Option A — Docker (recommended; no local PHYLIP needed)
+
+Build the image **from the gctree folder**, then run it **from repo root**:
+
+```bash
+# build
+cd services/gctree
+docker build -t phylo-gctree:dev .
+
+# run (from REPO ROOT)
+cd ../..
+docker run --rm -p 8002:8002   -v "$(pwd)/packages/contracts:/contracts:ro"   -e CONTRACTS_DIR=/contracts   phylo-gctree:dev
+```
+
+**Windows PowerShell** (repo root):
+
+```powershell
+docker run --rm -p 8002:8002 `
+  -v ${PWD}/packages/contracts:/contracts:ro `
+  -e CONTRACTS_DIR=/contracts `
+  phylo-gctree:dev
+```
+
+This exposes GCtree at **http://localhost:8002** with contracts mounted read-only.
+
+> If you changed the service port in code/env, adjust `-p 8002:8002` accordingly.
+
+#### Option B — Local Python (requires Python 3.10+ and PHYLIP `dnapars`)
+
+From the **repo root**:
+
+```bash
+# 1) Install service deps
+pip install -r services/gctree/requirements.txt
+
+# --- Choose ONE way to get 'dnapars' ---
+
+# Ubuntu/Debian:
+# (universe repo needed; if unavailable, use conda option below)
+sudo apt-get update && sudo apt-get install -y phylip
+
+# OR via conda/mamba (any OS):
+#   - you can use existing base conda, no need to put GCtree itself in conda
+#   - this just provides the 'dnapars' binary
+# mamba install -c bioconda phylip
+# conda install -c bioconda phylip
+
+# 4) (Optional) sanity-check tools
+gctree --help
+dnapars 2>/dev/null || dnapars -help
+
+# 5) Run the service
+export CONTRACTS_DIR="$(pwd)/packages/contracts"
+python -m uvicorn services.gctree.app:app --host 0.0.0.0 --port 8002
+```
+
+**Windows PowerShell**:
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+
+pip install -r services/gctree/requirements.txt
+pip install gctree
+
+# Prefer conda on Windows for PHYLIP:
+# conda install -c bioconda phylip
+
+$env:CONTRACTS_DIR = (Join-Path (Get-Location) "packages\contracts")
+python -m uvicorn services.gctree.app:app --host 0.0.0.0 --port 8002
+```
+
+Open **http://localhost:8002** when it’s running.
+
+> **Notes**
+>
+> - If you see `Parsed 0 from outfile but -1 expected!` or `No trees found in 'outfile'`, it usually means `dnapars` didn’t produce a valid `outfile` (bad input, wrong working dir, or `dnapars` not found in PATH). Verify `dnapars` is installed and accessible, and that inputs exist.
+> - If your service module isn’t `services.gctree.app:app`, replace it with your actual ASGI path (e.g., `services.gctree.main:app`).
 
 ### 4) Start the API (FastAPI)
 
