@@ -4,6 +4,7 @@ x-env-common: &env_common
   CONTRACTS_DIR: /contracts
   CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
   METHOD_DOWSER_URL: http://dowser:8001
+  METHOD_GCTREE_URL: http://gctree:8002
   HTTP_CLIENT_TIMEOUT: "600"
   SPEC_TIMEOUT: "60"
 
@@ -93,3 +94,20 @@ services:
         read_only: true
     expose: ["8001"]
     profiles: ["dev","prod"]
+
+  gctree:
+    build:
+      context: ./services/gctree
+      dockerfile: Dockerfile
+    image: phylo-gctree:latest
+    environment:
+      CONTRACTS_DIR: /contracts
+      STRICT_CONTRACT_ROUTES: ${STRICT_CONTRACT_ROUTES:-true}
+    volumes:
+      - type: bind
+        source: ./packages/contracts
+        target: /contracts
+        read_only: true
+    expose: ["8002"]
+    profiles: ["dev","prod"]
+
