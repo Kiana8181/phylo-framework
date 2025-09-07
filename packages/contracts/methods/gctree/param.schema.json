@@ -1,0 +1,12 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "root":   { "type": "string",  "title": "Root sequence ID in FASTA (e.g. GL)", "default": "GL" },
+    "frame":  { "type": "string", "title": "Coding frame (0,1,2 => frame 1..3)", "enum": ["0","1","2"], "default": "0" },
+    "ranking_strategy": { "type": "string", "title": "Ranking strategy (optional)", "default": "" },
+    "top_n":  { "type": "integer", "title": "How many trees to return", "minimum": 1, "maximum": 10, "default": 3 },
+    "headless": { "type": "boolean", "title": "Force headless rendering", "default": true }
+  },
+  "required": ["root"]
+}
