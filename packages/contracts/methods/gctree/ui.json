@@ -1,0 +1,6 @@
+{
+  "requiresFile": true,
+  "maxFiles": 1,
+  "order": ["root", "frame", "ranking_strategy", "top_n", "headless"],
+  "help": "Upload a FASTA that includes the naive germline sequence (root id) and all observed sequences with duplicates; or upload a .p (pickled GCtree forest) to continue ranking."
+}

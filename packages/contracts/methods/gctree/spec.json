@@ -1,0 +1,5 @@
+{
+  "name": "GCtree",
+  "version": "dynamic",
+  "accepts": ["text/fasta", "text/x-fasta", "application/octet-stream"]
+}
