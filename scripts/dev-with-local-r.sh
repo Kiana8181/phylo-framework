@@ -1,11 +1,14 @@
+#!/usr/bin/env bash
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PLUMBER_DIR="$ROOT/services/dowser"
+GCTREE_DIR="$ROOT/services/gctree"
 
 RED=$'\033[31m'; GRN=$'\033[32m'; YLW=$'\033[33m'; BLU=$'\033[34m'; CLR=$'\033[0m'
 die(){ echo "${RED}ERROR:${CLR} $*" >&2; exit 1; }
 need_cmd(){ command -v "$1" >/dev/null 2>&1 || die "Missing '$1'. Please install it."; }
+warn_missing(){ command -v "$1" >/dev/null 2>&1 || echo "${YLW}WARN:${CLR} '$1' not found on PATH."; }
 npm_major(){ local v; v=$(npm -v 2>/dev/null || echo "0"); echo "${v%%.*}"; }
 
 port_busy(){
@@ -47,7 +50,8 @@ require_envs(){
   local cfg="${CONTRACTS_DIR:-packages/contracts}"
   [[ -d "$ROOT/$cfg" || -d "$cfg" ]] || die "CONTRACTS_DIR not found (got '$cfg'). Put a valid path in ${API_ENV}."
 
-  [[ -n "${METHOD_DOWSER_URL:-}" ]] || die "METHOD_DOWSER_URL is not set in ${API_ENV}"
+  [[ -n "${METHOD_DOWSER_URL:-}" ]]  || die "METHOD_DOWSER_URL is not set in ${API_ENV}"
+  [[ -n "${METHOD_GCTREE_URL:-}" ]]  || die "METHOD_GCTREE_URL is not set in ${API_ENV} (e.g., http://localhost:8002)"
 
   if ! grep -qE '^NEXT_PUBLIC_API_BASE_URL=' "$WEB_ENV"; then
     die "NEXT_PUBLIC_API_BASE_URL is missing in ${WEB_ENV}"
@@ -108,7 +112,7 @@ Either upgrade npm (npm i -g npm@latest) or set:
 echo "${BLU}==> Checking prerequisites${CLR}"
 need_cmd Rscript; need_cmd node; need_cmd npm; need_cmd python3; need_cmd curl
 
-for p in 3000 8000 8001; do
+for p in 3000 8000 8001 8002; do
   port_busy "$p" && die "Port $p is not free."
 done
 
@@ -135,23 +139,42 @@ PY
 )"
 [[ -f "$ABS_CONTRACTS/methods/dowser/result.schema.json" ]] || \
   die "Expected schema not found at: $ABS_CONTRACTS/methods/dowser/result.schema.json"
+[[ -f "$ABS_CONTRACTS/methods/gctree/param.schema.json" ]] || \
+  echo "${YLW}WARN:${CLR} gctree schemas not found under contracts; continuing."
 
 echo "${BLU}==> Starting Dowser (R/plumber) on :8001${CLR}"
 Rscript --vanilla -e "setwd('$PLUMBER_DIR'); Sys.setenv(CONTRACTS_DIR='${R_CONTRACTS_REL}', STRICT_CONTRACT_ROUTES='true'); pr <- plumber::plumb('plumber.R'); pr\$run(host='0.0.0.0', port=8001)" \
   >/tmp/dowser.log 2>&1 &
 R_PID=$!
 
-trap 'echo; echo "${YLW}Shutting down...${CLR}"; kill $R_PID $API_PID 2>/dev/null || true' EXIT
+trap 'echo; echo "${YLW}Shutting down...${CLR}"; kill $R_PID $API_PID ${GCTREE_PID:-} 2>/dev/null || true' EXIT
 
 wait_http 8001 || { echo "${YLW}Last 200 R logs:${CLR}"; tail -n 200 /tmp/dowser.log || true; die "Dowser failed readiness check"; }
 echo "${GRN}Dowser is up on http://localhost:8001${CLR}"
 
-echo "${BLU}==> Setting up Python venv for API${CLR}"
+echo "${BLU}==> Setting up Python venv for API & GCtree${CLR}"
 [[ -d "$ROOT/.venv" ]] || python3 -m venv "$ROOT/.venv" || die "Failed to create venv"
 # shellcheck disable=SC1091
 source "$ROOT/.venv/bin/activate"
 python -m pip install -U pip >/dev/null
 python -m pip install -r "$ROOT/apps/api/requirements.txt"
+
+# --- GCtree micro (no Docker) ---
+echo "${BLU}==> Installing GCtree service requirements${CLR}"
+[[ -f "$GCTREE_DIR/requirements.txt" ]] || die "Missing $GCTREE_DIR/requirements.txt"
+python -m pip install -r "$GCTREE_DIR/requirements.txt"
+
+echo "${BLU}==> Checking GCtree CLIs on PATH (from the venv)${CLR}"
+need_cmd gctree
+need_cmd deduplicate
+need_cmd mkconfig
+# DNAPARS is system-provided; warn if absent. GCtree can still run parts without it.
+if ! command -v dnapars >/dev/null 2>&1 && ! command -v phylip >/dev/null 2>&1; then
+  echo "${YLW}WARN:${CLR} Neither 'dnapars' nor 'phylip' wrapper found on PATH."
+  echo "      Install via one of:"
+  echo "        • Ubuntu/Debian: sudo apt-get install phylip"
+  echo "        • Conda (recommended): conda install -c bioconda phylip"
+fi
 
 echo "${BLU}==> Ensuring Node deps and building @phylo/contracts${CLR}"
 ensure_node_deps_and_build_contracts
@@ -166,6 +189,23 @@ for i in {1..60}; do
   curl -fsS "http://localhost:8000/docs" >/dev/null && break || true
   sleep 1
 done
+
+# --- Start GCtree FastAPI service on :8002 (no Docker) ---
+echo "${BLU}==> Starting GCtree (FastAPI) on :8002${CLR}"
+(
+  cd "$GCTREE_DIR"
+  # CONTRACTS_DIR must be absolute for the Python micro
+  export CONTRACTS_DIR="$ABS_CONTRACTS"
+  export STRICT_CONTRACT_ROUTES="true"
+  # headless hints (also set inside the service, but harmless here)
+  export QT_QPA_PLATFORM="offscreen"
+  export MPLBACKEND="agg"
+  uvicorn app:app --host 0.0.0.0 --port 8002
+) >/tmp/gctree.log 2>&1 &
+GCTREE_PID=$!
+
+wait_http 8002 || { echo "${YLW}Last 200 GCtree logs:${CLR}"; tail -n 200 /tmp/gctree.log || true; die "GCtree failed readiness check"; }
+echo "${GRN}GCtree is up on http://localhost:8002${CLR}"
 
 echo "${BLU}==> Starting Next.js dev on :3000${CLR}"
 (cd "$ROOT/apps/web" && npm run dev)

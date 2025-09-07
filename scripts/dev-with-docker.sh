@@ -82,7 +82,7 @@ Either upgrade npm (npm i -g npm@latest) or set:
 echo "${BLU}==> Checking prerequisites${CLR}"
 need_cmd docker; need_cmd node; need_cmd npm; need_cmd python3; need_cmd curl
 
-for p in 3000 8000 8001; do
+for p in 3000 8000 8001 8002; do   
   port_busy "$p" && die "Port $p is not free."
 done
 
@@ -99,6 +99,28 @@ docker run -d --name phylo-dowser-dev -p 8001:8001 \
 echo "${BLU}==> Waiting for Dowser HTTP on :8001${CLR}"
 wait_http 8001 || { docker logs --tail=200 phylo-dowser-dev || true; die "Dowser failed readiness check"; }
 echo "${GRN}Dowser is up on http://localhost:8001${CLR}"
+
+echo "${BLU}==> Building and starting GCtree container (first time may be LONG)${CLR}"   # [gctree]
+docker rm -f phylo-gctree-dev >/dev/null 2>&1 || true                                     # [gctree]
+docker build -t phylo-gctree:dev "$ROOT/services/gctree"                                  # [gctree]
+
+HOST_CONTRACTS_DIR="$(realpath "$ROOT/packages/contracts")"
+
+docker run -d --name phylo-gctree-dev \
+  -e CONTRACTS_DIR="/contracts" \
+  -e STRICT_CONTRACT_ROUTES="${STRICT_CONTRACT_ROUTES:-true}" \
+  -p 8002:8002 \
+  -v "$HOST_CONTRACTS_DIR":/contracts:ro \
+  phylo-gctree:dev                                                                      # [gctree]
+
+# make sure METHOD_GCTREE_URL exists in API env (optional but helpful):
+[[ -n "${METHOD_GCTREE_URL:-}" ]] || die "METHOD_GCTREE_URL is not set in ${API_ENV}"    # [gctree]
+
+# in the trap line, add the container:
+trap 'echo; echo "${YLW}Shutting down...${CLR}"; \
+      kill $API_PID 2>/dev/null || true; \
+      docker rm -f phylo-dowser-dev >/dev/null 2>&1 || true; \
+      docker rm -f phylo-gctree-dev >/dev/null 2>&1 || true' EXIT
 
 echo "${BLU}==> Setting up Python venv for API${CLR}"
 [[ -d "$ROOT/.venv" ]] || python3 -m venv "$ROOT/.venv" || die "Failed to create venv"
