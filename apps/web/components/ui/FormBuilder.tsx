@@ -15,6 +15,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Loader2 } from "lucide-react";
 
 type JSONSchema = {
   type?: string;
@@ -104,7 +105,7 @@ export default function FormBuilder({
     [schema, defaults]
   );
 
-  const { control, handleSubmit, reset } = useForm({
+  const { control, handleSubmit, reset, formState } = useForm({
     resolver: zodResolver(zodSchema),
     defaultValues: formDefaults,
   });
@@ -198,7 +199,16 @@ export default function FormBuilder({
         );
       })}
 
-      <Button type="submit">Run</Button>
+      <Button type="submit" disabled={formState.isSubmitting}>
+        {formState.isSubmitting ? (
+          <>
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            Running…
+          </>
+        ) : (
+          "Run"
+        )}
+      </Button>
     </form>
   );
 }

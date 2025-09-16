@@ -1,27 +1,34 @@
-import { serviceHandler, Method } from "@/lib/http/serviceHandler";
-import { API_ROUTES, type CreateRunResponse, type RunResult, type RunStatus } from "@phylo/contracts";
+import { postFormWithProgress } from "@/lib/utils";
+import {
+  API_ROUTES,
+  type CreateRunResponse,
+  type RunResult,
+  type RunStatus,
+} from "@phylo/contracts";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+const abs = (p: string) => `${API_BASE.replace(/\/+$/,"")}/${p.replace(/^\/+/,"")}`;
 
 export const RunsApi = {
-  create: (
+  async create(
     methodId: string,
-    form: FormData | { params: string; file?: File | File[] }
-  ) =>
-    serviceHandler<CreateRunResponse, any>({
-      method: Method.Post,
-      url: API_ROUTES.createRun(methodId),
-      params: { method: methodId },
-      data: form instanceof FormData ? form : (form as any),
-      hasFile: true,
-    }),
+    fd: FormData,
+    opts?: { onProgress?: (p: number) => void }
+  ): Promise<CreateRunResponse> {
+    const url = abs(API_ROUTES.createRun(methodId));
+    const res = await postFormWithProgress(url, fd, opts?.onProgress ?? (() => {}));
+    return res as CreateRunResponse; 
+  },
 
-  status: (id: string) =>
-    serviceHandler<RunStatus>({
-      method: Method.Get,
-      url: API_ROUTES.runStatus(id),
-    }),
-  result: (id: string) =>
-    serviceHandler<RunResult>({
-      method: Method.Get,
-      url: API_ROUTES.runResult(id),
-    }),
+  async status(id: string): Promise<RunStatus> {
+    const r = await fetch(abs(API_ROUTES.runStatus(id)));
+    if (!r.ok) throw new Error(await r.text());
+    return (await r.json()) as RunStatus;
+  },
+
+  async result(id: string): Promise<RunResult> {
+    const r = await fetch(abs(API_ROUTES.runResult(id)));
+    if (!r.ok) throw new Error(await r.text());
+    return (await r.json()) as RunResult;
+  },
 };

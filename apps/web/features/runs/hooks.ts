@@ -4,13 +4,16 @@ import type { RunStatus, RunResult, CreateRunResponse } from "@phylo/contracts";
 import { notify } from "@/lib/notify";
 import { useEffect, useRef } from "react";
 
+type CreateRunVars = {
+  methodId: string;
+  formData: FormData;
+  onProgress?: (p: number) => void;
+};
+
 export function useCreateRun() {
-  return useMutation<
-    CreateRunResponse,
-    any,
-    { methodId: string; formData: FormData }
-  >({
-    mutationFn: ({ methodId, formData }) => RunsApi.create(methodId, formData),
+  return useMutation<CreateRunResponse, any, CreateRunVars>({
+    mutationFn: ({ methodId, formData, onProgress }) =>
+      RunsApi.create(methodId, formData, { onProgress }),
     onSuccess: () => notify.success("Run created"),
     onError: (e: any) => notify.error("Failed to create run", e?.message),
   });
