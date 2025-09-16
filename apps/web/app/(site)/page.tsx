@@ -74,52 +74,7 @@ export default function Home() {
           spec={spec}
           files={files}
           onFiles={setFiles}
-          onSubmit={async (params) => {
-            try {
-              const { notify } = await import("@/lib/notify");
-
-              const requiresFile = !!spec?.uiHints?.requiresFile;
-              const maxFiles = spec?.uiHints?.maxFiles ?? 1;
-
-              if (requiresFile && (!files || files.length === 0)) {
-                notify.error(
-                  "File required",
-                  "Please attach a file for this method."
-                );
-                return;
-              }
-              if (maxFiles === 1 && files && files.length > 1) {
-                notify.error(
-                  "Only one file allowed",
-                  "Please attach exactly one file."
-                );
-                return;
-              }
-              const fd = new FormData();
-              fd.set("params", JSON.stringify(params));
-
-              if (files && files.length) {
-                if (maxFiles === 1) {
-                  const f = files[0];
-                  fd.set("file", f, f.name);
-                } else {
-                  files.forEach((f) => fd.append("file", f, f.name));
-                }
-              }
-
-              setRunId(null);
-
-              const res = await createRun.mutateAsync({
-                methodId: spec.id,
-                formData: fd,
-              });
-
-              setRunId(res.run_id);
-            } catch (e: any) {
-              const { notify } = await import("@/lib/notify");
-              notify.error("Run failed", e?.message ?? "Unknown error");
-            }
-          }}
+          onSubmitDone={(id) => setRunId(id)}
         />
       )}
 
