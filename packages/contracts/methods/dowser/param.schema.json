@@ -2,9 +2,59 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
   "properties": {
-    "tree_model": { "type": "string", "enum": ["mp", "ml", "igphyml"], "title": "Tree model", "default": "mp" },
-    "minseq":     { "type": "integer", "title": "Min seq per clone", "default": 3 },
-    "nproc":      { "type": "integer", "title": "Threads", "default": 1 }
+    "tree_model": {
+      "type": "string",
+      "enum": ["mp", "ml", "igphyml"],
+      "default": "mp",
+      "title": "Tree model"
+    },
+    "minseq": { "type": "integer", "default": 3, "title": "Min seq per clone" },
+    "nproc": { "type": "integer", "default": 1, "title": "Threads" },
+
+    "tip_color_by": {
+      "type": "string",
+      "default": "c_call",
+      "title": "Color tips by (column)"
+    },
+    "unknown_value": {
+      "type": "string",
+      "default": "unknown",
+      "title": "Fill empty values with"
+    },
+    "tipsize": { "type": "number", "default": 2, "title": "Tip size" },
+    "include_figures": {
+      "type": "boolean",
+      "default": true,
+      "title": "Return preview plot"
+    },
+    "max_tip_categories": {
+      "type": "integer",
+      "default": 30,
+      "title": "Max categories for coloring"
+    },
+
+    "ig_stop_policy": {
+      "type": "string",
+      "enum": ["drop_seqs", "fallback_ml", "error"],
+      "default": "drop_seqs",
+      "title": "IgPhyML stop-codon policy",
+      "description": "How to handle stop codons/out-of-frame sequences for IgPhyML: drop offending sequences, fallback to ML (pml), or raise an error."
+    },
+
+    "ig_len_policy": {
+  "type": "string",
+  "enum": ["drop_seqs", "drop_clone", "error"],
+  "default": "drop_seqs",
+  "title": "Unequal seq/germline length policy",
+  "description": "When sequence and germline alignments differ in length: drop only offending sequences, drop whole clone(s), or error."
+},
+
+    "exec": {
+      "type": "string",
+      "default": "",
+      "title": "IgPhyML binary path",
+      "description": "Absolute path to the igphyml executable (must be +x). Example: /usr/local/bin/igphyml"
+    }
   },
   "required": ["tree_model"]
 }
