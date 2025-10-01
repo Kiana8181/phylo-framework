@@ -1,5 +1,17 @@
 {
   "requiresFile": true,
   "maxFiles": 1,
-  "order": ["tree_model", "minseq", "nproc"]
+  "order": [
+    "tree_model",
+    "minseq",
+    "nproc",
+    "tip_color_by",
+    "unknown_value",
+    "tipsize",
+    "include_figures",
+    "max_tip_categories",
+    "ig_stop_policy",
+    "ig_len_policy",
+    "exec"
+  ]
 }
