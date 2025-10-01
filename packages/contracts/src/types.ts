@@ -17,12 +17,17 @@ export type RunStatus = {
   message?: string;
 };
 
+export type FigurePayload = {
+  png_base64?: string[];
+} | null;
+
 export type RunResult = {
   ok: boolean;
   trees: string[];
   clones: any;
   stats: any;
-  annotations: any;
-  figures: any;
+  annotations: Array<Array<Record<string, any>> | null>;
+  figures: FigurePayload;
+  warnings?: string[];
   render?: string | null;
 };
