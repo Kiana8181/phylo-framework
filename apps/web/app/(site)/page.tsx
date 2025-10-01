@@ -6,11 +6,7 @@ import RunParameters from "@/components/phylo/RunParameters";
 import RunProgress from "@/components/phylo/RunProgress";
 import TreesCarousel from "@/components/phylo/TreesCarousel";
 import { useMethods, useMethodSpec } from "@/features/methods/hooks";
-import {
-  useCreateRun,
-  useRunResult,
-  useRunStatus,
-} from "@/features/runs/hooks";
+import { useRunResult, useRunStatus } from "@/features/runs/hooks";
 import { cleanNewick } from "@/lib/newick";
 import type { MethodInfo } from "@phylo/contracts";
 import { useEffect, useMemo, useState } from "react";
@@ -23,7 +19,6 @@ export default function Home() {
   const [files, setFiles] = useState<File[]>([]);
   const [runId, setRunId] = useState<string | null>(null);
 
-  const createRun = useCreateRun();
   const { data: status } = useRunStatus(runId ?? undefined);
   const resultEnabled = status?.status === "DONE" && !!runId;
   const { data: result } = useRunResult(runId ?? undefined, resultEnabled);
@@ -40,6 +35,11 @@ export default function Home() {
   useEffect(() => {
     if (status?.status === "ERROR") setRunId(null);
   }, [status]);
+
+  const svgColorBy: string | undefined = result?.stats?.tip_states_capped
+    ? undefined
+    : result?.stats?.tip_color_by;
+  const svgUnknown = result?.stats?.unknown_value ?? "unknown";
 
   return (
     <main className="mx-auto max-w-6xl p-6 space-y-8">
@@ -93,11 +93,23 @@ export default function Home() {
         <section className="space-y-6">
           <ResultsSummary stats={result?.stats} cloneRows={cloneRows} />
 
+          {/* backend warnings */}
+          {Array.isArray((result as any)?.warnings) &&
+            (result as any).warnings.length > 0 && (
+              <div className="rounded border p-3 bg-yellow-50 text-yellow-900 text-sm space-y-1">
+                {(result as any).warnings.map((w: string, i: number) => (
+                  <div key={i}>• {w}</div>
+                ))}
+              </div>
+            )}
+
           <TreesCarousel
             trees={result.trees ?? []}
             figures={result.figures}
             annotations={result.annotations}
             cleanNewick={cleanNewick}
+            colorBy={svgColorBy}
+            unknownValue={svgUnknown}
           />
 
           {/* Raw Newick (optional) */}
