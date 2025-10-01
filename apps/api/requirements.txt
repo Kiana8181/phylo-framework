@@ -7,3 +7,4 @@ python-multipart==0.0.20
 rq==2.4.1
 redis==6.4.0
 pydantic==2.11.9
+aiofiles==24.1.0
