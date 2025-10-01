@@ -10,6 +10,8 @@ type TreesCarouselProps = {
   figures?: any;
   annotations?: any;
   cleanNewick: (s: string) => string;
+  colorBy?: string;
+  unknownValue?: string;
 };
 
 export default function TreesCarousel({
@@ -17,6 +19,8 @@ export default function TreesCarousel({
   figures,
   annotations,
   cleanNewick,
+  colorBy,
+  unknownValue,
 }: TreesCarouselProps) {
   const total = trees?.length ?? 0;
   const [idx, setIdx] = useState(0);
@@ -53,7 +57,7 @@ export default function TreesCarousel({
       {/* navigation */}
       <div className="flex items-center justify-between gap-3">
         <button
-          className={`rounded border px-3 py-1.5 text-sm inline-flex items-center gap-1 disabled:opacity-50`}
+          className="rounded border px-3 py-1.5 text-sm inline-flex items-center gap-1 disabled:opacity-50"
           onClick={() => canPrev && setIdx((v) => Math.max(0, v - 1))}
           disabled={!canPrev}
         >
@@ -62,21 +66,25 @@ export default function TreesCarousel({
 
         <div className="flex-1">
           <div className="space-y-2">
-            {/* show exact PNG when present */}
+            {/* exact PNG from backend */}
             {current?.png && (
-              <img
-                src={`data:image/png;base64,${current.png}`}
-                className="rounded border bg-white mx-auto"
-                alt={`Tree ${idx + 1}`}
-              />
+              <div className="overflow-auto">
+                <img
+                  src={`data:image/png;base64,${current.png}`}
+                  className="rounded border bg-white mx-auto max-w-none"
+                  alt={`Tree ${idx + 1}`}
+                />
+              </div>
             )}
-            {/* interactive colored SVG */}
+            {/* interactive SVG */}
             {current?.tree && (
-              <div className="overflow-x-auto">
+              <div className="overflow-auto">
                 <TreeSVG
                   newick={current.tree}
                   annotations={current.anno}
                   showLabels
+                  colorBy={colorBy}
+                  unknownValue={unknownValue}
                 />
               </div>
             )}
@@ -84,7 +92,7 @@ export default function TreesCarousel({
         </div>
 
         <button
-          className={`rounded border px-3 py-1.5 text-sm inline-flex items-center gap-1 disabled:opacity-50`}
+          className="rounded border px-3 py-1.5 text-sm inline-flex items-center gap-1 disabled:opacity-50"
           onClick={() => canNext && setIdx((v) => Math.min(total - 1, v + 1))}
           disabled={!canNext}
         >
