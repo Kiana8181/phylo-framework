@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo } from "react";
-import { useForm, Controller } from "react-hook-form";
+import { useForm, Controller, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Button } from "@/components/ui/button";
@@ -110,6 +110,26 @@ export default function FormBuilder({
     defaultValues: formDefaults,
   });
 
+  const values = useWatch({ control });
+
+  function isVisible(name: string): boolean {
+    const vis = (schema.uiHints as any)?.visibility?.[name];
+    if (!vis) return true;
+
+    const testWhen = (cond: Record<string, any>) =>
+      Object.entries(cond).every(([k, expected]) => {
+        const v = (values as any)[k];
+        return Array.isArray(expected) ? expected.includes(v) : v === expected;
+      });
+
+    if (vis.when && !testWhen(vis.when)) return false;
+    if (vis.whenAll && !vis.whenAll.every((c: any) => testWhen(c)))
+      return false;
+    if (vis.whenAny && !vis.whenAny.some((c: any) => testWhen(c))) return false;
+
+    return true;
+  }
+
   useEffect(() => {
     reset(defaultsFromSchema(schema, defaults));
   }, [schema, defaults, reset]);
@@ -124,6 +144,7 @@ export default function FormBuilder({
     >
       {order.map((name: string) => {
         const def = props[name]!;
+        if (!isVisible(name)) return null;
         const type = def.enum ? "enum" : def.type;
 
         return (
