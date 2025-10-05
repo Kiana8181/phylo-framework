@@ -8,7 +8,6 @@
     "tip_color_by":  { "type": "string", "default": "", "title": "Color tips by (column)" },
     "unknown_value": { "type": "string", "default": "unknown", "title": "Unknown fill" },
     "tipsize":       { "type": "number",  "default": 2, "title": "Tip size" },
-    "include_figures": { "type": "boolean", "default": true, "title": "Return preview plot" },
     "annotation_fields": { "type": "string", "default": "", "title": "Annotation fields (comma-separated)" },
 
     "apply_filters":  { "type": "boolean", "default": false, "title": "Apply filters" },
@@ -19,9 +18,9 @@
 
     "ig_stop_policy": { "type": "string", "enum": ["drop_seqs","fallback_ml","error"], "default": "drop_seqs", "title": "IgPhyML stop-codon policy" },
     "exec":           { "type": "string", "default": "", "title": "IgPhyML binary path" },
+    "igphyml_motifs_path": { "type": "string", "default": "", "title": "IgPhyML motifs directory" },
 
-    "max_tip_categories": { "type": "integer", "default": 30, "title": "Max tip categories" },
-    "disable_figures_on_many_states": { "type": "boolean", "default": false, "title": "Skip figures when too many categories" }
+    "max_tip_categories": { "type": "integer", "default": 30, "title": "Max tip categories" }
   },
   "required": ["tree_model"]
 }

@@ -8,7 +8,6 @@
     "tip_color_by",
     "unknown_value",
     "tipsize",
-    "include_figures",
     "annotation_fields",
 
     "apply_filters",
@@ -19,14 +18,15 @@
 
     "ig_stop_policy",
     "exec",
+    "igphyml_motifs_path",
 
-    "max_tip_categories",
-    "disable_figures_on_many_states"
+    "max_tip_categories"
   ],
   "placeholders": {
     "tip_color_by": "empty = no coloring",
     "annotation_fields": "e.g. donor, timepoint",
-    "exec": "/usr/local/bin/igphyml"
+    "exec": "/usr/local/bin/igphyml",
+    "igphyml_motifs_path": "/usr/local/share/igphyml/src/motifs"
   },
   "visibility": {
     "len_policy":      { "when": { "apply_filters": true } },
@@ -34,7 +34,8 @@
     "noniupac_policy": { "when": { "apply_filters": true } },
     "uppercase":       { "when": { "apply_filters": true } },
 
-    "ig_stop_policy":  { "whenAll": [ { "apply_filters": true }, { "tree_model": "igphyml" } ] },
-    "exec":            { "when": { "tree_model": "igphyml" } }
+    "ig_stop_policy":  { "when": { "tree_model": "igphyml" } },
+    "exec":            { "when": { "tree_model": "igphyml" } },
+    "igphyml_motifs_path": { "when": { "tree_model": "igphyml" } }
   }
 }

@@ -56,7 +56,7 @@ DEFAULT_UI <- list(
   requiresFile = TRUE,
   maxFiles = 1,
   order = c("tree_model", "minseq", "nproc", "tip_color_by", "unknown_value",
-            "tipsize", "include_figures", "annotation_fields")
+            "tipsize", "annotation_fields")
 )
 
 `%||%` <- function(a, b) if (is.null(a) || length(a) == 0 || (is.character(a) && !nzchar(a))) b else a
@@ -154,27 +154,59 @@ check_igphyml_exec <- function(user_exec = NULL) {
   stop("IgPhyML not found. Provide 'exec' (absolute path) or install igphyml so it's on $PATH.")
 }
 
-# Try to find and set IGPHYML_PATH automatically
-ensure_igphyml_path <- function(exec) {
-  # if already set, also ensure it points to a real, non-empty dir
-  cur <- Sys.getenv("IGPHYML_PATH", "")
-  if (nzchar(cur) && dir.exists(cur) && length(list.files(cur, all.files = FALSE)) > 0) {
-    return(TRUE)
+# ---------------------------
+# IgPhyML motifs path helpers
+# ---------------------------
+validate_motifs_dir <- function(path) {
+  if (!nzchar(path) || !dir.exists(path)) return(FALSE)
+  length(list.files(path, all.files = FALSE)) > 0
+}
+
+# When require_ok=TRUE, returns TRUE on success, or a character error message if not found
+ensure_igphyml_path <- function(exec, user_path = NULL, require_ok = FALSE) {
+  # 1) user param
+  if (!is.null(user_path) && nzchar(user_path)) {
+    if (validate_motifs_dir(user_path)) {
+      Sys.setenv(IGPHYML_PATH = user_path)
+      logf("[dowser] IGPHYML_PATH set from user param: %s", user_path)
+      return(TRUE)
+    } else {
+      if (require_ok) {
+        return(paste0(
+          "IgPhyML motifs directory is invalid: '", user_path, "'. ",
+          "It must be a readable, non-empty directory containing motif tables. ",
+          "Set 'igphyml_motifs_path' to the path of igphyml/src/motifs."
+        ))
+      }
+      return(FALSE)
+    }
   }
 
-  # try common locations
+  # 2) env var
+  cur <- Sys.getenv("IGPHYML_PATH", "")
+  if (validate_motifs_dir(cur)) return(TRUE)
+
+  # 3) common locations
   candidates <- unique(c(
     file.path(dirname(dirname(exec)), "share", "igphyml", "src", "motifs"),
     "/usr/local/share/igphyml/src/motifs",
-    "/usr/share/igphyml/src/motifs"
+    "/usr/share/igphyml/src/motifs",
+    "/opt/igphyml/src/motifs"
   ))
-
   for (d in candidates) {
-    if (dir.exists(d) && length(list.files(d, all.files = FALSE)) > 0) {
+    if (validate_motifs_dir(d)) {
       Sys.setenv(IGPHYML_PATH = d)
-      logf("[dowser] IGPHYML_PATH set to %s", d)
+      logf("[dowser] IGPHYML_PATH auto-detected: %s", d)
       return(TRUE)
     }
+  }
+
+  if (require_ok) {
+    return(paste0(
+      "IgPhyML hotspot motif tables not found. ",
+      "Set 'igphyml_motifs_path' to the directory containing the motif tables ",
+      "(e.g., '/usr/local/share/igphyml/src/motifs') or set the IGPHYML_PATH environment variable."
+    ))
   }
 
   FALSE
@@ -270,7 +302,6 @@ run_handler_impl <- function(req, res) {
 
       p$unknown_value   <- p$unknown_value %||% "unknown"
       p$tipsize         <- as.numeric(p$tipsize %||% 2)
-      p$include_figures <- isTRUE(p$include_figures %||% TRUE)
 
       af <- p$annotation_fields %||% character(0)
       if (is.character(af) && length(af) == 1) {
@@ -282,8 +313,11 @@ run_handler_impl <- function(req, res) {
       p$exec <- p$exec %||% NULL
       if (is.character(p$exec) && !nzchar(p$exec)) p$exec <- NULL
 
+      # optional user-provided motifs dir
+      p$igphyml_motifs_path <- p$igphyml_motifs_path %||% NULL
+      if (is.character(p$igphyml_motifs_path) && !nzchar(p$igphyml_motifs_path)) p$igphyml_motifs_path <- NULL
+
       p$max_tip_categories <- as.integer(p$max_tip_categories %||% 30L)
-      p$disable_figures_on_many_states <- isTRUE(p$disable_figures_on_many_states %||% FALSE)
 
       # Filters (fully optional; run only when TRUE)
       p$apply_filters   <- isTRUE(p$apply_filters %||% FALSE)
@@ -292,7 +326,7 @@ run_handler_impl <- function(req, res) {
       p$gap_policy      <- p$gap_policy %||% "keep"              # keep | remove | replace_N | replace_NNN | drop_row
       p$noniupac_policy <- p$noniupac_policy %||% "keep"         # keep | replace_N | drop_row
 
-      # IgPhyML stop policy (only used if filters are ON and model is igphyml)
+      # IgPhyML stop policy (consulted during preflight)
       p$ig_stop_policy  <- p$ig_stop_policy %||% "drop_seqs"     # drop_seqs | fallback_ml | error
 
       p
@@ -413,31 +447,44 @@ run_handler_impl <- function(req, res) {
           )))
         } # ignore => no action
       }
+    }
 
-      # IgPhyML preflight (only when filters are ON and model is igphyml)
-      if (identical(p$tree_model, "igphyml")) {
-        det <- detect_stops_and_frame(db$sequence_alignment)
-        n_dropped_stops <- sum(det$stop, na.rm=TRUE)
-        n_bad_frame     <- sum(det$frame_bad, na.rm=TRUE)
+    # ---- IgPhyML preflight (ALWAYS if igphyml chosen) ----
+    if (identical(p$tree_model, "igphyml")) {
+      det <- detect_stops_and_frame(db$sequence_alignment)
+      n_dropped_stops <- sum(det$stop, na.rm=TRUE)
+      n_bad_frame     <- sum(det$frame_bad, na.rm=TRUE)
 
-        if (n_dropped_stops > 0L || n_bad_frame > 0L) {
-          if (p$ig_stop_policy == "drop_seqs") {
-            keep <- !(det$stop | det$frame_bad)
-            db <- db[keep, , drop=FALSE]
-            logf("[dowser] IgPhyML: dropped %d rows with stop codons and %d out-of-frame rows.",
-                 n_dropped_stops, n_bad_frame)
-          } else if (p$ig_stop_policy == "fallback_ml") {
-            p$tree_model <- "ml"  # switch to nucleotide ML
-            ig_fallback <- TRUE
-            logf("[dowser] IgPhyML fallback -> ML due to stops/frame (stop=%d, frame=%d).",
-                 n_dropped_stops, n_bad_frame)
-          } else { # error
+      if (n_dropped_stops > 0L || n_bad_frame > 0L) {
+        if (p$ig_stop_policy == "drop_seqs") {
+          keep <- !(det$stop | det$frame_bad)
+          dropped <- sum(!keep, na.rm=TRUE)
+          db <- db[keep, , drop=FALSE]
+          logf("[dowser] IgPhyML: dropped %d rows with stop codons and/or out-of-frame.", dropped)
+          if (nrow(db) == 0) {
             res$status <- 400
-            return(list(ok=FALSE, error=sprintf(
+            return(list(
+              ok = FALSE,
+              error = sprintf(
+                "All sequences removed for IgPhyML: %d had stop codons and %d were out-of-frame.",
+                n_dropped_stops, n_bad_frame
+              )
+            ))
+          }
+        } else if (p$ig_stop_policy == "fallback_ml") {
+          p$tree_model <- "ml"
+          ig_fallback <- TRUE
+          logf("[dowser] IgPhyML fallback -> ML due to stops/frame (stop=%d, frame=%d).",
+               n_dropped_stops, n_bad_frame)
+        } else { # "error"
+          res$status <- 400
+          return(list(
+            ok = FALSE,
+            error = sprintf(
               "IgPhyML blocked: %d sequences contain stop codons and %d are out-of-frame.",
               n_dropped_stops, n_bad_frame
-            )))
-          }
+            )
+          ))
         }
       }
     }
@@ -469,12 +516,43 @@ run_handler_impl <- function(req, res) {
       exec_path <- tryCatch(check_igphyml_exec(p$exec),
                             error = function(e) { res$status <- 400; stop(e) })
       args$exec <- exec_path
-      if (!ensure_igphyml_path(exec_path)) {
-        logf("[dowser][WARN] IgPhyML may fail without motifs.")
+
+      # Require a valid motifs path (user param > env > common locations)
+      motifs_ok <- ensure_igphyml_path(exec_path, user_path = p$igphyml_motifs_path, require_ok = TRUE)
+      if (!isTRUE(motifs_ok)) {
+        res$status <- 400
+        return(list(ok = FALSE, error = motifs_ok))
       }
     }
 
-    trees_tbl <- do.call(dowser::getTrees, args)
+    trees_tbl <- tryCatch(
+      do.call(dowser::getTrees, args),
+      error = function(e) {
+        msg <- conditionMessage(e)
+        if (grepl("stop codon|out[- ]of[- ]frame", msg, ignore.case = TRUE)) {
+          res$status <- 400
+          return(list(
+            ok = FALSE,
+            error = paste0(
+              "IgPhyML failed due to stop codons/frame issues. ",
+              "Use 'ig_stop_policy' = 'drop_seqs' (recommended) or 'fallback_ml'."
+            )
+          ))
+        }
+        if (grepl("Hotspot tables not found|IGPHYML_PATH", msg, ignore.case = TRUE)) {
+          res$status <- 400
+          return(list(
+            ok = FALSE,
+            error = paste0(
+              "IgPhyML hotspot motif tables not found. ",
+              "Set 'igphyml_motifs_path' or $IGPHYML_PATH to the motifs directory."
+            )
+          ))
+        }
+        stop(e)
+      }
+    )
+    if (is.list(trees_tbl) && identical(trees_tbl$ok, FALSE)) return(trees_tbl)
 
     # ---- Outputs ----
     newicks <- lapply(trees_tbl$trees, to_newick)
@@ -482,13 +560,10 @@ run_handler_impl <- function(req, res) {
     figures_b64 <- NULL
     plot_label <- NULL
 
-    if (isTRUE(p$include_figures) &&
-        requireNamespace("ggtree", quietly = TRUE) &&
+    # Always try to produce figures (uncolored if too many states or no tip column)
+    if (requireNamespace("ggtree", quietly = TRUE) &&
         requireNamespace("ggplot2", quietly = TRUE)) {
-
-      # If too many categories or tip coloring disabled, draw uncolored
       plot_tips <- if (!is.null(tip_col) && !state_overflow) tip_col else NULL
-
       plots <- tryCatch(
         dowser::plotTrees(trees_tbl, tips = plot_tips, tipsize = p$tipsize),
         error = function(e) {
@@ -499,6 +574,8 @@ run_handler_impl <- function(req, res) {
       figures_b64 <- lapply(plots, encode_png)
       plot_label <- if (is.null(plot_tips)) "plotTrees_uncolored_tipsize" else sprintf("plotTrees_%s_tipsize", tip_col)
       plot_label <- paste0(plot_label, as.character(p$tipsize))
+    } else {
+      logf("[dowser][WARN] ggtree/ggplot2 not available; no PNG previews will be returned.")
     }
 
     # Per-tree annotations (tip column optional) + extras
@@ -568,6 +645,21 @@ run_handler_impl <- function(req, res) {
       ))
     }
 
+    # --- IgPhyML preflight warnings (always, if relevant) ---
+    if (ig_fallback) {
+      warnings <- c(warnings, sprintf(
+        "IgPhyML fallback: switched to nucleotide ML (pml) because %d rows had stop codons and %d were out-of-frame.",
+        n_dropped_stops, n_bad_frame
+      ))
+    }
+
+    if (identical(p$ig_stop_policy, "drop_seqs") && (n_dropped_stops > 0L || n_bad_frame > 0L)) {
+      warnings <- c(warnings, sprintf(
+        "IgPhyML: dropped %d sequences with stop codons and %d out-of-frame sequences (policy=drop_seqs).",
+        n_dropped_stops, n_bad_frame
+      ))
+    }
+
     if (isTRUE(p$apply_filters)) {
       if (isTRUE(p$uppercase) && filter_stats$upper > 0)
         warnings <- c(warnings, sprintf("Uppercased %d rows.", filter_stats$upper))
@@ -583,7 +675,6 @@ run_handler_impl <- function(req, res) {
         warnings <- c(warnings, sprintf("Replaced non-IUPAC letters in %d rows.", filter_stats$noniupac_rows))
       if (p$noniupac_policy == "drop_row" && filter_stats$noniupac_rows > 0)
         warnings <- c(warnings, sprintf("Dropped %d rows with non-IUPAC letters.", filter_stats$noniupac_rows))
-
       if (n_len_mismatch > 0L) {
         if (p$len_policy == "drop_seqs") {
           warnings <- c(warnings, sprintf(
@@ -597,34 +688,12 @@ run_handler_impl <- function(req, res) {
           ))
         }
       }
+    }  
 
-      if (ig_fallback) {
-        warnings <- c(warnings, sprintf(
-          "IgPhyML fallback: switched to nucleotide ML (pml) because %d rows had stop codons and %d were out-of-frame.",
-          n_dropped_stops, n_bad_frame
-        ))
-      }
-
-      if (identical(p$tree_model, "igphyml") && isTRUE(p$apply_filters)) {
-        if (p$ig_stop_policy == "drop_seqs" && (n_dropped_stops > 0L || n_bad_frame > 0L)) {
-          warnings <- c(
-            warnings,
-            sprintf(
-              "IgPhyML: dropped %d sequences with stop codons and %d out-of-frame sequences (policy=drop_seqs).",
-              n_dropped_stops, n_bad_frame
-            )
-          )
-        } else if (ig_fallback) {
-          warnings <- c(
-            warnings,
-            sprintf(
-              "IgPhyML fallback: switched to nucleotide ML (pml) because %d rows had stop codons and %d were out-of-frame.",
-              n_dropped_stops, n_bad_frame
-            )
-          )
-        }
-      }
-    }
+    # --- Force warnings to be a JSON array ([] or ["..."]) ---
+    if (is.null(warnings)) warnings <- character(0)
+    warnings <- as.character(warnings)
+    warnings_json <- unname(as.list(warnings))
 
     result <- list(
       ok = TRUE,
@@ -633,7 +702,7 @@ run_handler_impl <- function(req, res) {
       annotations = annos,
       figures = if (is.null(figures_b64)) NULL else list(png_base64 = unname(figures_b64)),
       stats = stats,
-      warnings = warnings,
+      warnings = warnings_json,
       render = plot_label
     )
 
@@ -642,14 +711,14 @@ run_handler_impl <- function(req, res) {
       RESULT_SCHEMA_PATH, verbose = TRUE
     )) {
       res$status <- 500
-      return(list(ok = FALSE, error = "Result does not match schema"))
+      return(list(ok = FALSE, error = "Internal server error"))
     }
 
     return(result)
   }, error = function(e) {
     logf("[dowser][ERROR] %s", as.character(e))
     res$status <- 500
-    list(ok = FALSE, error = as.character(e))
+    list(ok = FALSE, error = "Internal server error")
   })
 }
 
@@ -666,7 +735,7 @@ function(pr) {
 
   pr_set_error(pr, function(req, res, err){
     res$status <- 500
-    list(ok = FALSE, error = as.character(err))
+    list(ok = FALSE, error = "Internal server error")
   })
   pr
 }
