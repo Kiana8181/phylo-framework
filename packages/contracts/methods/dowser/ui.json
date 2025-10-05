@@ -9,9 +9,32 @@
     "unknown_value",
     "tipsize",
     "include_figures",
-    "max_tip_categories",
+    "annotation_fields",
+
+    "apply_filters",
+    "len_policy",
+    "gap_policy",
+    "noniupac_policy",
+    "uppercase",
+
     "ig_stop_policy",
-    "ig_len_policy",
-    "exec"
-  ]
+    "exec",
+
+    "max_tip_categories",
+    "disable_figures_on_many_states"
+  ],
+  "placeholders": {
+    "tip_color_by": "empty = no coloring",
+    "annotation_fields": "e.g. donor, timepoint",
+    "exec": "/usr/local/bin/igphyml"
+  },
+  "visibility": {
+    "len_policy":      { "when": { "apply_filters": true } },
+    "gap_policy":      { "when": { "apply_filters": true } },
+    "noniupac_policy": { "when": { "apply_filters": true } },
+    "uppercase":       { "when": { "apply_filters": true } },
+
+    "ig_stop_policy":  { "whenAll": [ { "apply_filters": true }, { "tree_model": "igphyml" } ] },
+    "exec":            { "when": { "tree_model": "igphyml" } }
+  }
 }

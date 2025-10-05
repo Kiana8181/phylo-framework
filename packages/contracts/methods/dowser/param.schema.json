@@ -1,60 +1,27 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
   "properties": {
-    "tree_model": {
-      "type": "string",
-      "enum": ["mp", "ml", "igphyml"],
-      "default": "mp",
-      "title": "Tree model"
-    },
-    "minseq": { "type": "integer", "default": 3, "title": "Min seq per clone" },
-    "nproc": { "type": "integer", "default": 1, "title": "Threads" },
+    "tree_model": { "type": "string", "enum": ["mp","ml","igphyml"], "default": "mp", "title": "Model" },
+    "minseq":     { "type": "integer", "default": 3, "title": "Min seq/clone" },
+    "nproc":      { "type": "integer", "default": 1, "title": "Threads" },
 
-    "tip_color_by": {
-      "type": "string",
-      "default": "c_call",
-      "title": "Color tips by (column)"
-    },
-    "unknown_value": {
-      "type": "string",
-      "default": "unknown",
-      "title": "Fill empty values with"
-    },
-    "tipsize": { "type": "number", "default": 2, "title": "Tip size" },
-    "include_figures": {
-      "type": "boolean",
-      "default": true,
-      "title": "Return preview plot"
-    },
-    "max_tip_categories": {
-      "type": "integer",
-      "default": 30,
-      "title": "Max categories for coloring"
-    },
+    "tip_color_by":  { "type": "string", "default": "", "title": "Color tips by (column)" },
+    "unknown_value": { "type": "string", "default": "unknown", "title": "Unknown fill" },
+    "tipsize":       { "type": "number",  "default": 2, "title": "Tip size" },
+    "include_figures": { "type": "boolean", "default": true, "title": "Return preview plot" },
+    "annotation_fields": { "type": "string", "default": "", "title": "Annotation fields (comma-separated)" },
 
-    "ig_stop_policy": {
-      "type": "string",
-      "enum": ["drop_seqs", "fallback_ml", "error"],
-      "default": "drop_seqs",
-      "title": "IgPhyML stop-codon policy",
-      "description": "How to handle stop codons/out-of-frame sequences for IgPhyML: drop offending sequences, fallback to ML (pml), or raise an error."
-    },
+    "apply_filters":  { "type": "boolean", "default": false, "title": "Apply filters" },
+    "uppercase":      { "type": "boolean", "default": false, "title": "Uppercase sequences" },
+    "len_policy":     { "type": "string", "enum": ["ignore","drop_seqs","drop_clone","error"], "default": "ignore", "title": "Unequal length policy" },
+    "gap_policy":     { "type": "string", "enum": ["keep","remove","replace_N","replace_NNN","drop_row"], "default": "keep", "title": "Gap policy" },
+    "noniupac_policy":{ "type": "string", "enum": ["keep","replace_N","drop_row"], "default": "keep", "title": "Non-IUPAC policy" },
 
-    "ig_len_policy": {
-  "type": "string",
-  "enum": ["drop_seqs", "drop_clone", "error"],
-  "default": "drop_seqs",
-  "title": "Unequal seq/germline length policy",
-  "description": "When sequence and germline alignments differ in length: drop only offending sequences, drop whole clone(s), or error."
-},
+    "ig_stop_policy": { "type": "string", "enum": ["drop_seqs","fallback_ml","error"], "default": "drop_seqs", "title": "IgPhyML stop-codon policy" },
+    "exec":           { "type": "string", "default": "", "title": "IgPhyML binary path" },
 
-    "exec": {
-      "type": "string",
-      "default": "",
-      "title": "IgPhyML binary path",
-      "description": "Absolute path to the igphyml executable (must be +x). Example: /usr/local/bin/igphyml"
-    }
+    "max_tip_categories": { "type": "integer", "default": 30, "title": "Max tip categories" },
+    "disable_figures_on_many_states": { "type": "boolean", "default": false, "title": "Skip figures when too many categories" }
   },
   "required": ["tree_model"]
 }
