@@ -25,6 +25,8 @@ Sys.setenv(PCRE2_MATCH_LIMIT_RECURSION="2000000")
 # ---------------------------
 # Config & Contracts loading
 # ---------------------------
+IG_EXEC_DEFAULT   <- Sys.getenv("IGPHYML_BIN", "igphyml")  # binary path
+IG_MOTIFS_DEFAULT <- Sys.getenv("IGPHYML_MOTIFS", "/usr/local/share/igphyml/src/motifs")
 CONTRACTS_DIR <- Sys.getenv("CONTRACTS_DIR", "packages/contracts")
 METHOD_DIR    <- file.path(CONTRACTS_DIR, "methods", "dowser")
 
@@ -55,8 +57,10 @@ DEFAULT_ACCEPTS <- c("text/csv","text/tab-separated-values","application/x-rds",
 DEFAULT_UI <- list(
   requiresFile = TRUE,
   maxFiles = 1,
-  order = c("tree_model", "minseq", "nproc", "tip_color_by", "unknown_value",
-            "tipsize", "annotation_fields")
+  order = c("tree_model", "minseq", "nproc",
+            "label_field",
+            "tip_color_by", "unknown_value",
+            "tipsize")
 )
 
 `%||%` <- function(a, b) if (is.null(a) || length(a) == 0 || (is.character(a) && !nzchar(a))) b else a
@@ -155,11 +159,62 @@ check_igphyml_exec <- function(user_exec = NULL) {
 }
 
 # ---------------------------
-# IgPhyML motifs path helpers
+# IgPhyML resolution (exec + motifs)
 # ---------------------------
 validate_motifs_dir <- function(path) {
-  if (!nzchar(path) || !dir.exists(path)) return(FALSE)
+  if (!nzchar(path)) return(FALSE)
+  if (!dir.exists(path)) return(FALSE)
   length(list.files(path, all.files = FALSE)) > 0
+}
+
+resolve_igphyml <- function(user_exec = NULL, user_motifs = NULL, require_ok = TRUE) {
+  # --- resolve exec ---
+  exec_path <- tryCatch(
+    check_igphyml_exec(user_exec),
+    error = function(e) if (require_ok) stop(e) else NULL
+  )
+  if (is.null(exec_path)) {
+    return(list(ok = FALSE, error = "IgPhyML executable not found or not executable. Provide 'exec' (absolute path) or install igphyml on PATH."))
+  }
+
+  # --- resolve motifs ---
+  candidates <- unique(c(
+    user_motifs,
+    Sys.getenv("IGPHYML_MOTIFS", ""),
+    Sys.getenv("IGPHYML_PATH", ""),
+    IG_MOTIFS_DEFAULT,                                           # from top of file
+    file.path(dirname(dirname(exec_path)), "share", "igphyml", "src", "motifs"),
+    "/usr/local/share/igphyml/src/motifs",
+    "/usr/share/igphyml/src/motifs",
+    "/opt/igphyml/src/motifs"
+  ))
+
+  motifs_dir <- NULL
+  for (d in candidates) {
+    if (validate_motifs_dir(d)) { motifs_dir <- d; break }
+  }
+
+  if (is.null(motifs_dir)) {
+    if (require_ok) {
+      tried <- paste(Filter(nzchar, candidates), collapse = " | ")
+      return(list(
+        ok = FALSE,
+        error = paste0(
+          "IgPhyML hotspot motif tables not found. ",
+          "Please set 'igphyml_motifs_path' to the directory that contains motif tables ",
+          "(e.g., '/usr/local/share/igphyml/src/motifs'). ",
+          "Tried: ", if (nzchar(tried)) tried else "<none>"
+        )
+      ))
+    }
+  } else {
+    # Set BOTH env vars for maximum compatibility with igphyml’s own checks
+    Sys.setenv(IGPHYML_MOTIFS = motifs_dir)
+    Sys.setenv(IGPHYML_PATH   = motifs_dir)
+    logf("[dowser] Using motifs dir: %s", motifs_dir)
+  }
+
+  list(ok = TRUE, exec = exec_path, motifs = motifs_dir)
 }
 
 # When require_ok=TRUE, returns TRUE on success, or a character error message if not found
@@ -167,8 +222,8 @@ ensure_igphyml_path <- function(exec, user_path = NULL, require_ok = FALSE) {
   # 1) user param
   if (!is.null(user_path) && nzchar(user_path)) {
     if (validate_motifs_dir(user_path)) {
-      Sys.setenv(IGPHYML_PATH = user_path)
-      logf("[dowser] IGPHYML_PATH set from user param: %s", user_path)
+      Sys.setenv(IGPHYML_MOTIFS = user_path)
+      logf("[dowser] IGPHYML_MOTIFS set from user param: %s", user_path)
       return(TRUE)
     } else {
       if (require_ok) {
@@ -183,8 +238,11 @@ ensure_igphyml_path <- function(exec, user_path = NULL, require_ok = FALSE) {
   }
 
   # 2) env var
-  cur <- Sys.getenv("IGPHYML_PATH", "")
-  if (validate_motifs_dir(cur)) return(TRUE)
+  cur <- Sys.getenv("IGPHYML_MOTIFS", "")
+  if (validate_motifs_dir(cur)) {
+    Sys.setenv(IGPHYML_MOTIFS = cur)
+    return(TRUE)
+  }
 
   # 3) common locations
   candidates <- unique(c(
@@ -195,8 +253,8 @@ ensure_igphyml_path <- function(exec, user_path = NULL, require_ok = FALSE) {
   ))
   for (d in candidates) {
     if (validate_motifs_dir(d)) {
-      Sys.setenv(IGPHYML_PATH = d)
-      logf("[dowser] IGPHYML_PATH auto-detected: %s", d)
+      Sys.setenv(IGPHYML_MOTIFS = d)
+      logf("[dowser] IGPHYML_MOTIFS auto-detected: %s", d)
       return(TRUE)
     }
   }
@@ -303,12 +361,11 @@ run_handler_impl <- function(req, res) {
       p$unknown_value   <- p$unknown_value %||% "unknown"
       p$tipsize         <- as.numeric(p$tipsize %||% 2)
 
-      af <- p$annotation_fields %||% character(0)
-      if (is.character(af) && length(af) == 1) {
-        af <- trimws(unlist(strsplit(af, ",")))
-        af <- af[nzchar(af)]
+      p$label_field <- p$label_field %||% ""
+      if (is.character(p$label_field) && length(p$label_field) == 1) {
+        p$label_field <- trimws(p$label_field)
       }
-      p$annotation_fields <- unique(as.character(af))
+      if (!nzchar(p$label_field)) p$label_field <- "sequence_id"
 
       p$exec <- p$exec %||% NULL
       if (is.character(p$exec) && !nzchar(p$exec)) p$exec <- NULL
@@ -386,6 +443,20 @@ run_handler_impl <- function(req, res) {
     if ("clone_id"    %in% names(db)) db$clone_id    <- as.character(db$clone_id)
     db <- db[!is.na(db$sequence_id) & nzchar(db$sequence_id) &
                !is.na(db$clone_id)    & nzchar(db$clone_id), , drop=FALSE]
+
+    # --- label column existence & coercion ---
+    if (!p$label_field %in% names(db)) {
+      warnings <- c(
+        if (exists("warnings")) warnings else NULL,
+        sprintf("Label column '%s' not found; using 'sequence_id'.", p$label_field)
+      )
+      p$label_field <- "sequence_id"
+    }
+    db[[p$label_field]] <- as.character(db[[p$label_field]])
+    is_bad_label <- is.na(db[[p$label_field]]) | !nzchar(trimws(db[[p$label_field]]))
+    if (any(is_bad_label)) {
+      db[[p$label_field]][is_bad_label] <- as.character(db$sequence_id[is_bad_label])
+    }
 
     # ---- Tip-color column handling (optional) ----
     tip_col <- p$tip_color_by
@@ -490,7 +561,7 @@ run_handler_impl <- function(req, res) {
     }
 
     # ---- Build clones & trees ----
-    keep_text <- unique(c(if (!is.null(tip_col)) tip_col, p$annotation_fields))
+    keep_text <- unique(c(if (!is.null(tip_col)) tip_col))
     clones <- dowser::formatClones(
       db,
       text_fields = keep_text,
@@ -513,15 +584,37 @@ run_handler_impl <- function(req, res) {
 
     # IgPhyML exec resolution & validation
     if (build == "igphyml") {
-      exec_path <- tryCatch(check_igphyml_exec(p$exec),
-                            error = function(e) { res$status <- 400; stop(e) })
+      # Prefer user inputs; else fall back to env/defaults
+      if (is.null(p$exec) || !nzchar(p$exec)) p$exec <- IG_EXEC_DEFAULT
+      if (is.null(p$igphyml_motifs_path) || !nzchar(p$igphyml_motifs_path)) {
+        p$igphyml_motifs_path <- IG_MOTIFS_DEFAULT
+      }
+
+      # ---- resolve exec safely ----
+      exec_path <- tryCatch(
+        check_igphyml_exec(p$exec),
+        error = function(e) {
+          res$status <- 400
+          return(structure(list(.error = TRUE, msg = conditionMessage(e)), class = "exec_error"))
+        }
+      )
+      if (inherits(exec_path, "exec_error")) {
+        return(list(
+          ok = FALSE,
+          error = paste0(
+            "IgPhyML executable not found or not executable. ",
+            "Provide 'exec' as an absolute path or install 'igphyml' on PATH. Details: ",
+            exec_path$msg
+          )
+        ))
+      }
       args$exec <- exec_path
 
-      # Require a valid motifs path (user param > env > common locations)
-      motifs_ok <- ensure_igphyml_path(exec_path, user_path = p$igphyml_motifs_path, require_ok = TRUE)
-      if (!isTRUE(motifs_ok)) {
+      # ---- resolve motifs safely (sets both envs for compatibility) ----
+      resolved <- resolve_igphyml(user_exec = exec_path, user_motifs = p$igphyml_motifs_path, require_ok = TRUE)
+      if (!isTRUE(resolved$ok)) {
         res$status <- 400
-        return(list(ok = FALSE, error = motifs_ok))
+        return(list(ok = FALSE, error = resolved$error))
       }
     }
 
@@ -579,21 +672,54 @@ run_handler_impl <- function(req, res) {
     }
 
     # Per-tree annotations (tip column optional) + extras
-    annos <- lapply(seq_along(trees_tbl$trees), function(i) {
+    trees_relabelled <- vector("list", length(trees_tbl$trees))
+    annos <- vector("list", length(trees_tbl$trees))
+
+    for (i in seq_along(trees_tbl$trees)) {
       phy  <- trees_tbl$trees[[i]]
       tips <- phy$tip.label
+
+      # Match original tips (sequence_id) back to db rows
       jj <- match(tips, db$sequence_id)
-      out <- data.frame(label = tips, stringsAsFactors = FALSE)
+
+      # Build display labels
+      disp <- ifelse(
+        is.na(jj), 
+        "Germline",
+        as.character(db[[p$label_field]][jj])
+      )
+
+      # Relabel tree
+      phy$tip.label <- disp
+      trees_relabelled[[i]] <- phy
+
+      # Build lean annotations: only label + (optional) color column
+      out <- data.frame(label = disp, stringsAsFactors = FALSE)
       if (!is.null(tip_col)) {
         out[[tip_col]] <- ifelse(is.na(jj), "Germline", as.character(db[[tip_col]][jj]))
       }
-      if (length(p$annotation_fields)) {
-        for (af in p$annotation_fields) {
-          if (af %in% names(db)) out[[af]] <- ifelse(is.na(jj), NA, as.character(db[[af]][jj]))
+      annos[[i]] <- out
+    }
+
+    # Use relabelled trees for Newick + plotting
+    newicks <- lapply(trees_relabelled, to_newick)
+
+    if (requireNamespace("ggtree", quietly = TRUE) &&
+        requireNamespace("ggplot2", quietly = TRUE)) {
+      plot_tips <- if (!is.null(tip_col) && !state_overflow) tip_col else NULL
+      plots <- tryCatch(
+        dowser::plotTrees(trees_tbl, tips = plot_tips, tipsize = p$tipsize),
+        error = function(e) {
+          logf("[dowser][WARN] plotTrees failed: %s", as.character(e))
+          dowser::plotTrees(trees_tbl, tips = NULL, tipsize = p$tipsize)
         }
-      }
-      out
-    })
+      )
+      figures_b64 <- lapply(plots, encode_png)
+      plot_label <- if (is.null(plot_tips)) "plotTrees_uncolored_tipsize" else sprintf("plotTrees_%s_tipsize", tip_col)
+      plot_label <- paste0(plot_label, as.character(p$tipsize))
+    } else {
+      logf("[dowser][WARN] ggtree/ggplot2 not available; no PNG previews will be returned.")
+    }
 
     unknown_tips_per_tree <- if (!is.null(tip_col)) {
       vapply(annos, function(df) sum(df[[tip_col]] == p$unknown_value, na.rm=TRUE), integer(1))
@@ -630,6 +756,7 @@ run_handler_impl <- function(req, res) {
       igphyml_stop_rows = n_dropped_stops,
       igphyml_frame_rows = n_bad_frame
     )
+    stats$label_field <- p$label_field
 
     warnings <- NULL
     if (!is.null(tip_col) && unknown_replaced_total > 0) {
@@ -717,8 +844,8 @@ run_handler_impl <- function(req, res) {
     return(result)
   }, error = function(e) {
     logf("[dowser][ERROR] %s", as.character(e))
-    res$status <- 500
-    list(ok = FALSE, error = "Internal server error")
+    if (is.null(res$status) || res$status == 200) res$status <- 500
+    list(ok = FALSE, error = conditionMessage(e))  
   })
 }
 
@@ -735,7 +862,7 @@ function(pr) {
 
   pr_set_error(pr, function(req, res, err){
     res$status <- 500
-    list(ok = FALSE, error = "Internal server error")
+    list(ok = FALSE, error = as.character(err))
   })
   pr
 }
