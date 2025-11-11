@@ -21,48 +21,7 @@ type Props = {
 
 type LNode = NewickNode & { parent?: LNode; x?: number; y?: number };
 
-const DEFAULT_COLORS: Record<string, string> = {
-  Germline: "#222222",
-  IGHA2: "#1abc9c",
-  IGHG1: "#e67e22",
-  IGHG2: "#34495e",
-  IGHG3: "#e91e63",
-  IGHG4: "#2ecc71",
-  unknown: "#9aa0a6",
-};
-
-const PALETTE: string[] = [
-  "#1f77b4",
-  "#ff7f0e",
-  "#2ca02c",
-  "#d62728",
-  "#9467bd",
-  "#8c564b",
-  "#e377c2",
-  "#7f7f7f",
-  "#bcbd22",
-  "#17becf",
-  "#393b79",
-  "#637939",
-  "#8c6d31",
-  "#843c39",
-  "#7b4173",
-  "#3182bd",
-  "#31a354",
-  "#756bb1",
-  "#636363",
-  "#e6550d",
-  "#6baed6",
-  "#74c476",
-  "#9e9ac8",
-  "#969696",
-  "#fd8d3c",
-  "#9ecae1",
-  "#a1d99b",
-  "#bcbddc",
-  "#bdbdbd",
-  "#fdae6b",
-];
+/** ---- Helpers ---- */
 
 function sanitizeNewick(s: string): string {
   let x = s.trim();
@@ -76,27 +35,73 @@ function estimateTextWidth(label: string, fontSize: number) {
   return Math.ceil(fontSize * 0.6 * (label?.length ?? 0));
 }
 
-function buildColorMapFromAnnotations(
+const GOLDEN_ANGLE = 137.50776405003785;
+
+const SAT_BANDS = [74, 62, 82, 55] as const;
+const LIG_BANDS = [45, 58, 36, 66] as const;
+
+function colorByIndex(k: number): string {
+  const hue = (k * GOLDEN_ANGLE) % 360;
+  const sat = SAT_BANDS[k % SAT_BANDS.length];
+  const lig = LIG_BANDS[Math.floor(k / SAT_BANDS.length) % LIG_BANDS.length];
+
+  return `hsl(${hue.toFixed(3)}, ${sat}%, ${lig}%)`;
+}
+
+function buildColorMapDistinct(
   list: Anno[] | undefined,
   field: string,
   unknownValue: string
-) {
+): Record<string, string> {
   const map: Record<string, string> = {};
-  if (!list?.length) return map;
-  const seen = new Set<string>();
+  if (!list?.length || !field) return map;
+
+  const set = new Set<string>();
   for (const a of list) {
     const v = (a as any)?.[field];
-    if (typeof v === "string" && v && v !== "Germline" && v !== unknownValue) {
-      seen.add(v);
+    if (typeof v === "string") {
+      const vv = v.trim();
+      if (vv && vv !== "Germline" && vv !== unknownValue) {
+        set.add(vv);
+      }
     }
   }
-  const vals = Array.from(seen).slice(0, PALETTE.length);
-  vals.forEach((v, i) => {
-    map[v] = PALETTE[i % PALETTE.length];
+  const values = Array.from(set).sort((a, b) => a.localeCompare(b, "en"));
+
+  values.forEach((v, i) => {
+    map[v] = colorByIndex(i);
   });
-  map["Germline"] = DEFAULT_COLORS["Germline"];
-  map[unknownValue] = DEFAULT_COLORS["unknown"];
+
+  map["Germline"] = "#000000";
+  map[unknownValue] = "#000000";
   return map;
+}
+
+function buildTipTitle(
+  label: string,
+  anno: Anno | undefined,
+  colorField: string | null
+): string {
+  const parts: string[] = [];
+  parts.push(label || "");
+
+  if (anno && colorField) {
+    const v = String(anno[colorField] ?? "").trim();
+    if (v) parts.push(`${colorField}: ${v}`);
+  }
+
+  if (anno) {
+    const extraKeys = Object.keys(anno).filter(
+      (k) => k !== "label" && (colorField ? k !== colorField : true)
+    );
+    if (extraKeys.length > 0) {
+      const k = extraKeys[0];
+      const vv = String(anno[k] ?? "").trim();
+      if (vv) parts.push(`${k}: ${vv}`);
+    }
+  }
+
+  return parts.filter(Boolean).join("\n");
 }
 
 export default function TreeSVG({
@@ -116,8 +121,8 @@ export default function TreeSVG({
   const [showLabels, setShowLabels] = useState<boolean>(showLabelsProp);
 
   const coloringEnabled = !!colorBy;
-  const colorField = colorBy || "";
-  const unknown = unknownValue ?? "unknown";
+  const colorField = colorBy || null;
+  const unknown = (unknownValue && unknownValue.trim()) || "unknown";
 
   const annoByLabel = useMemo(() => {
     const m: Record<string, Anno> = {};
@@ -130,10 +135,13 @@ export default function TreeSVG({
   const colors = useMemo(() => {
     if (!coloringEnabled) return {};
     if (colorMap && Object.keys(colorMap).length) {
-      return { ...DEFAULT_COLORS, ...colorMap };
+      return {
+        ...colorMap,
+        Germline: "#000000",
+        [unknown]: "#000000",
+      };
     }
-    const auto = buildColorMapFromAnnotations(annotations, colorField, unknown);
-    return { ...DEFAULT_COLORS, ...auto };
+    return buildColorMapDistinct(annotations, colorField!, unknown);
   }, [coloringEnabled, colorMap, annotations, colorField, unknown]);
 
   const leafCount = useMemo(() => {
@@ -324,14 +332,30 @@ export default function TreeSVG({
         <g>
           {layout.leafNodes.map((n, i) => {
             const label = n.name ?? "";
-            if (!coloringEnabled) {
-              return <circle key={i} cx={n.x!} cy={n.y!} r={3} fill="#444" />;
+            const anno = annoByLabel[label];
+
+            let fill = "#000000";
+            if (coloringEnabled && colorField) {
+              const call = (anno?.[colorField] as string) || "";
+              if (call && call !== "Germline" && call !== unknown) {
+                fill = colors[call] ?? "#000000";
+              }
             }
-            const call = colorField
-              ? (annoByLabel[label]?.[colorField] as string)
-              : undefined;
-            const fill = call ? colors[call] ?? "#444" : "#444";
-            return <circle key={i} cx={n.x!} cy={n.y!} r={3} fill={fill} />;
+
+            const title = buildTipTitle(label, anno, colorField);
+
+            return (
+              <circle
+                key={i}
+                cx={n.x!}
+                cy={n.y!}
+                r={3}
+                fill={fill}
+                style={{ cursor: "pointer" }}
+              >
+                <title>{title}</title>
+              </circle>
+            );
           })}
         </g>
 
