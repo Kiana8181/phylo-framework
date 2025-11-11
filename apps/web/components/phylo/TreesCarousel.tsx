@@ -64,14 +64,14 @@ export default function TreesCarousel({
           <ChevronLeft className="w-4 h-4" /> Prev
         </button>
 
-        <div className="flex-1">
+        <div className="flex-1 overflow-auto">
           <div className="space-y-2">
             {/* exact PNG from backend */}
             {current?.png && (
-              <div className="overflow-auto">
+              <div className="overflow-hidden">
                 <img
                   src={`data:image/png;base64,${current.png}`}
-                  className="rounded border bg-white mx-auto max-w-none"
+                  className="rounded border bg-white mx-auto w-full max-w-full h-auto"
                   alt={`Tree ${idx + 1}`}
                 />
               </div>
