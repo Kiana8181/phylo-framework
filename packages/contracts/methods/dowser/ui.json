@@ -5,10 +5,10 @@
     "tree_model",
     "minseq",
     "nproc",
+    "label_field",
     "tip_color_by",
     "unknown_value",
     "tipsize",
-    "annotation_fields",
 
     "apply_filters",
     "len_policy",
@@ -23,8 +23,8 @@
     "max_tip_categories"
   ],
   "placeholders": {
+    "label_field": "empty = sequence_id",
     "tip_color_by": "empty = no coloring",
-    "annotation_fields": "e.g. donor, timepoint",
     "exec": "/usr/local/bin/igphyml",
     "igphyml_motifs_path": "/usr/local/share/igphyml/src/motifs"
   },
