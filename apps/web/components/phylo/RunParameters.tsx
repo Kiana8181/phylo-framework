@@ -1,13 +1,14 @@
 "use client";
 
+import FileInput from "@/components/common/FileInput";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import FormBuilder from "@/components/ui/FormBuilder";
-import FileInput from "@/components/common/FileInput";
+import { Label } from "@/components/ui/label";
+import { useCreateRun } from "@/features/runs/hooks";
+import { notify } from "@/lib/notify";
 import type { MethodSpec } from "@phylo/contracts";
 import { useMemo, useState } from "react";
-import { useCreateRun } from "@/features/runs/hooks";
-import { Button } from "@/components/ui/button";
-import { notify } from "@/lib/notify";
 
 export default function RunParameters({
   spec,
@@ -58,68 +59,74 @@ export default function RunParameters({
   }
 
   return (
-    <section className="grid gap-4 md:grid-cols-2">
-      <Card className="p-4 space-y-4">
-        <div>
-          <h3 className="text-lg font-medium">{spec.name} parameters</h3>
-          <p className="text-xs text-muted-foreground">
-            Configure inputs for this method
-          </p>
-        </div>
-        <FormBuilder schema={schemaMemo} onSubmit={handleSubmit} />
+    <Card className="p-4 space-y-4">
+      <div>
+        <h3 className="text-lg font-medium">{spec.name} parameters</h3>
+        <p className="text-xs text-muted-foreground">
+          Configure inputs for this method
+        </p>
+      </div>
 
-        {uploadPct !== null && (
-          <div className="space-y-2">
-            <div className="text-sm">
-              Uploading{Number.isFinite(uploadPct) ? ` (${uploadPct}%)` : ""}
+      <FormBuilder
+        schema={schemaMemo}
+        onSubmit={handleSubmit}
+        footer={
+          <div className="col-span-full">
+            <div className="flex items-center justify-between mb-2">
+              <div>
+                <Label className="text-sm">Input files</Label>
+                <p className="text-xs text-muted-foreground">
+                  Accepted: {(spec?.accepts ?? []).join(", ") || "—"}
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                onClick={() => onFiles([])}
+                disabled={!files?.length}
+                type="button"
+              >
+                Clear
+              </Button>
             </div>
-            <div className="h-2 w-full bg-muted rounded overflow-hidden">
-              <div
-                className="h-full rounded bg-gradient-to-r from-blue-500 to-indigo-500 transition-[width]"
-                style={{ width: `${uploadPct ?? 0}%` }}
+
+            {/* upload box */}
+            <div className="rounded-2xl border-2 border-dashed bg-muted/30 p-6">
+              <FileInput
+                accept={(spec?.accepts ?? []).join(",")}
+                multiple={(spec?.uiHints?.maxFiles ?? 1) > 1}
+                onFiles={onFiles}
               />
+              {files?.length ? (
+                <ul className="mt-3 space-y-1 text-sm">
+                  {files.map((f, i) => (
+                    <li key={i} className="truncate">
+                      • {f.name}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <div className="mt-3 text-xs text-muted-foreground">
+                  No files selected.
+                </div>
+              )}
             </div>
           </div>
-        )}
-      </Card>
+        }
+      />
 
-      <Card className="p-4 space-y-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <h3 className="text-lg font-medium">Input files</h3>
-            <p className="text-xs text-muted-foreground">
-              Accepted: {(spec?.accepts ?? []).join(", ") || "—"}
-            </p>
+      {uploadPct !== null && (
+        <div className="space-y-2">
+          <div className="text-sm">
+            Uploading{Number.isFinite(uploadPct) ? ` (${uploadPct}%)` : ""}
           </div>
-          <Button
-            variant="outline"
-            onClick={() => onFiles([])}
-            disabled={!files?.length}
-          >
-            Clear
-          </Button>
+          <div className="h-2 w-full bg-muted rounded overflow-hidden">
+            <div
+              className="h-full rounded bg-gradient-to-r from-blue-500 to-indigo-500 transition-[width]"
+              style={{ width: `${uploadPct ?? 0}%` }}
+            />
+          </div>
         </div>
-
-        <FileInput
-          accept={(spec?.accepts ?? []).join(",")}
-          multiple={(spec?.uiHints?.maxFiles ?? 1) > 1}
-          onFiles={onFiles}
-        />
-
-        {files?.length ? (
-          <ul className="space-y-1 text-sm">
-            {files.map((f, i) => (
-              <li key={i} className="truncate">
-                • {f.name}
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <div className="text-xs text-muted-foreground">
-            No files selected.
-          </div>
-        )}
-      </Card>
-    </section>
+      )}
+    </Card>
   );
 }
