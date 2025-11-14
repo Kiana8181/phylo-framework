@@ -883,7 +883,7 @@ run_handler_impl <- function(req, res) {
       trees = unname(newicks),
       clones = clones_meta,
       annotations = annos,
-      figures = if (is.null(figures_b64)) NULL else list(png_base64 = unname(figures_b64)),
+      figures = if (is.null(figures_b64)) NULL else list(phylogeny = unname(figures_b64)),
       stats = stats,
       warnings = warnings_json,
       render = plot_label
