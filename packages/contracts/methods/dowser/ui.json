@@ -8,6 +8,7 @@
     "label_field",
     "tip_color_by",
     "unknown_value",
+    "annotation_fields",
     "tipsize",
 
     "apply_filters",
@@ -29,13 +30,13 @@
     "igphyml_motifs_path": "/usr/local/share/igphyml/src/motifs"
   },
   "visibility": {
-    "len_policy":      { "when": { "apply_filters": true } },
-    "gap_policy":      { "when": { "apply_filters": true } },
+    "len_policy": { "when": { "apply_filters": true } },
+    "gap_policy": { "when": { "apply_filters": true } },
     "noniupac_policy": { "when": { "apply_filters": true } },
-    "uppercase":       { "when": { "apply_filters": true } },
+    "uppercase": { "when": { "apply_filters": true } },
 
-    "ig_stop_policy":  { "when": { "tree_model": "igphyml" } },
-    "exec":            { "when": { "tree_model": "igphyml" } },
+    "ig_stop_policy": { "when": { "tree_model": "igphyml" } },
+    "exec": { "when": { "tree_model": "igphyml" } },
     "igphyml_motifs_path": { "when": { "tree_model": "igphyml" } }
   }
 }

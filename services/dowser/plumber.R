@@ -335,6 +335,23 @@ detect_stops_and_frame <- function(seq_vec) {
   list(stop=stop_bad, frame_bad=frame_bad)
 }
 
+# Small helper: parse vectors from JSON/multipart (array OR "a,b c;d")
+parse_vec <- function(x) {
+  if (is.null(x)) return(character(0))
+  if (is.list(x)) x <- unlist(x, use.names = FALSE)
+  x <- as.character(x)
+  if (length(x) == 1L) {
+    s <- trimws(x)
+    if (nzchar(s)) {
+      x <- unlist(strsplit(s, "[,;\\s]+", perl = TRUE), use.names = FALSE)
+    } else {
+      x <- character(0)
+    }
+  }
+  x <- trimws(x)
+  unique(x[nzchar(x)])
+}
+
 # -------------------------------------------------
 # Main run handler
 # -------------------------------------------------
@@ -344,6 +361,8 @@ run_handler_impl <- function(req, res) {
   tryCatch({
     ct <- get_content_type(req)
     logf("[dowser] content-type: %s", ct)
+
+    warnings <- character(0)  # collect UI warnings
 
     # ---- Parse, normalize params ----
     parse_params <- function(raw) {
@@ -357,6 +376,9 @@ run_handler_impl <- function(req, res) {
       tc <- p$tip_color_by %||% NULL
       if (is.character(tc) && length(tc) == 1 && !nzchar(tc)) tc <- NULL
       p$tip_color_by <- tc
+
+      # annotation fields (array OR comma/space separated string)
+      p$annotation_fields <- parse_vec(p$annotation_fields)
 
       p$unknown_value   <- p$unknown_value %||% "unknown"
       p$tipsize         <- as.numeric(p$tipsize %||% 2)
@@ -446,10 +468,7 @@ run_handler_impl <- function(req, res) {
 
     # --- label column existence & coercion ---
     if (!p$label_field %in% names(db)) {
-      warnings <- c(
-        if (exists("warnings")) warnings else NULL,
-        sprintf("Label column '%s' not found; using 'sequence_id'.", p$label_field)
-      )
+      warnings <- c(warnings, sprintf("Label column '%s' not found; using 'sequence_id'.", p$label_field))
       p$label_field <- "sequence_id"
     }
     db[[p$label_field]] <- as.character(db[[p$label_field]])
@@ -465,8 +484,11 @@ run_handler_impl <- function(req, res) {
     state_overflow <- FALSE
 
     if (!is.null(tip_col)) {
-      if (!tip_col %in% names(db)) db[[tip_col]] <- NA_character_
-
+      if (!tip_col %in% names(db)) {
+        # Gracefully create an NA column and warn
+        db[[tip_col]] <- NA_character_
+        warnings <- c(warnings, sprintf("Color-by column '%s' not found; tips will be treated as '%s'.", tip_col, p$unknown_value))
+      }
       orig_vals  <- as.character(db[[tip_col]])
       is_missing <- is.na(orig_vals) | !nzchar(trimws(orig_vals))
       db[[tip_col]] <- as.character(db[[tip_col]])
@@ -561,7 +583,24 @@ run_handler_impl <- function(req, res) {
     }
 
     # ---- Build clones & trees ----
-    keep_text <- unique(c(if (!is.null(tip_col)) tip_col))
+    # Always keep sequence_id (to map tips back), the color-by column (if any),
+    # and any requested annotation fields.
+    keep_text <- unique(c(
+      "sequence_id",
+      if (!is.null(tip_col)) tip_col,
+      p$annotation_fields
+    ))
+
+    # Warn for annotation fields that don't exist
+    if (length(p$annotation_fields)) {
+      missing_anno <- setdiff(p$annotation_fields, names(db))
+      if (length(missing_anno)) {
+        for (mm in missing_anno) {
+          warnings <- c(warnings, sprintf("Requested annotation column '%s' not found; skipped.", mm))
+        }
+      }
+    }
+
     clones <- dowser::formatClones(
       db,
       text_fields = keep_text,
@@ -689,15 +728,32 @@ run_handler_impl <- function(req, res) {
         as.character(db[[p$label_field]][jj])
       )
 
-      # Relabel tree
+      # Relabel tree for Newick export (display labels)
       phy$tip.label <- disp
       trees_relabelled[[i]] <- phy
 
-      # Build lean annotations: only label + (optional) color column
-      out <- data.frame(label = disp, stringsAsFactors = FALSE)
+      # Base annotation record: display label + original sequence_id
+      out <- data.frame(
+        label        = disp,
+        sequence_id  = ifelse(is.na(jj), NA_character_, as.character(db$sequence_id[jj])),
+        stringsAsFactors = FALSE
+      )
+
+      # Add coloring column (if set)
       if (!is.null(tip_col)) {
         out[[tip_col]] <- ifelse(is.na(jj), "Germline", as.character(db[[tip_col]][jj]))
       }
+
+      # Add requested annotation fields that *exist*
+      if (length(p$annotation_fields)) {
+        present <- intersect(p$annotation_fields, names(db))
+        if (length(present)) {
+          for (fld in present) {
+            out[[fld]] <- ifelse(is.na(jj), NA_character_, as.character(db[[fld]][jj]))
+          }
+        }
+      }
+
       annos[[i]] <- out
     }
 
