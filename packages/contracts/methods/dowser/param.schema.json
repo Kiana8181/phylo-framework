@@ -1,26 +1,85 @@
 {
   "type": "object",
   "properties": {
-    "tree_model": { "type": "string", "enum": ["mp","ml","igphyml"], "default": "mp", "title": "Model" },
-    "minseq":     { "type": "integer", "default": 3, "title": "Min seq/clone" },
-    "nproc":      { "type": "integer", "default": 1, "title": "Threads" },
+    "tree_model": {
+      "type": "string",
+      "enum": ["mp", "ml", "igphyml"],
+      "default": "mp",
+      "title": "Model"
+    },
+    "minseq": { "type": "integer", "default": 3, "title": "Min seq/clone" },
+    "nproc": { "type": "integer", "default": 1, "title": "Threads" },
 
-    "label_field":   { "type": "string", "default": "", "title": "Tip label column (empty = sequence_id)" },
-    "tip_color_by":  { "type": "string", "default": "", "title": "Color tips by (column)" },
-    "unknown_value": { "type": "string", "default": "unknown", "title": "Unknown fill" },
-    "tipsize":       { "type": "number",  "default": 2, "title": "Tip size" },
+    "label_field": {
+      "type": "string",
+      "default": "",
+      "title": "Tip label column (empty = sequence_id)"
+    },
+    "tip_color_by": {
+      "type": "string",
+      "default": "",
+      "title": "Color tips by (column)"
+    },
+    "annotation_fields": {
+      "type": "array",
+      "title": "Extra annotation columns",
+      "items": { "type": "string" },
+      "default": []
+    },
+    "unknown_value": {
+      "type": "string",
+      "default": "unknown",
+      "title": "Unknown fill"
+    },
+    "tipsize": { "type": "number", "default": 2, "title": "Tip size" },
 
-    "apply_filters":   { "type": "boolean", "default": false, "title": "Apply filters" },
-    "uppercase":       { "type": "boolean", "default": false, "title": "Uppercase sequences" },
-    "len_policy":      { "type": "string", "enum": ["ignore","drop_seqs","drop_clone","error"], "default": "ignore", "title": "Unequal length policy" },
-    "gap_policy":      { "type": "string", "enum": ["keep","remove","replace_N","replace_NNN","drop_row"], "default": "keep", "title": "Gap policy" },
-    "noniupac_policy": { "type": "string", "enum": ["keep","replace_N","drop_row"], "default": "keep", "title": "Non-IUPAC policy" },
+    "apply_filters": {
+      "type": "boolean",
+      "default": false,
+      "title": "Apply filters"
+    },
+    "uppercase": {
+      "type": "boolean",
+      "default": false,
+      "title": "Uppercase sequences"
+    },
+    "len_policy": {
+      "type": "string",
+      "enum": ["ignore", "drop_seqs", "drop_clone", "error"],
+      "default": "ignore",
+      "title": "Unequal length policy"
+    },
+    "gap_policy": {
+      "type": "string",
+      "enum": ["keep", "remove", "replace_N", "replace_NNN", "drop_row"],
+      "default": "keep",
+      "title": "Gap policy"
+    },
+    "noniupac_policy": {
+      "type": "string",
+      "enum": ["keep", "replace_N", "drop_row"],
+      "default": "keep",
+      "title": "Non-IUPAC policy"
+    },
 
-    "ig_stop_policy":       { "type": "string", "enum": ["drop_seqs","fallback_ml","error"], "default": "drop_seqs", "title": "IgPhyML stop-codon policy" },
-    "exec":                 { "type": "string", "default": "", "title": "IgPhyML binary path" },
-    "igphyml_motifs_path":  { "type": "string", "default": "", "title": "IgPhyML motifs directory" },
+    "ig_stop_policy": {
+      "type": "string",
+      "enum": ["drop_seqs", "fallback_ml", "error"],
+      "default": "drop_seqs",
+      "title": "IgPhyML stop-codon policy"
+    },
+    "exec": { "type": "string", "default": "", "title": "IgPhyML binary path" },
+    "igphyml_motifs_path": {
+      "type": "string",
+      "default": "",
+      "title": "IgPhyML motifs directory"
+    },
 
-    "max_tip_categories": { "type": "integer", "default": 30, "title": "Max tip categories" }
+    "max_tip_categories": {
+      "type": "integer",
+      "default": 30,
+      "title": "Max tip categories"
+    }
   },
   "required": ["tree_model"]
 }

@@ -50,7 +50,7 @@ function colorByIndex(k: number): string {
 
 function buildColorMapDistinct(
   list: Anno[] | undefined,
-  field: string,
+  field: string | null,
   unknownValue: string
 ): Record<string, string> {
   const map: Record<string, string> = {};
@@ -82,26 +82,37 @@ function buildTipTitle(
   anno: Anno | undefined,
   colorField: string | null
 ): string {
-  const parts: string[] = [];
-  parts.push(label || "");
+  const lines: string[] = [];
 
-  if (anno && colorField) {
-    const v = String(anno[colorField] ?? "").trim();
-    if (v) parts.push(`${colorField}: ${v}`);
+  // 1) display label
+  if (label) lines.push(label);
+
+  if (!anno) return lines.join("\n");
+
+  // 2) sequence_id (if present and not duplicate of label)
+  const seqId = String(anno.sequence_id ?? "").trim();
+  if (seqId && seqId !== label) lines.push(`sequence_id: ${seqId}`);
+
+  // 3) colorBy field (if set)
+  if (colorField) {
+    const cval = String(anno[colorField] ?? "").trim();
+    if (cval) lines.push(`${colorField}: ${cval}`);
   }
 
-  if (anno) {
-    const extraKeys = Object.keys(anno).filter(
-      (k) => k !== "label" && (colorField ? k !== colorField : true)
-    );
-    if (extraKeys.length > 0) {
-      const k = extraKeys[0];
-      const vv = String(anno[k] ?? "").trim();
-      if (vv) parts.push(`${k}: ${vv}`);
-    }
+  // 4) all remaining fields (sorted), excluding label + sequence_id + colorField
+  const skip = new Set<string>(["label", "sequence_id"]);
+  if (colorField) skip.add(colorField);
+
+  const extras = Object.keys(anno)
+    .filter((k) => !skip.has(k))
+    .sort((a, b) => a.localeCompare(b, "en"));
+
+  for (const k of extras) {
+    const v = String(anno[k] ?? "").trim();
+    if (v) lines.push(`${k}: ${v}`);
   }
 
-  return parts.filter(Boolean).join("\n");
+  return lines.join("\n");
 }
 
 export default function TreeSVG({
@@ -141,7 +152,7 @@ export default function TreeSVG({
         [unknown]: "#000000",
       };
     }
-    return buildColorMapDistinct(annotations, colorField!, unknown);
+    return buildColorMapDistinct(annotations, colorField, unknown);
   }, [coloringEnabled, colorMap, annotations, colorField, unknown]);
 
   const leafCount = useMemo(() => {
@@ -362,27 +373,33 @@ export default function TreeSVG({
         {/* labels */}
         {showLabels && (
           <g fontSize={fontSize} fill="currentColor">
-            {layout.leafNodes.map((n, i) => (
-              <g key={i}>
-                <line
-                  x1={n.x!}
-                  y1={n.y!}
-                  x2={Math.round(layout.labelX) - 4}
-                  y2={n.y!}
-                  stroke="currentColor"
-                  strokeWidth={0.5}
-                  opacity={0.4}
-                  vectorEffect="non-scaling-stroke"
-                />
-                <text
-                  x={Math.round(layout.labelX)}
-                  y={n.y!}
-                  dominantBaseline="middle"
-                >
-                  {n.name ?? ""}
-                </text>
-              </g>
-            ))}
+            {layout.leafNodes.map((n, i) => {
+              const label = n.name ?? "";
+              const anno = annoByLabel[label];
+              const title = buildTipTitle(label, anno, colorField);
+              return (
+                <g key={i}>
+                  <line
+                    x1={n.x!}
+                    y1={n.y!}
+                    x2={Math.round(layout.labelX) - 4}
+                    y2={n.y!}
+                    stroke="currentColor"
+                    strokeWidth={0.5}
+                    opacity={0.4}
+                    vectorEffect="non-scaling-stroke"
+                  />
+                  <text
+                    x={Math.round(layout.labelX)}
+                    y={n.y!}
+                    dominantBaseline="middle"
+                  >
+                    {label}
+                    <title>{title}</title>
+                  </text>
+                </g>
+              );
+            })}
           </g>
         )}
       </svg>
