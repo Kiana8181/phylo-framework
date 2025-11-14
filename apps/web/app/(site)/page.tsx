@@ -91,7 +91,12 @@ export default function Home() {
       {/* Results */}
       {result && (
         <section className="space-y-6">
-          <ResultsSummary stats={result?.stats} cloneRows={cloneRows} />
+          <ResultsSummary
+            stats={result?.stats}
+            cloneRows={cloneRows}
+            artifact_zip_b64={result?.artifact_zip_b64}
+            artifact_name={result?.artifact_name || ""}
+          />
 
           {/* backend warnings */}
           {Array.isArray((result as any)?.warnings) &&
