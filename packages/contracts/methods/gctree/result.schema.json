@@ -1,46 +1,94 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GCtree result",
   "type": "object",
-  "required": ["ok", "trees", "clones", "annotations", "stats"],
   "properties": {
-    "ok": { "type": "boolean" },
-
-    "trees": { "type": "array", "items": { "type": "string" } },
-
+    "ok": {
+      "type": "boolean",
+      "description": "True if the pipeline completed successfully."
+    },
+    "trees": {
+      "type": "array",
+      "description": "List of Newick trees (usually top-ranked trees).",
+      "items": { "type": "string" }
+    },
     "figures": {
+      "description": "Rendered tree images and related figures, base64-encoded data URLs grouped by kind.",
       "type": ["object", "null"],
       "properties": {
-        "svg_text": { "type": "array", "items": { "type": "string" } },
-        "png_base64": { "type": "array", "items": { "type": "string" } }
+        "phylogeny": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "abundance_rank": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "tree_stats": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
       },
-      "additionalProperties": true
+      "additionalProperties": {
+        "type": "array",
+        "items": { "type": "string" }
+      }
     },
-
     "annotations": {
       "type": "array",
-      "items": { "type": "object", "additionalProperties": true }
+      "description": "Optional per-tip annotations (currently unused, kept for schema compatibility).",
+      "items": { "type": "object" }
     },
-
     "clones": {
       "type": "object",
-      "required": ["clone_id", "seqs"],
+      "description": "Clone-level info (dummy for now, kept for compatibility with other methods).",
       "properties": {
-        "clone_id": { "type": "array", "items": { "type": "string" } },
-        "seqs":     { "type": "array", "items": { "type": ["integer", "number"] } }
+        "clone_id": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "seqs": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
       },
-      "additionalProperties": true
+      "required": ["clone_id", "seqs"]
     },
-
     "stats": {
       "type": "object",
-      "properties": {
-        "n_unique": { "type": "integer" },
-        "n_trees":  { "type": "integer" },
-        "pipeline": { "type": "string" }
-      },
+      "description": "Small JSON summary of the run (pipeline, number of trees, notes, etc.).",
       "additionalProperties": true
     },
-
-    "render": { "type": ["string", "null"] }
-  }
+    "logs": {
+      "type": "array",
+      "description": "Per-step logs from the child processes (deduplicate, mkconfig, dnapars, gctree, ...).",
+      "items": {
+        "type": "object",
+        "properties": {
+          "step": { "type": "string" },
+          "ok": { "type": "boolean" },
+          "cmd": { "type": "string" },
+          "out": { "type": "string" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "artifact_zip_b64": {
+      "type": "string",
+      "description": "Base64-encoded ZIP of all artifacts (outfile, outtree, cfg, logs, *.p, *.nk, *.svg, etc.)."
+    },
+    "artifact_name": {
+      "type": "string",
+      "description": "Suggested filename for the artifacts ZIP."
+    },
+    "error": {
+      "type": ["string", "null"],
+      "description": "Human-readable error message if ok=false, or null otherwise."
+    },
+    "render": {
+      "type": ["string", "null"],
+      "description": "Preferred default render mode for the front-end (e.g. 'phylogeny')."
+    }
+  },
+  "required": ["ok", "trees", "figures", "annotations", "clones", "stats", "logs", "artifact_zip_b64", "artifact_name"]
 }
