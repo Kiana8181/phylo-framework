@@ -5,6 +5,7 @@ import base64
 import io
 import json
 import os
+import pickle
 import shutil
 import subprocess
 import tempfile
@@ -12,7 +13,11 @@ import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, File, Form, Request, UploadFile  # File/Form kept for legacy alias, even if unused
+from fastapi import FastAPI, File, Form, Request, UploadFile  
+
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -303,8 +308,140 @@ def early_fail(msg: str, logs: List[dict], tmp: Path) -> JSONResponse:
         "artifact_name": "gctree_run_artifacts.zip",
         "error": msg,
         "render": "phylogeny" if figures else None,
+        "tree_model": "lineage",
     }
     return JSONResponse(status_code=400, content=payload)
+
+
+def render_colored_phylogeny_from_pickle(
+    tmp: Path,
+    outbase: str,
+    color_mode: str,
+    color_feature: str,
+    color_palette: str,
+    color_scale: str,
+    logs: List[dict],
+) -> Optional[str]:
+    """
+    Use GCtree's Python API to render a colored phylogeny SVG based on a node feature.
+
+    - color_mode: "none" | "abundance" | "LBI" | "feature"
+    - color_feature: used only when color_mode == "feature"
+    - color_palette: Matplotlib colormap name, e.g. "viridis"
+    - color_scale: "linear" | "log" | "symlog"
+
+    Returns a data URL ("data:image/svg+xml;base64,...") or None on failure.
+    """
+    if not color_mode or color_mode.lower() in ("none", "off", "disabled"):
+        logs.append(
+            {
+                "step": "coloring_skip",
+                "ok": True,
+                "out": "Coloring disabled (color_mode=none).",
+            }
+        )
+        return None
+
+    try:
+        import gctree  # type: ignore  # noqa: F401
+    except Exception as e:
+        logs.append(
+            {
+                "step": "coloring_import",
+                "ok": False,
+                "out": f"Coloring disabled: could not import gctree Python API: {e}",
+            }
+        )
+        return None
+
+    p_files = sorted(tmp.glob(f"{outbase}.inference.*.p"))
+    if not p_files:
+        logs.append(
+            {
+                "step": "coloring_no_pickle",
+                "ok": False,
+                "out": f"No {outbase}.inference.*.p file found; cannot compute feature colormap.",
+            }
+        )
+        return None
+
+    p_path = p_files[0]
+    try:
+        with p_path.open("rb") as fh:
+            tree = pickle.load(fh)  # CollapsedTree
+    except Exception as e:
+        logs.append(
+            {
+                "step": "coloring_load_pickle",
+                "ok": False,
+                "out": f"Failed to load CollapsedTree pickle {p_path.name}: {e}",
+            }
+        )
+        return None
+
+    try:
+        mode = color_mode.lower()
+        feature: Optional[str] = None
+
+        if mode == "abundance":
+            feature = "abundance"
+        elif mode == "lbi":
+            # Add LBI features to nodes
+            tree.local_branching()
+            feature = "LBI"
+        elif mode == "feature":
+            feature = (color_feature or "").strip()
+        else:
+            logs.append(
+                {
+                    "step": "coloring_unknown_mode",
+                    "ok": False,
+                    "out": f"Unknown color_mode '{color_mode}', skipping coloring.",
+                }
+            )
+            return None
+
+        if not feature:
+            logs.append(
+                {
+                    "step": "coloring_no_feature",
+                    "ok": False,
+                    "out": "Coloring requested but no feature name provided.",
+                }
+            )
+            return None
+
+        cmap_name = (color_palette or "viridis").strip() or "viridis"
+        scale = (color_scale or "linear").strip() or "linear"
+
+        # feature_colormap builds node_name -> color mapping
+        colormap = tree.feature_colormap(feature, cmap=cmap_name, scale=scale)
+
+        colored_svg_path = tmp / f"{outbase}.colored.phylogeny.svg"
+        tree.render(str(colored_svg_path), colormap=colormap)
+
+        svg_bytes = colored_svg_path.read_bytes()
+        b64 = base64.b64encode(svg_bytes).decode("ascii")
+        data_url = f"data:image/svg+xml;base64,{b64}"
+
+        logs.append(
+            {
+                "step": "coloring_render",
+                "ok": True,
+                "out": f"Rendered colored phylogeny SVG using feature '{feature}', cmap='{cmap_name}', scale='{scale}'.",
+            }
+        )
+        return data_url
+
+    except Exception as e:
+        logs.append(
+            {
+                "step": "coloring_error",
+                "ok": False,
+                "out": f"Coloring failed: {e}",
+            }
+        )
+        return None
 
 
 # ---------- Handlers ----------
@@ -322,39 +459,7 @@ def spec_handler():
             PARAM_SCHEMA_PATH,
             {
                 "type": "object",
-                "properties": {
-                    "root": {
-                        "type": "string",
-                        "title": "Root ID",
-                        "default": "GL",
-                    },
-                    "frame": {
-                        "type": "string",
-                        "title": "Frame (0,1,2 => 1..3)",
-                        "enum": ["0", "1", "2"],
-                        "default": "0",
-                    },
-                    "ranking_strategy": {
-                        "type": "string",
-                        "title": "Ranking strategy (optional)",
-                        "default": "",
-                    },
-                    "top_n": {
-                        "type": "integer",
-                        "title": "How many trees to read if produced",
-                        "default": 3,
-                    },
-                    "pipeline": {
-                        "type": "string",
-                        "enum": ["phylip", "scons"],
-                        "default": "phylip",
-                    },
-                    "infer": {
-                        "type": "boolean",
-                        "title": "Run 'gctree infer' (if false, stop after forest)",
-                        "default": True,
-                    },
-                },
+                "properties": {},
                 "required": ["root"],
             },
         )
@@ -468,6 +573,12 @@ async def run_handler(request: Request):
         tree_stats = bool(p.get("tree_stats") or False)
         img_type = (p.get("img_type") or "svg").strip().lower()
         outbase = (p.get("outbase") or "gctree.out").strip() or "gctree.out"
+
+        # Coloring parameters
+        color_mode = (p.get("color_mode") or "none").lower()
+        color_feature = (p.get("color_feature") or "").strip()
+        color_palette = (p.get("color_palette") or "viridis").strip()
+        color_scale = (p.get("color_scale") or "linear").strip()
 
         # common paths
         dedup_phylip = tmp / "deduplicated.phylip"
@@ -729,16 +840,40 @@ async def run_handler(request: Request):
         if not trees and fallback_trees:
             trees = fallback_trees
 
+        # base figures from on-disk images
+        figures = collect_figures(tmp)
+
+        # optional extra colored phylogeny via gctree Python API
+        colored_data_url = None
+        if do_infer and "phylogeny" in figures or do_infer:
+            colored_data_url = render_colored_phylogeny_from_pickle(
+                tmp=tmp,
+                outbase=outbase,
+                color_mode=color_mode,
+                color_feature=color_feature,
+                color_palette=color_palette,
+                color_scale=color_scale,
+                logs=logs,
+            )
+        if colored_data_url:
+            figures.setdefault("phylogeny", [])
+            # put colored version first so UI shows it by default
+            figures["phylogeny"].insert(0, colored_data_url)
+
         stats: Dict[str, Any] = {
             "pipeline": pipeline + ("+infer" if do_infer else "+forest_only"),
             "n_trees_found": len(trees),
+            "coloring": {
+                "mode": color_mode,
+                "feature": color_feature or None,
+                "palette": color_palette or None,
+                "scale": color_scale or None,
+            },
         }
         if fallback_trees and not collect_newicks(tmp, 1):
             stats[
                 "note"
             ] = "GCtree infer failed (render/numeric). Returned DNAPARS outtree trees (unranked)."
-
-        figures = collect_figures(tmp)
 
         payload: Dict[str, Any] = {
             "ok": bool(ok_pipeline),
@@ -751,6 +886,7 @@ async def run_handler(request: Request):
             "artifact_zip_b64": base64.b64encode(artifacts_zip).decode("ascii"),
             "artifact_name": "gctree_run_artifacts.zip",
             "render": "phylogeny" if figures else None,
+            "tree_model": "lineage",
         }
 
         if not ok_pipeline:
