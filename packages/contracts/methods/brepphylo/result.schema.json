@@ -1,0 +1,65 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "BrepPhylo result schema",
+  "type": "object",
+  "properties": {
+    "method": {
+      "type": "string",
+      "description": "Method ID, e.g. 'brepphylo'."
+    },
+    "clone_ids": {
+      "type": "array",
+      "title": "Clone IDs",
+      "description": "Clone IDs in the same order as 'trees' and 'annotations'.",
+      "items": { "type": "string" }
+    },
+    "trees": {
+      "type": "array",
+      "title": "Trees (Newick)",
+      "description": "Per-clone phylogenetic trees in Newick format.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "figures": {
+      "type": "object",
+      "title": "Figures",
+      "description": "Base64-encoded tree images per clone.",
+      "properties": {
+        "phylogeny": {
+          "type": "array",
+          "description": "PNG images (data URLs) of per-clone trees.",
+          "items": { "type": "string" }
+        },
+        "phylogeny_pdf": {
+          "type": "array",
+          "description": "PDF images (base64-encoded) of per-clone trees.",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "annotations": {
+      "type": "array",
+      "title": "Per-tree annotations",
+      "description": "For each tree, an array of annotation objects (one per tip). Each object must have at least a 'label' field and optionally any metadata columns from the input (e.g. isotype).",
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "label": { "type": "string" }
+          },
+          "additionalProperties": true
+        }
+      }
+    },
+    "log": {
+      "type": "string",
+      "title": "Run log",
+      "description": "Captured console output from BrepPhylo::cloneLineage."
+    }
+  },
+  "required": ["trees"],
+  "additionalProperties": true
+}
