@@ -21,10 +21,9 @@
       "title": "Color tips by (column)"
     },
     "annotation_fields": {
-      "type": "array",
+      "type": "string",
       "title": "Extra annotation columns",
-      "items": { "type": "string" },
-      "default": []
+      "default": ""
     },
     "unknown_value": {
       "type": "string",
