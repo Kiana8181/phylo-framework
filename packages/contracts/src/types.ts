@@ -21,6 +21,13 @@ export type FigurePayload = {
   phylogeny?: string[];
 } | null;
 
+export type RunLogEntry = {
+  step?: string;
+  ok?: boolean;
+  cmd?: string;
+  out?: string;
+};
+
 export type RunResult = {
   ok: boolean;
   trees: string[];
@@ -30,6 +37,7 @@ export type RunResult = {
   figures: FigurePayload;
   warnings?: string[];
   render?: string | null;
+  logs?: RunLogEntry[];
   artifact_zip_b64?: any;
   artifact_name?: string;
 };

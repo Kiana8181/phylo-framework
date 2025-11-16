@@ -308,7 +308,7 @@ def early_fail(msg: str, logs: List[dict], tmp: Path) -> JSONResponse:
         "artifact_name": "gctree_run_artifacts.zip",
         "error": msg,
         "render": "phylogeny" if figures else None,
-        "tree_model": "lineage",
+        "tree_model": "phylogeny",
     }
     return JSONResponse(status_code=400, content=payload)
 
@@ -886,7 +886,7 @@ async def run_handler(request: Request):
             "artifact_zip_b64": base64.b64encode(artifacts_zip).decode("ascii"),
             "artifact_name": "gctree_run_artifacts.zip",
             "render": "phylogeny" if figures else None,
-            "tree_model": "lineage",
+            "tree_model": "phylogeny",
         }
 
         if not ok_pipeline:
