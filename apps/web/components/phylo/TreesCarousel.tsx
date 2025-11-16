@@ -65,12 +65,10 @@ export default function TreesCarousel({
 
   return (
     <>
-      <Card className="p-4 space-y-3">
-        <h4 className="font-medium">Images</h4>
+      {extraFigures.length !== 0 && (
+        <Card className="p-4 space-y-3">
+          <h4 className="font-medium">Images</h4>
 
-        {extraFigures.length === 0 ? (
-          <div className="text-sm text-muted-foreground">No extra figures.</div>
-        ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {extraFigures.map(([key, arr]) => {
               const raw = arr?.[0];
@@ -92,8 +90,8 @@ export default function TreesCarousel({
               );
             })}
           </div>
-        )}
-      </Card>
+        </Card>
+      )}
 
       {/* Trees Card*/}
       <Card className="p-4 space-y-3">
