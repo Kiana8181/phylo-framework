@@ -1,0 +1,33 @@
+{
+  "requiresFile": true,
+  "maxFiles": 1,
+  "fileLabel": "AIRR / rearrangement table (CSV or TSV)",
+  "order": [
+    "species",
+    "min_clone_size",
+    "sequence_column",
+    "clone_id_column",
+    "germline_id_column",
+    "label_column",
+    "class_column",
+    "class_palette",
+    "germline_colour",
+    "algorithm",
+    "plot_type",
+    "plot_format",
+    "tree_type",
+    "collapse_and_replace",
+    "igphyml_accuracy",
+    "use_temp_dir",
+    "gather_plots",
+    "make_alignment_pdf"
+  ],
+  "visibility": {
+    "collapse_and_replace": {
+      "when": { "tree_type": "dnapars" }
+    },
+    "igphyml_accuracy": {
+      "when": { "tree_type": "igphyml" }
+    }
+  }
+}

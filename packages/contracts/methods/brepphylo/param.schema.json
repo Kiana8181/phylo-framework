@@ -1,0 +1,156 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "BrepPhylo cloneLineage parameters",
+  "type": "object",
+  "properties": {
+    "species": {
+      "type": "string",
+      "title": "Species",
+      "description": "Species used to select the built-in V-germline database.",
+      "enum": [
+        "Homo_sapiens",
+        "Mus_musculus",
+        "Bos_taurus",
+        "Gallus_gallus",
+        "Oryctolagus_cuniculus",
+        "Sus_scrofa."
+      ],
+      "default": "Homo_sapiens"
+    },
+    "min_clone_size": {
+      "type": "integer",
+      "title": "Minimum clone size",
+      "description": "Minimum number of sequences in a clone to be analysed.",
+      "default": 10,
+      "minimum": 1
+    },
+    "sequence_column": {
+      "type": "string",
+      "title": "Sequence column",
+      "description": "Column containing the nucleotide sequence used by BrepPhylo (e.g. AIRR field 'sequence').",
+      "default": "sequence"
+    },
+    "clone_id_column": {
+      "type": "string",
+      "title": "Clone ID column",
+      "description": "Column that groups sequences into clones.",
+      "default": "clone_id"
+    },
+    "germline_id_column": {
+      "type": "string",
+      "title": "Germline ID column",
+      "description": "Column with V gene annotations used to select the germline (e.g. 'V.GENE.and.allele').",
+      "default": "V.GENE.and.allele"
+    },
+    "label_column": {
+      "type": ["string", "null"],
+      "title": "Tip label column",
+      "description": "Optional column used for tip labels. Must be unique within each clone.",
+      "default": null
+    },
+    "class_column": {
+      "type": "string",
+      "title": "Isotype / class column",
+      "description": "Column used for class/isotype colouring.",
+      "default": "class"
+    },
+    "class_palette": {
+      "type": "array",
+      "title": "Class colour palette",
+      "description": "Mapping from class/isotype values to hex colours.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "level": {
+            "type": "string",
+            "title": "Class value"
+          },
+          "color": {
+            "type": "string",
+            "title": "Colour",
+            "description": "Colour in #RRGGBB format.",
+            "pattern": "^#([0-9a-fA-F]{6})$"
+          }
+        },
+        "required": ["level", "color"],
+        "additionalProperties": false
+      },
+      "default": [
+        { "level": "IgM", "color": "#1b9e77" },
+        { "level": "IgD", "color": "#d95f02" },
+        { "level": "IgG", "color": "#7570b3" },
+        { "level": "IgA", "color": "#e7298a" }
+      ]
+    },
+    "germline_colour": {
+      "type": "string",
+      "title": "Germline colour",
+      "description": "Colour used for germline tip (if plotted).",
+      "default": "#808080",
+      "pattern": "^#([0-9a-fA-F]{6})$"
+    },
+    "algorithm": {
+      "type": "string",
+      "title": "Alignment algorithm",
+      "description": "Multiple sequence alignment algorithm used internally by BrepPhylo.",
+      "enum": ["ClustalOmega", "ClustalW"],
+      "default": "ClustalOmega"
+    },
+    "plot_type": {
+      "type": "string",
+      "title": "Tree layout",
+      "enum": ["phylogram", "cladogram", "fan", "radial"],
+      "default": "phylogram"
+    },
+    "plot_format": {
+      "type": "string",
+      "title": "Tree image format",
+      "enum": ["png", "pdf"],
+      "default": "png"
+    },
+    "tree_type": {
+      "type": "string",
+      "title": "Tree construction method",
+      "enum": ["dnapars", "simple", "igphyml"],
+      "default": "dnapars"
+    },
+    "collapse_and_replace": {
+      "type": "boolean",
+      "title": "Collapse duplicate sequences (dnapars only)",
+      "default": true
+    },
+    "igphyml_accuracy": {
+      "type": "string",
+      "title": "IgPhyML accuracy",
+      "description": "Only used when tree_type = 'igphyml'.",
+      "enum": ["basic", "high", "extreme"],
+      "default": "basic"
+    },
+    "use_temp_dir": {
+      "type": "boolean",
+      "title": "Use temporary directory",
+      "description": "Let BrepPhylo create its own temporary directory for intermediate files.",
+      "default": true
+    },
+    "gather_plots": {
+      "type": "boolean",
+      "title": "Gather plots into single folder",
+      "description": "If true, clone-level plots are copied into a dedicated 'plots' subdirectory.",
+      "default": true
+    },
+    "make_alignment_pdf": {
+      "type": "boolean",
+      "title": "Export alignment PDFs",
+      "description": "Generate alignment PDFs using makeAlignmentPDF.",
+      "default": false
+    }
+  },
+  "required": [
+    "species",
+    "min_clone_size",
+    "sequence_column",
+    "clone_id_column",
+    "class_column"
+  ],
+  "additionalProperties": false
+}
