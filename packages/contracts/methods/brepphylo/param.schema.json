@@ -43,10 +43,10 @@
       "default": "V.GENE.and.allele"
     },
     "label_column": {
-      "type": ["string", "null"],
+      "type": "string",
       "title": "Tip label column",
       "description": "Optional column used for tip labels. Must be unique within each clone.",
-      "default": null
+      "default": ""
     },
     "class_column": {
       "type": "string",
