@@ -3,63 +3,167 @@
   "title": "BrepPhylo result schema",
   "type": "object",
   "properties": {
-    "method": {
-      "type": "string",
-      "description": "Method ID, e.g. 'brepphylo'."
-    },
-    "clone_ids": {
-      "type": "array",
-      "title": "Clone IDs",
-      "description": "Clone IDs in the same order as 'trees' and 'annotations'.",
-      "items": { "type": "string" }
+    "ok": {
+      "type": "boolean",
+      "description": "True if the BrepPhylo run finished successfully."
     },
     "trees": {
       "type": "array",
-      "title": "Trees (Newick)",
-      "description": "Per-clone phylogenetic trees in Newick format.",
+      "description": "One Newick tree per clone, aligned with annotations and clones.clone_id.",
       "items": {
         "type": "string"
       }
     },
     "figures": {
       "type": "object",
-      "title": "Figures",
-      "description": "Base64-encoded tree images per clone.",
+      "description": "Rendered tree plots per clone.",
       "properties": {
         "phylogeny": {
           "type": "array",
-          "description": "PNG images (data URLs) of per-clone trees.",
-          "items": { "type": "string" }
+          "description": "Per-clone PNG data URLs (may contain null for clones without a figure).",
+          "items": {
+            "type": ["string", "null"]
+          }
         },
         "phylogeny_pdf": {
           "type": "array",
-          "description": "PDF images (base64-encoded) of per-clone trees.",
-          "items": { "type": "string" }
+          "description": "Per-clone PDF plots as base64 blobs (may contain null).",
+          "items": {
+            "type": ["string", "null"]
+          }
         }
       },
-      "additionalProperties": true
+      "additionalProperties": false
     },
     "annotations": {
       "type": "array",
-      "title": "Per-tree annotations",
-      "description": "For each tree, an array of annotation objects (one per tip). Each object must have at least a 'label' field and optionally any metadata columns from the input (e.g. isotype).",
+      "description": "Per-clone list of per-sequence annotation objects.",
       "items": {
         "type": "array",
         "items": {
           "type": "object",
-          "properties": {
-            "label": { "type": "string" }
-          },
+          "description": "Original input row plus a 'label' field.",
           "additionalProperties": true
         }
       }
     },
-    "log": {
-      "type": "string",
-      "title": "Run log",
-      "description": "Captured console output from BrepPhylo::cloneLineage."
+    "clones": {
+      "type": "object",
+      "description": "Lightweight per-clone summary aligned with trees and annotations.",
+      "properties": {
+        "clone_id": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "seqs": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "stats": {
+      "type": "object",
+      "description": "Run-level metadata and summary statistics.",
+      "properties": {
+        "method": {
+          "type": "string"
+        },
+        "tree_type": {
+          "type": "string"
+        },
+        "species": {
+          "type": "string"
+        },
+        "algorithm": {
+          "type": "string"
+        },
+        "plot_type": {
+          "type": "string"
+        },
+        "plot_format": {
+          "type": "string"
+        },
+        "min_clone_size": {
+          "type": "integer"
+        },
+        "gather_plots": {
+          "type": "boolean"
+        },
+        "use_temp_dir": {
+          "type": "boolean"
+        },
+        "sequence_column": {
+          "type": "string"
+        },
+        "clone_id_column": {
+          "type": "string"
+        },
+        "germline_id_column": {
+          "type": "string"
+        },
+        "class_column": {
+          "type": ["string", "null"]
+        },
+        "label_column": {
+          "type": ["string", "null"]
+        },
+        "n_clones": {
+          "type": "integer"
+        },
+        "n_trees": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": true
+    },
+    "warnings": {
+      "type": "array",
+      "description": "Human-readable warning messages (e.g. dropped rows, missing columns).",
+      "items": {
+        "type": "string"
+      }
+    },
+    "logs": {
+      "description": "Pipeline step logs, similar to Dowser/GCtree.",
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "step": {
+                "type": "string"
+              },
+              "ok": {
+                "type": "boolean"
+              },
+              "out": {
+                "type": "string"
+              }
+            },
+            "required": ["step", "ok", "out"],
+            "additionalProperties": true
+          }
+        }
+      ]
+    },
+    "render": {
+      "type": ["string", "null"],
+      "description": "Hint for the frontend renderer; for BrepPhylo this is 'phylogeny'."
+    },
+    "error": {
+      "type": ["string", "null"],
+      "description": "Error message when ok = false; null on success."
     }
   },
-  "required": ["trees"],
-  "additionalProperties": true
+  "required": ["ok"],
+  "additionalProperties": false
 }

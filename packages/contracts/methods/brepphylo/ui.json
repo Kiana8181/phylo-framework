@@ -1,10 +1,8 @@
 {
-  "requiresFile": true,
+    "requiresFile": true,
   "maxFiles": 1,
   "fileLabel": "AIRR / rearrangement table (CSV or TSV)",
   "order": [
-    "species",
-    "min_clone_size",
     "sequence_column",
     "clone_id_column",
     "germline_id_column",
@@ -12,16 +10,21 @@
     "class_column",
     "class_palette",
     "germline_colour",
-    "algorithm",
-    "plot_type",
-    "plot_format",
+
     "tree_type",
     "collapse_and_replace",
     "igphyml_accuracy",
-    "use_temp_dir",
+    "make_alignment_pdf",
+
+    "min_clone_size",
+    "species",
+    "algorithm",
+    "plot_type",
+    "plot_format",
     "gather_plots",
-    "make_alignment_pdf"
+    "use_temp_dir"
   ],
+
   "visibility": {
     "collapse_and_replace": {
       "when": { "tree_type": "dnapars" }
@@ -29,5 +32,14 @@
     "igphyml_accuracy": {
       "when": { "tree_type": "igphyml" }
     }
+  },
+
+  "placeholders": {
+    "sequence_column":    "sequence",
+    "clone_id_column":    "clone_id",
+    "germline_id_column": "V.GENE.and.allele",
+    "label_column":       "optional; Seq_ID / sequence_id",
+    "class_column":       "optional; e.g. isotype",
+    "algorithm":          "Default (model): ClustalOmega"
   }
-}
+}  

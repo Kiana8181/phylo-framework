@@ -4,7 +4,7 @@
   "accepts": [
     "text/csv",
     "text/tab-separated-values",
-    "application/x-rds",
-    "application/x-rda"
+    "text/plain",
+    "application/octet-stream"
   ]
 }
