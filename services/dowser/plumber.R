@@ -25,8 +25,8 @@ Sys.setenv(PCRE2_MATCH_LIMIT_RECURSION="2000000")
 # ---------------------------
 # Config & Contracts loading
 # ---------------------------
-IG_EXEC_DEFAULT   <- Sys.getenv("IGPHYML_BIN", "igphyml")  # binary path
-IG_MOTIFS_DEFAULT <- Sys.getenv("IGPHYML_MOTIFS", "/usr/local/share/igphyml/src/motifs")
+IG_EXEC_DEFAULT   <- Sys.getenv("IGPHYML_BIN", "igphyml") 
+IG_MOTIFS_DEFAULT <- Sys.getenv("IGPHYML_MOTIFS", "") 
 CONTRACTS_DIR <- Sys.getenv("CONTRACTS_DIR", "packages/contracts")
 METHOD_DIR    <- file.path(CONTRACTS_DIR, "methods", "dowser")
 
