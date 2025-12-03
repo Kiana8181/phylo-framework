@@ -1,6 +1,7 @@
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+HOST_RUNTIME_DIR="$(realpath "$ROOT/runtime")"
 
 RED=$'\033[31m'; GRN=$'\033[32m'; YLW=$'\033[33m'; BLU=$'\033[34m'; CLR=$'\033[0m'
 die(){ echo "${RED}ERROR:${CLR} $*" >&2; exit 1; }
@@ -52,6 +53,8 @@ require_envs(){
   [[ -n "${CONTRACTS_DIR:-}" ]] || die "CONTRACTS_DIR is not set in ${API_ENV}"
   [[ -d "${CONTRACTS_DIR}" ]] || die "CONTRACTS_DIR path does not exist: ${CONTRACTS_DIR}"
   [[ -n "${METHOD_DOWSER_URL:-}" ]] || die "METHOD_DOWSER_URL is not set in ${API_ENV}"
+  [[ -n "${METHOD_GCTREE_URL:-}" ]] || die "METHOD_GCTREE_URL is not set in ${API_ENV}"
+  [[ -n "${METHOD_BREPPHYLO_URL:-}" ]] || die "METHOD_BREPPHYLO_URL is not set in ${API_ENV}"
 
   if ! grep -qE '^NEXT_PUBLIC_API_BASE_URL=' "$WEB_ENV"; then
     die "NEXT_PUBLIC_API_BASE_URL is missing in ${WEB_ENV}"
@@ -82,7 +85,7 @@ Either upgrade npm (npm i -g npm@latest) or set:
 echo "${BLU}==> Checking prerequisites${CLR}"
 need_cmd docker; need_cmd node; need_cmd npm; need_cmd python3; need_cmd curl
 
-for p in 3000 8000 8001 8002; do   
+for p in 3000 8000 8001 8002 8003; do   
   port_busy "$p" && die "Port $p is not free."
 done
 
@@ -94,6 +97,7 @@ docker build -t phylo-dowser:dev "$ROOT/services/dowser"
 docker run -d --name phylo-dowser-dev -p 8001:8001 \
   -e CONTRACTS_DIR=/contracts -e STRICT_CONTRACT_ROUTES=true \
   -v "$ROOT/packages/contracts:/contracts:ro" \
+  -v "$HOST_RUNTIME_DIR:$HOST_RUNTIME_DIR:ro" \
   phylo-dowser:dev >/dev/null
 
 echo "${BLU}==> Waiting for Dowser HTTP on :8001${CLR}"
@@ -116,11 +120,28 @@ docker run -d --name phylo-gctree-dev \
 # make sure METHOD_GCTREE_URL exists in API env (optional but helpful):
 [[ -n "${METHOD_GCTREE_URL:-}" ]] || die "METHOD_GCTREE_URL is not set in ${API_ENV}"    # [gctree]
 
+echo "${BLU}==> Building and starting BrepPhylo container${CLR}"
+docker rm -f phylo-brepphylo-dev >/dev/null 2>&1 || true
+docker build -t phylo-brepphylo:dev "$ROOT/services/brepphylo"
+docker run -d --name phylo-brepphylo-dev -p 8003:8003 \
+  -e CONTRACTS_DIR=/contracts -e STRICT_CONTRACT_ROUTES=true \
+  -e RUNS_DIR="$HOST_RUNTIME_DIR" \
+  -e DNAPARS_PATH=/usr/local/bin/dnapars \
+  -e IGPHYML_BIN=igphyml \
+  -v "$ROOT/packages/contracts:/contracts:ro" \
+  -v "$HOST_RUNTIME_DIR:$HOST_RUNTIME_DIR:ro" \
+  phylo-brepphylo:dev >/dev/null
+
+echo "${BLU}==> Waiting for BrepPhylo HTTP on :8003${CLR}"
+wait_http 8003 || { docker logs --tail=200 phylo-brepphylo-dev || true; die "BrepPhylo failed readiness check"; }
+echo "${GRN}BrepPhylo is up on http://localhost:8003${CLR}"
+
 # in the trap line, add the container:
 trap 'echo; echo "${YLW}Shutting down...${CLR}"; \
-      kill $API_PID 2>/dev/null || true; \
+      if [[ -n "${API_PID:-}" ]]; then kill "$API_PID" 2>/dev/null || true; fi; \
       docker rm -f phylo-dowser-dev >/dev/null 2>&1 || true; \
-      docker rm -f phylo-gctree-dev >/dev/null 2>&1 || true' EXIT
+      docker rm -f phylo-gctree-dev >/dev/null 2>&1 || true; \
+      docker rm -f phylo-brepphylo-dev >/dev/null 2>&1 || true' EXIT
 
 echo "${BLU}==> Setting up Python venv for API${CLR}"
 [[ -d "$ROOT/.venv" ]] || python3 -m venv "$ROOT/.venv" || die "Failed to create venv"
@@ -134,8 +155,6 @@ ensure_node_deps_and_build_contracts
 echo "${BLU}==> Starting API on :8000${CLR}"
 uvicorn apps.api.main:app --host 0.0.0.0 --port 8000 &
 API_PID=$!
-
-trap 'echo; echo "${YLW}Shutting down...${CLR}"; kill $API_PID 2>/dev/null || true; docker rm -f phylo-dowser-dev >/dev/null 2>&1 || true' EXIT
 
 for i in {1..60}; do
   curl -fsS "http://127.0.0.1:8000/docs" >/dev/null && break || true
