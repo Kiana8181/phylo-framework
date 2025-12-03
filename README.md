@@ -4,7 +4,7 @@ A one-page UI to run phylogeny/lineage tree methods behind a simple orchestrator
 
 - **Web**: Next.js (apps/web)
 - **API**: FastAPI (apps/api)
-- **Methods**: pluggable microservices (R/plumber for **Dowser** provided)
+- **Methods**: pluggable microservices (Dowser, GCtree, BrepPhylo included)
 - **Contracts**: JSON schemas (packages/contracts) used by both UI & API to drive parameters, validation, and results
 
 > **Heads-up**: Running with Docker for the first time is **time-consuming** because large R images and packages need to be downloaded and built.
@@ -99,6 +99,8 @@ Pick:
 |     Web | http://localhost:3000 | 3000 |
 |     API | http://localhost:8000 | 8000 |
 |  Dowser | http://localhost:8001 | 8001 |
+| GCtree  | http://localhost:8002 | 8002 |
+|BrepPhylo| http://localhost:8003 | 8003 |
 
 > Ensure these ports are **free** before running. The helper scripts will check and exit with a clear error if not.
 
@@ -196,6 +198,8 @@ Create and fill these files (adjust ports/paths if you changed them).
 ```env
 CONTRACTS_DIR=packages/contracts
 METHOD_DOWSER_URL=http://localhost:8001
+METHOD_GCTREE_URL=http://localhost:8002
+METHOD_BREPPHYLO_URL=http://localhost:8003
 CORS_ORIGINS=http://localhost:3000
 ```
 
