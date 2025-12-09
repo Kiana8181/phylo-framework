@@ -31,33 +31,15 @@
       "description": "Optional column used by BrepPhylo for per-class colouring and palette generation.",
       "default": ""
     },
-    "class_palette": {
-      "type": "array",
-      "title": "Class palette",
-      "description": "Optional explicit palette when class_column is set. Each entry defines a level and colour.",
-      "items": {
-        "type": "object",
-        "properties": {
-          "level": { "type": "string", "title": "Class value" },
-          "color": { "type": "string", "title": "Colour (hex or named)" }
-        },
-        "required": ["level", "color"],
-        "additionalProperties": false
-      },
-      "default": []
-    },
-    "germline_colour": {
-      "type": "string",
-      "title": "Germline colour",
-      "description": "Colour used by BrepPhylo to render germline nodes.",
-      "default": "#808080"
-    },
-
-        "tree_type": {
+    "tree_type": {
       "type": "string",
       "title": "Tree builder",
       "description": "Algorithm passed to treeConstruction$type (simple, dnapars, or igphyml).",
-      "enum": ["simple", "dnapars", "igphyml"],
+      "enum": [
+        "simple",
+        "dnapars",
+        "igphyml"
+      ],
       "default": "dnapars"
     },
     "collapse_and_replace": {
@@ -70,7 +52,11 @@
       "type": "string",
       "title": "IgPhyML accuracy preset",
       "description": "Accuracy preset passed to IgPhyML (e.g. 'basic', 'high', 'extreme'); leave blank for the BrepPhylo default.",
-      "enum": ["basic", "high", "extreme"],
+      "enum": [
+        "basic",
+        "high",
+        "extreme"
+      ],
       "default": "basic"
     },
     "make_alignment_pdf": {
@@ -79,7 +65,6 @@
       "description": "Generate alignment PDF per clone (makeAlignmentPDFConstruction).",
       "default": false
     },
-
     "min_clone_size": {
       "type": "integer",
       "title": "Minimum clone size",
@@ -97,7 +82,10 @@
       "type": "string",
       "title": "Alignment algorithm",
       "description": "Multiple sequence aligner; default (model) is ClustalOmega.",
-      "enum": ["ClustalOmega", "ClustalW"],
+      "enum": [
+        "ClustalOmega",
+        "ClustalW"
+      ],
       "default": "ClustalOmega"
     },
     "plot_type": {
@@ -110,7 +98,10 @@
       "type": "string",
       "title": "Plot format",
       "description": "Output format for phylogeny plots.",
-      "enum": ["png", "pdf"],
+      "enum": [
+        "png",
+        "pdf"
+      ],
       "default": "png"
     },
     "gather_plots": {

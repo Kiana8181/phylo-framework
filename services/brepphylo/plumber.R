@@ -19,8 +19,13 @@ library(igraph)
 # ---------------------------
 # Helpers
 # ---------------------------
-`%||%` <- function(x, y) if (!is.null(x) && !(is.character(x) && length(x) == 1 && is.na(x))) x else y
-logf <- function(...) cat(sprintf(...), "\n", file = stderr())
+`%||%` <- function(x, y) {
+  if (!is.null(x) && !(is.character(x) && length(x) == 1 && is.na(x))) x else y
+}
+
+logf <- function(...) {
+  cat(sprintf(...), "\n", file = stderr())
+}
 
 as_bool <- function(x, default = FALSE) {
   if (is.null(x)) return(default)
@@ -48,24 +53,11 @@ read_input_table <- function(path) {
   }
 }
 
-build_class_palette <- function(df, class_col, class_palette_param) {
-  if (is.null(class_col) || length(class_col) == 0 || !nzchar(class_col)) return(list())
-
-  if (!is.null(class_palette_param) && length(class_palette_param) > 0) {
-    if (is.data.frame(class_palette_param)) {
-      cols <- as.list(class_palette_param$color)
-      names(cols) <- as.character(class_palette_param$level)
-      return(cols)
-    }
-    if (is.list(class_palette_param)) {
-      cols <- lapply(class_palette_param, function(x) x$color)
-      names(cols) <- vapply(class_palette_param, function(x) x$level, character(1))
-      return(cols)
-    }
-  }
-
-  # Auto palette from data if column exists
+# build a palette from a class column only (no user-supplied palette)
+build_class_palette <- function(df, class_col) {
+  if (is.null(class_col) || !nzchar(class_col)) return(list())
   if (!class_col %in% names(df)) return(list())
+
   classes <- sort(unique(as.character(df[[class_col]])))
   classes <- classes[!is.na(classes) & nzchar(classes)]
   if (!length(classes)) return(list())
@@ -98,15 +90,6 @@ make_annotations_per_clone <- function(df, clone_id, clone_col, label_col, class
 
 clone_seq_counts <- function(df, clone_col, clone_ids) {
   vapply(clone_ids, function(cid) sum(df[[clone_col]] == cid, na.rm = TRUE), integer(1))
-}
-
-resolve_executable <- function(candidates) {
-  for (c in candidates) {
-    if (is.null(c) || !nzchar(c)) next
-    p <- normalizePath(c, mustWork = FALSE)
-    if (file.exists(p) && file.access(p, 1) == 0) return(p)
-  }
-  NULL
 }
 
 clean_input_df <- function(df, seq_col, clone_col, germ_col) {
@@ -142,52 +125,58 @@ METHOD_ID <- "brepphylo"
 CONTRACTS_DIR <- Sys.getenv("CONTRACTS_DIR", "packages/contracts")
 METHOD_DIR <- file.path(CONTRACTS_DIR, "methods", METHOD_ID)
 
-PARAM_SCHEMA_PATH <- file.path(METHOD_DIR, "param.schema.json")
+PARAM_SCHEMA_PATH  <- file.path(METHOD_DIR, "param.schema.json")
 RESULT_SCHEMA_PATH <- file.path(METHOD_DIR, "result.schema.json")
-SPEC_JSON_PATH <- file.path(METHOD_DIR, "spec.json")
-UI_JSON_PATH <- file.path(METHOD_DIR, "ui.json")
-ROUTES_JSON_PATH <- file.path(METHOD_DIR, "service.routes.json")
+SPEC_JSON_PATH     <- file.path(METHOD_DIR, "spec.json")
+UI_JSON_PATH       <- file.path(METHOD_DIR, "ui.json")
+ROUTES_JSON_PATH   <- file.path(METHOD_DIR, "service.routes.json")
 
 read_json_or <- function(path, default = list()) {
   if (!file.exists(path)) return(default)
   tryCatch(jsonlite::fromJSON(path, simplifyVector = FALSE), error = function(e) default)
 }
 
-PARAM_SCHEMA_JSON <- read_json_or(PARAM_SCHEMA_PATH, list())
+PARAM_SCHEMA_JSON  <- read_json_or(PARAM_SCHEMA_PATH, list())
 RESULT_SCHEMA_JSON <- read_json_or(RESULT_SCHEMA_PATH, list())
-SPEC_JSON <- read_json_or(SPEC_JSON_PATH, list())
-UI_JSON <- read_json_or(UI_JSON_PATH, list())
-ROUTES_JSON <- read_json_or(ROUTES_JSON_PATH, list(spec = "/spec", run = "/run"))
+SPEC_JSON          <- read_json_or(SPEC_JSON_PATH, list())
+UI_JSON            <- read_json_or(UI_JSON_PATH, list())
+ROUTES_JSON        <- read_json_or(ROUTES_JSON_PATH, list(spec = "/spec", run = "/run"))
 
-DEFAULT_ACCEPTS <- c("text/csv", "text/tab-separated-values", "text/plain", "application/octet-stream")
+DEFAULT_ACCEPTS <- c(
+  "text/csv",
+  "text/tab-separated-values",
+  "text/plain",
+  "application/octet-stream"
+)
 DEFAULT_UI <- list(requiresFile = TRUE, maxFiles = 1)
 
 spec_handler_impl <- function() {
-  name <- SPEC_JSON$name %||% "BrepPhylo"
+  name    <- SPEC_JSON$name    %||% "BrepPhylo"
   version <- SPEC_JSON$version %||% as.character(utils::packageVersion("BrepPhylo"))
-  accepts <- SPEC_JSON$accepts; if (is.null(accepts) || !length(accepts)) accepts <- DEFAULT_ACCEPTS
+  accepts <- SPEC_JSON$accepts
+  if (is.null(accepts) || !length(accepts)) accepts <- DEFAULT_ACCEPTS
   ui_hints <- modifyList(DEFAULT_UI, UI_JSON)
 
   list(
-    id = METHOD_ID,
-    name = name,
-    version = version,
-    accepts = accepts,
+    id          = METHOD_ID,
+    name        = name,
+    version     = version,
+    accepts     = accepts,
     paramSchema = PARAM_SCHEMA_JSON,
-    uiHints = ui_hints
+    uiHints     = ui_hints
   )
 }
 
-ui_handler_impl <- function() UI_JSON
+ui_handler_impl    <- function() UI_JSON
 routes_handler_impl <- function() ROUTES_JSON
 schema_handler_impl <- function() list(params = PARAM_SCHEMA_JSON, result = RESULT_SCHEMA_JSON)
 
 fail <- function(msg, res, status = 400, logs = NULL, warnings = NULL) {
   if (is.null(res$status) || res$status == 200) res$status <- status
   list(
-    ok = FALSE,
-    error = msg,
-    logs = logs,
+    ok       = FALSE,
+    error    = msg,
+    logs     = logs %||% list(),
     warnings = warnings %||% list()
   )
 }
@@ -197,79 +186,149 @@ fail <- function(msg, res, status = 400, logs = NULL, warnings = NULL) {
 # ---------------------------
 run_handler_impl <- function(req, res) {
   tryCatch({
+    # ---- accumulators for pipeline diagnostics ----
+    warnings <- character(0)
+    logs <- list()
+    add_log <- function(step, ok, out) {
+      logs[[length(logs) + 1]] <<- list(step = step, ok = ok, out = out)
+    }
+    fail_local <- function(msg, status = 400) {
+      fail(msg, res, status = status, logs = logs, warnings = as.list(warnings))
+    }
+
+    # ---- parse and validate JSON body ----
     body_raw <- req$postBody
     if (is.raw(body_raw)) body_raw <- rawToChar(body_raw)
-    if (is.null(body_raw) || !nzchar(body_raw)) return(fail("Empty JSON body. Expected {\"file_path\": \"...\", \"params\": {...}}.", res))
+    if (is.null(body_raw) || !nzchar(body_raw)) {
+      return(fail_local('Empty JSON body. Expected {"file_path": "...", "params": {...}}.'))
+    }
 
     body <- tryCatch(jsonlite::fromJSON(body_raw, simplifyVector = FALSE), error = function(e) e)
-    if (inherits(body, "error")) return(fail(paste0("Invalid JSON body: ", body$message), res))
+    if (inherits(body, "error")) {
+      return(fail_local(paste0("Invalid JSON body: ", body$message)))
+    }
 
     file_path <- body$file_path %||% NULL
-    params <- body$params %||% list()
+    params    <- body$params    %||% list()
 
-    if (is.null(file_path) || !nzchar(file_path)) return(fail("file_path is required.", res))
+    if (is.null(file_path) || !nzchar(file_path)) {
+      return(fail_local("file_path is required."))
+    }
     if (!file.exists(file_path) || isTRUE(file.info(file_path)$isdir)) {
-      return(fail(sprintf("file_path does not exist or is not a file: %s", file_path), res))
+      return(fail_local(sprintf("file_path does not exist or is not a file: %s", file_path)))
     }
     if (file.access(file_path, 4) != 0) {
-      return(fail(sprintf("file_path is not readable: %s", file_path), res))
+      return(fail_local(sprintf("file_path is not readable: %s", file_path)))
     }
 
     ext <- tolower(tools::file_ext(file_path))
     if (!ext %in% c("csv", "tsv", "txt")) {
-      return(fail(sprintf("Unsupported file extension '%s'. Provide CSV/TSV.", ext), res))
+      return(fail_local(sprintf("Unsupported file extension '%s'. Provide CSV/TSV.", ext)))
     }
 
+    add_log(
+      "brepphylo.request",
+      TRUE,
+      sprintf("Validated request; file_path=%s, ext=%s.", file_path, ext)
+    )
+
+    # ---- read input table ----
     df <- tryCatch(read_input_table(file_path), error = function(e) e)
-    if (inherits(df, "error")) return(fail(paste("Failed to read input table:", df$message), res))
-    if (!is.data.frame(df) || !nrow(df)) return(fail("Input table is empty.", res))
+    if (inherits(df, "error")) {
+      return(fail_local(paste("Failed to read input table:", df$message)))
+    }
+    if (!is.data.frame(df) || !nrow(df)) {
+      return(fail_local("Input table is empty."))
+    }
 
-    warnings <- character(0)
+    add_log(
+      "brepphylo.readInput",
+      TRUE,
+      sprintf("Read input table with %d rows and %d columns.", nrow(df), ncol(df))
+    )
 
-    seq_col <- normalize_col(params$sequence_column, "sequence")
-    clone_col <- normalize_col(params$clone_id_column, "clone_id")
-    germ_col <- normalize_col(params$germline_id_column, "V.GENE.and.allele")
-    class_col <- normalize_col(params$class_column, NULL)
-    label_col <- normalize_col(params$label_column, NULL)
+    # ---- resolve columns ----
+    seq_col   <- normalize_col(params$sequence_column,   "sequence")
+    clone_col <- normalize_col(params$clone_id_column,   "clone_id")
+    germ_col  <- normalize_col(params$germline_id_column,"V.GENE.and.allele")
+    class_col <- normalize_col(params$class_column,      NULL)
+    label_col <- normalize_col(params$label_column,      NULL)
 
     required_cols <- c(seq_col, clone_col, germ_col)
     missing <- required_cols[!required_cols %in% names(df)]
     if (length(missing)) {
-      return(fail(sprintf("Missing required column(s): %s", paste(missing, collapse = ", ")), res))
+      return(fail_local(sprintf("Missing required column(s): %s", paste(missing, collapse = ", "))))
     }
 
+    # ---- clean / filter DF ----
     cleaned <- clean_input_df(df, seq_col, clone_col, germ_col)
     df <- cleaned$df
     warnings <- c(warnings, cleaned$warnings)
     if (!nrow(df)) {
-      return(fail("All rows were dropped during preprocessing (empty sequence/clone/germline).", res))
+      add_log("brepphylo.preprocess", FALSE, "All rows were dropped during preprocessing.")
+      return(fail_local("All rows were dropped during preprocessing (empty sequence/clone/germline)."))
     }
 
+    add_log(
+      "brepphylo.preprocess",
+      TRUE,
+      paste(
+        c(
+          sprintf("Preprocessed input table; remaining rows=%d.", nrow(df)),
+          cleaned$warnings
+        ),
+        collapse = "\n"
+      )
+    )
+
     if (!is.null(class_col) && !class_col %in% names(df)) {
-      warnings <- c(warnings, sprintf("Class column '%s' not found; colouring disabled.", class_col))
+      warnings <- c(
+        warnings,
+        sprintf("Class column '%s' not found; colouring disabled.", class_col)
+      )
       class_col <- NULL
     }
     if (!is.null(label_col) && !label_col %in% names(df)) {
-      warnings <- c(warnings, sprintf("Label column '%s' not found; falling back to sequence order.", label_col))
+      warnings <- c(
+        warnings,
+        sprintf("Label column '%s' not found; falling back to sequence order.", label_col)
+      )
       label_col <- NULL
     }
 
-    # ----- Colour specification -----
-    pal <- build_class_palette(df, class_col, params$class_palette)
+    # ---- colour specification with safe defaults (no class_palette param) ----
+    # Try to build palette from class_col
+    pal <- build_class_palette(df, class_col)
+    colour_col <- class_col
+
+    if (length(pal) == 0L || is.null(colour_col) || !nzchar(colour_col)) {
+      # fall back to a dummy column + single colour so cloneLineage never sees
+      # an empty 'colourSpecification$colours'
+      dummy_col <- ".brepphylo_class"
+      df[[dummy_col]] <- "UNK"
+      colour_col <- dummy_col
+      pal <- list(UNK = "#000000")
+
+      warnings <- c(
+        warnings,
+        "No valid class column or class levels found; using a single default colour for all sequences."
+      )
+    }
+
     colourSpecification <- list(
-      colours = pal,
-      coloursColumn = class_col,
+      colours        = pal,
+      coloursColumn  = colour_col,
       germlineColour = params$germline_colour %||% "#808080"
     )
 
-    # ----- Tree construction -----
+    # ---- tree construction config (env-based executables, no params) ----
     tree_type <- params$tree_type %||% "dnapars"
     tc_params <- list()
 
     if (identical(tree_type, "dnapars")) {
       tc_params$collapseAndReplace <- as_bool(params$collapse_and_replace, TRUE)
 
-      # Prefer explicit DNAPARS_PATH, otherwise fall back to PATH.
+      # prefer DNAPARS_PATH; fallback to PATH; let cloneLineage validate
       dnapars_exec <- Sys.getenv("DNAPARS_PATH", "")
       if (!nzchar(dnapars_exec)) {
         dnapars_exec <- Sys.which("dnapars")
@@ -279,17 +338,16 @@ run_handler_impl <- function(req, res) {
       } else {
         warnings <- c(
           warnings,
-          "DNAPARS executable not found in DNAPARS_PATH or PATH; BrepPhylo/treeConstruction will rely on its own defaults and may fail at runtime."
+          "DNAPARS executable not found in DNAPARS_PATH or PATH; BrepPhylo will try its own lookup and may fail."
         )
       }
     } else if (identical(tree_type, "igphyml")) {
-      # Accuracy preset for IgPhyML.
       acc <- params$igphyml_accuracy %||% "basic"
       if (nzchar(acc)) {
         tc_params$accuracy <- acc
       }
 
-      # Get IgPhyML executable from env or fall back to 'igphyml' (like Dowser).
+      # Like Dowser: use IGPHYML_BIN if set, otherwise "igphyml"
       igphyml_exec <- Sys.getenv("IGPHYML_BIN", "igphyml")
       if (!nzchar(igphyml_exec)) {
         igphyml_exec <- "igphyml"
@@ -298,7 +356,7 @@ run_handler_impl <- function(req, res) {
     }
 
     treeConstruction <- list(
-      type = tree_type,
+      type       = tree_type,
       parameters = tc_params
     )
 
@@ -306,46 +364,52 @@ run_handler_impl <- function(req, res) {
       makeAlignmentPDF = as_bool(params$make_alignment_pdf, FALSE)
     )
 
+    # ---- other params ----
     out_dir <- tempfile("brepphylo_", tmpdir = tempdir())
     dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
-    log_vec <- character(0)
     min_clone_size <- as.integer(params$min_clone_size %||% 10L)
-    species <- params$species %||% "Homo_sapiens"
-    algorithm <- params$algorithm %||% "ClustalOmega"
-    plot_type <- params$plot_type %||% "phylogram"
-    plot_format <- params$plot_format %||% "png"
-    if (!nzchar(species)) return(fail("species is required.", res))
-    if (!nzchar(algorithm)) return(fail("algorithm is required.", res))
-    if (!nzchar(plot_type)) return(fail("plot_type is required.", res))
-    if (!nzchar(plot_format)) return(fail("plot_format is required.", res))
+    species        <- params$species   %||% "Homo_sapiens"
+    algorithm      <- params$algorithm %||% "ClustalOmega"
+    plot_type      <- params$plot_type %||% "phylogram"
+    plot_format    <- params$plot_format %||% "png"
+
+    if (!nzchar(species))      return(fail_local("species is required."))
+    if (!nzchar(algorithm))    return(fail_local("algorithm is required."))
+    if (!nzchar(plot_type))    return(fail_local("plot_type is required."))
+    if (!nzchar(plot_format))  return(fail_local("plot_format is required."))
+
     allowed_alg <- c("ClustalOmega", "ClustalW")
     if (!algorithm %in% allowed_alg) {
-      return(fail(sprintf("algorithm must be one of: %s", paste(allowed_alg, collapse = ", ")), res))
+      return(fail_local(sprintf("algorithm must be one of: %s",
+                                paste(allowed_alg, collapse = ", "))))
     }
+
     gather_plots <- as_bool(params$gather_plots, TRUE)
     use_temp_dir <- as_bool(params$use_temp_dir, TRUE)
 
+    # ---- run BrepPhylo::cloneLineage with captured output ----
+    log_vec <- character(0)
     err <- tryCatch({
       log_vec <- capture.output({
         BrepPhylo::cloneLineage(
-          input = df,
+          input        = df,
           outputFolder = out_dir,
-          species = species,
+          species      = species,
           minCloneSize = min_clone_size,
-          sequenceColumn = seq_col,
-          cloneIdColumn = clone_col,
+          sequenceColumn   = seq_col,
+          cloneIdColumn    = clone_col,
           germlineIdColumn = germ_col,
-          labelColumn = if (!is.null(label_col) && nzchar(label_col)) label_col else NULL,
-          algorithm = algorithm,
-          whichClones = NULL,
-          ignoreClones = NULL,
+          labelColumn      = if (!is.null(label_col) && nzchar(label_col)) label_col else NULL,
+          algorithm        = algorithm,
+          whichClones      = NULL,
+          ignoreClones     = NULL,
           colourSpecification = colourSpecification,
-          plotType = plot_type,
-          plotFormat = plot_format,
-          gatherPlots = gather_plots,
-          useTempDir = use_temp_dir,
-          germlineSet = NULL,
+          plotType         = plot_type,
+          plotFormat       = plot_format,
+          gatherPlots      = gather_plots,
+          useTempDir       = use_temp_dir,
+          germlineSet      = NULL,
           treeConstruction = treeConstruction,
           makeAlignmentPDFConstruction = makeAlignmentPDFConstruction
         )
@@ -354,87 +418,151 @@ run_handler_impl <- function(req, res) {
     }, error = function(e) e)
 
     log_text <- paste(log_vec, collapse = "\n")
-    log_entry <- list(list(step = "brepphylo.cloneLineage", ok = !inherits(err, "error"), out = log_text))
+    add_log("brepphylo.cloneLineage", !inherits(err, "error"), log_text)
 
     if (inherits(err, "error")) {
       res$status <- 400
-      return(list(ok = FALSE, error = conditionMessage(err), logs = log_entry, warnings = as.list(warnings)))
+      return(list(
+        ok       = FALSE,
+        error    = conditionMessage(err),
+        logs     = logs,
+        warnings = as.list(warnings)
+      ))
     }
 
-    tree_files <- list.files(out_dir, pattern = "^clone_.*\\.tree$", recursive = TRUE, full.names = TRUE)
+    # ---- collect trees ----
+    tree_files <- list.files(
+      out_dir,
+      pattern   = "^clone_.*\\.tree$",
+      recursive = TRUE,
+      full.names = TRUE
+    )
     if (!length(tree_files)) {
       res$status <- 500
-      return(list(ok = FALSE, error = "BrepPhylo did not produce any .tree files.", logs = log_entry, warnings = as.list(warnings)))
+      add_log("brepphylo.collectTrees", FALSE,
+              "No .tree files were produced by BrepPhylo.")
+      return(list(
+        ok       = FALSE,
+        error    = "BrepPhylo did not produce any .tree files.",
+        logs     = logs,
+        warnings = as.list(warnings)
+      ))
     }
 
     tree_files <- sort(tree_files)
-    trees <- vapply(tree_files, function(p) paste(readLines(p, warn = FALSE), collapse = ""), FUN.VALUE = character(1))
+    trees <- vapply(
+      tree_files,
+      function(p) paste(readLines(p, warn = FALSE), collapse = ""),
+      FUN.VALUE = character(1)
+    )
+
     clone_ids <- sub("^clone_", "", basename(tree_files))
     clone_ids <- sub("\\.tree$", "", clone_ids)
 
-    plot_files <- list.files(out_dir, pattern = paste0("\\.", plot_format, "$"), recursive = TRUE, full.names = TRUE)
+    # ---- collect figures ----
+    plot_files <- list.files(
+      out_dir,
+      pattern   = paste0("\\.", plot_format, "$"),
+      recursive = TRUE,
+      full.names = TRUE
+    )
     plot_files <- plot_files[grepl("clone_", basename(plot_files), fixed = TRUE)]
 
-    png_data <- list(); pdf_data <- list()
+    png_data <- list()
+    pdf_data <- list()
     for (cid in clone_ids) {
-      candidates <- plot_files[grepl(paste0("clone_", cid, "\\."), basename(plot_files))]
+      candidates <- plot_files[grepl(paste0("clone_", cid, "\\."),
+                                     basename(plot_files))]
       if (!length(candidates)) {
-        png_data[[cid]] <- NULL; pdf_data[[cid]] <- NULL; next
+        png_data[[cid]] <- NULL
+        pdf_data[[cid]] <- NULL
+        next
       }
       f <- candidates[[1]]
       sz <- file.info(f)$size
-      if (is.na(sz) || sz <= 0) { png_data[[cid]] <- NULL; pdf_data[[cid]] <- NULL; next }
+      if (is.na(sz) || sz <= 0) {
+        png_data[[cid]] <- NULL
+        pdf_data[[cid]] <- NULL
+        next
+      }
       raw <- readBin(f, what = "raw", n = sz)
-      if (grepl("\\.png$", f, ignore.case = TRUE)) png_data[[cid]] <- paste0("data:image/png;base64,", jsonlite::base64_enc(raw))
-      if (grepl("\\.pdf$", f, ignore.case = TRUE)) pdf_data[[cid]] <- jsonlite::base64_enc(raw)
+      if (grepl("\\.png$", f, ignore.case = TRUE)) {
+        png_data[[cid]] <- paste0(
+          "data:image/png;base64:",
+          jsonlite::base64_enc(raw)
+        )
+      }
+      if (grepl("\\.pdf$", f, ignore.case = TRUE)) {
+        pdf_data[[cid]] <- jsonlite::base64_enc(raw)
+      }
     }
 
     phylogeny_png <- unname(png_data[clone_ids])
     phylogeny_pdf <- unname(pdf_data[clone_ids])
-    annotations <- lapply(clone_ids, function(cid) make_annotations_per_clone(df, cid, clone_col, label_col, class_col))
 
-    clone_counts <- clone_seq_counts(df, clone_col, clone_ids)
-    clones_meta <- list(clone_id = unname(clone_ids), seqs = unname(clone_counts))
-
-    stats <- list(
-      method = METHOD_ID,
-      tree_type = tree_type,
-      species = species,
-      algorithm = algorithm,
-      plot_type = plot_type,
-      plot_format = plot_format,
-      min_clone_size = min_clone_size,
-      gather_plots = gather_plots,
-      use_temp_dir = use_temp_dir,
-      sequence_column = seq_col,
-      clone_id_column = clone_col,
-      germline_id_column = germ_col,
-      class_column = class_col,
-      label_column = label_col,
-      n_clones = length(clone_ids),
-      n_trees = length(trees)
+    # ---- annotations per clone ----
+    annotations <- lapply(
+      clone_ids,
+      function(cid) make_annotations_per_clone(df, cid, clone_col, label_col, class_col)
     )
 
+    # ---- clones meta and stats ----
+    clone_counts <- clone_seq_counts(df, clone_col, clone_ids)
+    clones_meta <- list(
+      clone_id = unname(clone_ids),
+      seqs     = unname(clone_counts)
+    )
+
+    stats <- list(
+      method             = METHOD_ID,
+      tree_type          = tree_type,
+      species            = species,
+      algorithm          = algorithm,
+      plot_type          = plot_type,
+      plot_format        = plot_format,
+      min_clone_size     = min_clone_size,
+      gather_plots       = gather_plots,
+      use_temp_dir       = use_temp_dir,
+      sequence_column    = seq_col,
+      clone_id_column    = clone_col,
+      germline_id_column = germ_col,
+      class_column       = class_col,
+      label_column       = label_col,
+      n_clones           = length(clone_ids),
+      n_trees            = length(trees)
+    )
+
+    add_log(
+      "brepphylo.summarise",
+      TRUE,
+      sprintf("Built %d trees for %d clones.", length(trees), length(clone_ids))
+    )
+
+    # ---- final result ----
     result <- list(
-      ok = TRUE,
-      trees = unname(trees),
-      figures = list(
-        phylogeny = phylogeny_png,
+      ok         = TRUE,
+      trees      = unname(trees),
+      figures    = list(
+        phylogeny     = phylogeny_png,
         phylogeny_pdf = phylogeny_pdf
       ),
       annotations = annotations,
-      clones = clones_meta,
-      stats = stats,
-      warnings = unname(as.list(warnings)),
-      logs = log_entry,
-      render = "phylogeny",
-      error = NULL
+      clones      = clones_meta,
+      stats       = stats,
+      warnings    = unname(as.list(warnings)),
+      logs        = logs,
+      render      = "phylogeny",
+      error       = NULL
     )
 
     return(result)
   }, error = function(e) {
     logf("[brepphylo][ERROR] %s", as.character(e))
-    fail(as.character(e), res, status = ifelse(is.null(res$status) || res$status == 200, 500, res$status))
+    fail(
+      as.character(e),
+      res,
+      status = ifelse(is.null(res$status) || res$status == 200, 500, res$status)
+    )
   })
 }
 
@@ -443,21 +571,27 @@ STRICT_CONTRACT <- tolower(Sys.getenv("STRICT_CONTRACT_ROUTES", "true")) %in% c(
 #* @plumber
 function(pr) {
   if (!STRICT_CONTRACT) {
-    pr$handle("GET", "/spec", serializer = SER, function(req, res) spec_handler_impl())
-    pr$handle("POST", "/run", serializer = SER, function(req, res) run_handler_impl(req, res))
+    pr$handle("GET",  "/spec", serializer = SER, function(req, res) spec_handler_impl())
+    pr$handle("POST", "/run",  serializer = SER, function(req, res) run_handler_impl(req, res))
   }
-  pr$handle("GET", ROUTES_JSON$spec, serializer = SER, function(req, res) spec_handler_impl())
-  pr$handle("POST", ROUTES_JSON$run, serializer = SER, function(req, res) run_handler_impl(req, res))
-  pr$handle("GET", "/ui", serializer = SER, function(req, res) ui_handler_impl())
-  pr$handle("GET", "/routes", serializer = SER, function(req, res) routes_handler_impl())
-  pr$handle("GET", "/schema", serializer = SER, function(req, res) schema_handler_impl())
-  pr$handle("GET", "/ping", serializer = SER, function(req, res) {
-    list(ok = TRUE, method = METHOD_ID, brepphylo_version = as.character(utils::packageVersion("BrepPhylo")))
+
+  pr$handle("GET",  ROUTES_JSON$spec, serializer = SER, function(req, res) spec_handler_impl())
+  pr$handle("POST", ROUTES_JSON$run,  serializer = SER, function(req, res) run_handler_impl(req, res))
+  pr$handle("GET",  "/ui",            serializer = SER, function(req, res) ui_handler_impl())
+  pr$handle("GET",  "/routes",        serializer = SER, function(req, res) routes_handler_impl())
+  pr$handle("GET",  "/schema",        serializer = SER, function(req, res) schema_handler_impl())
+  pr$handle("GET",  "/ping",          serializer = SER, function(req, res) {
+    list(
+      ok                = TRUE,
+      method            = METHOD_ID,
+      brepphylo_version = as.character(utils::packageVersion("BrepPhylo"))
+    )
   })
 
   pr_set_error(pr, function(req, res, err) {
     res$status <- 500
     list(ok = FALSE, error = as.character(err))
   })
+
   pr
 }

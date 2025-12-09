@@ -8,8 +8,6 @@
     "germline_id_column",
     "label_column",
     "class_column",
-    "class_palette",
-    "germline_colour",
 
     "tree_type",
     "collapse_and_replace",
