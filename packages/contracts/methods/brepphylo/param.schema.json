@@ -31,10 +31,30 @@
       "description": "Optional column used by BrepPhylo for per-class colouring and palette generation.",
       "default": ""
     },
+
+    "which_clones": {
+      "type": "string",
+      "title": "Restrict to clone IDs",
+      "description": "Optional list of clone IDs to include, as a comma/space/semicolon-separated string (e.g. 'c1, c2 c3'). Empty means all clones.",
+      "default": ""
+    },
+    "ignore_clones": {
+      "type": "string",
+      "title": "Ignore clone IDs",
+      "description": "Optional list of clone IDs to exclude, as a comma/space/semicolon-separated string. Applied after which_clones.",
+      "default": ""
+    },
+    "germline_set": {
+      "type": "string",
+      "title": "Germline set",
+      "description": "Optional germline set identifier or path passed to BrepPhylo::cloneLineage (germlineSet). Leave blank for package defaults.",
+      "default": ""
+    },
+
     "tree_type": {
       "type": "string",
       "title": "Tree builder",
-      "description": "Algorithm passed to treeConstruction$type (simple, dnapars, or igphyml).",
+      "description": "Tree construction method passed to treeConstruction$type ('simple', 'dnapars', or 'igphyml').",
       "enum": [
         "simple",
         "dnapars",
@@ -45,7 +65,7 @@
     "collapse_and_replace": {
       "type": "boolean",
       "title": "Collapse identical sequences (dnapars)",
-      "description": "If true, collapse identical sequences before parsimony reconstruction and re-expand afterwards.",
+      "description": "If true, collapse identical sequences before parsimony reconstruction and re-expand afterwards (tree_type = 'dnapars').",
       "default": true
     },
     "igphyml_accuracy": {
@@ -59,6 +79,18 @@
       ],
       "default": "basic"
     },
+    "ig_stop_policy": {
+      "type": "string",
+      "title": "IgPhyML stop/frame policy",
+      "description": "How to handle sequences with stop codons or out-of-frame lengths when tree_type = 'igphyml': drop sequences, fall back to dnapars, or error.",
+      "enum": [
+        "drop_seqs",
+        "fallback_dnapars",
+        "error"
+      ],
+      "default": "drop_seqs"
+    },
+
     "make_alignment_pdf": {
       "type": "boolean",
       "title": "Write alignment PDF",
@@ -115,6 +147,50 @@
       "title": "Use per-run temp dir",
       "description": "Let BrepPhylo stage intermediate files in a temp directory inside the container.",
       "default": true
+    },
+
+    "apply_filters": {
+      "type": "boolean",
+      "title": "Apply sequence text filters",
+      "description": "Enable sequence-level preprocessing on the sequence column (uppercase, gap policy, non-IUPAC policy).",
+      "default": false
+    },
+    "uppercase": {
+      "type": "boolean",
+      "title": "Uppercase sequences",
+      "description": "Convert all letters in the sequence column to uppercase before further processing.",
+      "default": false
+    },
+    "gap_policy": {
+      "type": "string",
+      "title": "Gap policy",
+      "description": "How to treat gap characters ('-', '.', whitespace) in the sequence column when apply_filters = true.",
+      "enum": [
+        "keep",
+        "remove",
+        "replace_N",
+        "replace_NNN",
+        "drop_row"
+      ],
+      "default": "keep"
+    },
+    "noniupac_policy": {
+      "type": "string",
+      "title": "Non-IUPAC policy",
+      "description": "How to treat non-IUPAC nucleotides in the sequence column when apply_filters = true.",
+      "enum": [
+        "keep",
+        "replace_N",
+        "drop_row"
+      ],
+      "default": "keep"
+    },
+    "max_class_categories": {
+      "type": "integer",
+      "title": "Max class categories for colouring",
+      "description": "Maximum number of distinct class values allowed for colouring. If exceeded, class-based colouring is disabled and a warning is returned.",
+      "minimum": 1,
+      "default": 30
     }
   },
   "required": [
