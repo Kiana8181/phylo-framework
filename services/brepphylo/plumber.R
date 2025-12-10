@@ -53,6 +53,23 @@ read_input_table <- function(path) {
   }
 }
 
+# Parse vectors from JSON / string ("a,b c;d") – same idea as Dowser
+parse_vec <- function(x) {
+  if (is.null(x)) return(character(0))
+  if (is.list(x)) x <- unlist(x, use.names = FALSE)
+  x <- as.character(x)
+  if (length(x) == 1L) {
+    s <- trimws(x)
+    if (nzchar(s)) {
+      x <- unlist(strsplit(s, "[,;\\s]+", perl = TRUE), use.names = FALSE)
+    } else {
+      x <- character(0)
+    }
+  }
+  x <- trimws(x)
+  unique(x[nzchar(x)])
+}
+
 # build a palette from a class column only (no user-supplied palette)
 build_class_palette <- function(df, class_col) {
   if (is.null(class_col) || !nzchar(class_col)) return(list())
@@ -119,6 +136,175 @@ clean_input_df <- function(df, seq_col, clone_col, germ_col) {
 }
 
 # ---------------------------
+# Sequence / IgPhyML helpers (Dowser-style, adapted)
+# ---------------------------
+IUPAC        <- "ACGTRYSWKMBDHVN"
+gap_re       <- "[-\\.\\s]"
+non_iupac_re <- "[^ACGTRYSWKMBDHVN]"
+
+apply_text_filters <- function(df, seq_col, p) {
+  if (!seq_col %in% names(df)) {
+    return(list(
+      df    = df,
+      stats = list(upper = 0L, gap_rows = 0L, noniupac_rows = 0L),
+      dropped = integer(0)
+    ))
+  }
+
+  s <- as.character(df[[seq_col]])
+  s[is.na(s)] <- ""
+  stats <- list(upper = 0L, gap_rows = 0L, noniupac_rows = 0L)
+  drop_mask <- rep(FALSE, nrow(df))
+
+  # Uppercase
+  if (isTRUE(p$uppercase)) {
+    s2 <- toupper(s)
+    stats$upper <- sum(s2 != s, na.rm = TRUE)
+    s <- s2
+  }
+
+  # Gap policy
+  has_gap <- grepl(gap_re, s, perl = TRUE)
+  stats$gap_rows <- sum(has_gap, na.rm = TRUE)
+  if (p$gap_policy == "remove") {
+    s <- gsub(gap_re, "", s, perl = TRUE)
+  } else if (p$gap_policy == "replace_N") {
+    s <- gsub(gap_re, "N", s, perl = TRUE)
+  } else if (p$gap_policy == "replace_NNN") {
+    s <- gsub(gap_re, "NNN", s, perl = TRUE)
+  } else if (p$gap_policy == "drop_row") {
+    drop_mask <- drop_mask | has_gap
+  }
+
+  # Non-IUPAC policy
+  bad_non <- grepl(non_iupac_re, s, perl = TRUE)
+  stats$noniupac_rows <- sum(bad_non, na.rm = TRUE)
+  if (p$noniupac_policy == "replace_N") {
+    s <- gsub(noniupac_re, "N", s, perl = TRUE)
+  } else if (p$noniupac_policy == "drop_row") {
+    drop_mask <- drop_mask | bad_non
+  }
+
+  df[[seq_col]] <- s
+  if (any(drop_mask)) df <- df[!drop_mask, , drop = FALSE]
+
+  list(df = df, stats = stats, dropped = which(drop_mask))
+}
+
+detect_stops_and_frame <- function(seq_vec) {
+  x <- toupper(gsub(gap_re, "", as.character(seq_vec), perl = TRUE))
+  x[is.na(x)] <- ""
+  frame_bad <- (nchar(x) %% 3) != 0
+  stop_bad  <- logical(length(x))
+  ok <- !frame_bad & nzchar(x)
+  if (any(ok)) {
+    aa <- translate(DNAStringSet(x[ok]), if.fuzzy.codon = "X")
+    stop_bad[ok] <- grepl("\\*", as.character(aa))
+  }
+  list(stop = stop_bad, frame_bad = frame_bad)
+}
+
+# ---------------------------
+# IgPhyML exec + motifs (Dowser-style, env-driven)
+# ---------------------------
+IG_EXEC_DEFAULT   <- Sys.getenv("IGPHYML_BIN", "igphyml")
+IG_MOTIFS_DEFAULT <- Sys.getenv("IGPHYML_MOTIFS", "")
+
+validate_motifs_dir <- function(path) {
+  if (!nzchar(path)) return(FALSE)
+  if (!dir.exists(path)) return(FALSE)
+  length(list.files(path, all.files = FALSE)) > 0
+}
+
+check_igphyml_exec <- function(user_exec = NULL) {
+  # We don't take user path from params, only env/ PATH.
+  cand <- user_exec %||% Sys.which("igphyml")
+  if (!nzchar(cand)) {
+    # Try a common default
+    default <- "/usr/local/share/igphyml/src/igphyml"
+    if (file.exists(default) && file.access(default, 1) == 0) cand <- default
+  }
+  if (!nzchar(cand)) {
+    stop("IgPhyML executable not found. Set IGPHYML_BIN or put 'igphyml' on PATH.")
+  }
+  path <- normalizePath(cand, mustWork = FALSE)
+  if (!file.exists(path)) {
+    stop(sprintf("IgPhyML path does not exist: %s", path))
+  }
+  if (file.access(path, 1) != 0) {
+    stop(sprintf("IgPhyML path is not executable: %s (chmod +x?)", path))
+  }
+  # Optional version logging
+  try({
+    v <- suppressWarnings(system2(path, "--version", stdout = TRUE, stderr = TRUE))
+    logf("[brepphylo] igphyml --version: %s", paste(v, collapse = " | "))
+  }, silent = TRUE)
+  path
+}
+
+resolve_igphyml <- function(require_ok = TRUE) {
+  exec_path <- tryCatch(
+    check_igphyml_exec(IG_EXEC_DEFAULT),
+    error = function(e) if (require_ok) stop(e) else NULL
+  )
+  if (is.null(exec_path)) {
+    return(list(
+      ok    = FALSE,
+      error = "IgPhyML executable not found. Set IGPHYML_BIN or install 'igphyml' on PATH."
+    ))
+  }
+
+  candidates <- unique(c(
+    Sys.getenv("IGPHYML_MOTIFS", ""),
+    Sys.getenv("IGPHYML_PATH", ""),
+    IG_MOTIFS_DEFAULT,
+    file.path(dirname(dirname(exec_path)), "share", "igphyml", "src", "motifs"),
+    "/usr/local/share/igphyml/src/motifs",
+    "/usr/share/igphyml/src/motifs",
+    "/opt/igphyml/src/motifs"
+  ))
+
+  motifs_dir <- NULL
+  for (d in candidates) {
+    if (validate_motifs_dir(d)) {
+      motifs_dir <- d
+      break
+    }
+  }
+
+  if (is.null(motifs_dir)) {
+    if (require_ok) {
+      tried <- paste(Filter(nzchar, candidates), collapse = " | ")
+      return(list(
+        ok    = FALSE,
+        error = paste0(
+          "IgPhyML hotspot motif tables not found. ",
+          "Set IGPHYML_MOTIFS or IGPHYML_PATH to the directory containing motif tables ",
+          "(e.g., '/usr/local/share/igphyml/src/motifs'). ",
+          "Tried: ", if (nzchar(tried)) tried else "<none>"
+        )
+      ))
+    }
+  } else {
+    Sys.setenv(IGPHYML_MOTIFS = motifs_dir)
+    Sys.setenv(IGPHYML_PATH   = motifs_dir)
+    logf("[brepphylo] Using IgPhyML motifs dir: %s", motifs_dir)
+  }
+
+  list(ok = TRUE, exec = exec_path, motifs = motifs_dir)
+}
+
+normalize_opt_string <- function(x) {
+  if (is.null(x)) return(NULL)
+  x <- as.character(x[1])
+  x <- trimws(x)
+  if (!nzchar(x)) return(NULL)
+  x
+}
+
+CLASS_UNKNOWN_DEFAULT <- "unknown"
+
+# ---------------------------
 # Config & Contracts loading
 # ---------------------------
 METHOD_ID <- "brepphylo"
@@ -167,7 +353,7 @@ spec_handler_impl <- function() {
   )
 }
 
-ui_handler_impl    <- function() UI_JSON
+ui_handler_impl     <- function() UI_JSON
 routes_handler_impl <- function() ROUTES_JSON
 schema_handler_impl <- function() list(params = PARAM_SCHEMA_JSON, result = RESULT_SCHEMA_JSON)
 
@@ -248,11 +434,11 @@ run_handler_impl <- function(req, res) {
     )
 
     # ---- resolve columns ----
-    seq_col   <- normalize_col(params$sequence_column,   "sequence")
-    clone_col <- normalize_col(params$clone_id_column,   "clone_id")
-    germ_col  <- normalize_col(params$germline_id_column,"V.GENE.and.allele")
-    class_col <- normalize_col(params$class_column,      NULL)
-    label_col <- normalize_col(params$label_column,      NULL)
+    seq_col   <- normalize_col(params$sequence_column,    "sequence")
+    clone_col <- normalize_col(params$clone_id_column,    "clone_id")
+    germ_col  <- normalize_col(params$germline_id_column, "V.GENE.and.allele")
+    class_col <- normalize_col(params$class_column,       NULL)
+    label_col <- normalize_col(params$label_column,       NULL)
 
     required_cols <- c(seq_col, clone_col, germ_col)
     missing <- required_cols[!required_cols %in% names(df)]
@@ -260,7 +446,38 @@ run_handler_impl <- function(req, res) {
       return(fail_local(sprintf("Missing required column(s): %s", paste(missing, collapse = ", "))))
     }
 
-    # ---- clean / filter DF ----
+    # ---- parse additional params ----
+    which_clones  <- parse_vec(params$which_clones  %||% params$whichClones)
+    ignore_clones <- parse_vec(params$ignore_clones %||% params$ignoreClones)
+    germline_set  <- normalize_opt_string(params$germline_set %||% params$germlineSet)
+
+    apply_filters        <- as_bool(params$apply_filters, FALSE)
+    uppercase            <- as_bool(params$uppercase, FALSE)
+    gap_policy           <- params$gap_policy       %||% "keep"   # keep | remove | replace_N | replace_NNN | drop_row
+    noniupac_policy      <- params$noniupac_policy  %||% "keep"   # keep | replace_N | drop_row
+    max_class_categories <- as.integer(params$max_class_categories %||% 30L)
+
+    allowed_gap <- c("keep", "remove", "replace_N", "replace_NNN", "drop_row")
+    if (!gap_policy %in% allowed_gap) {
+      return(fail_local(sprintf("gap_policy must be one of: %s", paste(allowed_gap, collapse = ", "))))
+    }
+    allowed_noni <- c("keep", "replace_N", "drop_row")
+    if (!noniupac_policy %in% allowed_noni) {
+      return(fail_local(sprintf("noniupac_policy must be one of: %s", paste(allowed_noni, collapse = ", "))))
+    }
+
+    tree_type <- params$tree_type %||% "dnapars"
+    tree_type_effective <- tree_type
+
+    ig_stop_policy <- params$ig_stop_policy %||% "drop_seqs"  # drop_seqs | fallback_dnapars | error
+    allowed_ig <- c("drop_seqs", "fallback_dnapars", "error")
+    if (!ig_stop_policy %in% allowed_ig) {
+      return(fail_local(sprintf("ig_stop_policy must be one of: %s", paste(allowed_ig, collapse = ", "))))
+    }
+
+    igphyml_accuracy <- params$igphyml_accuracy %||% "basic"
+
+    # ---- clean / filter DF (basic empties) ----
     cleaned <- clean_input_df(df, seq_col, clone_col, germ_col)
     df <- cleaned$df
     warnings <- c(warnings, cleaned$warnings)
@@ -296,67 +513,208 @@ run_handler_impl <- function(req, res) {
       label_col <- NULL
     }
 
-    # ---- colour specification with safe defaults (no class_palette param) ----
-    # Try to build palette from class_col
-    pal <- build_class_palette(df, class_col)
-    colour_col <- class_col
+    # ---- apply_filters (optional, on sequence column only) ----
+    filter_stats <- list(upper = 0L, gap_rows = 0L, noniupac_rows = 0L)
+    if (apply_filters) {
+      ft <- apply_text_filters(
+        df,
+        seq_col,
+        list(
+          uppercase       = uppercase,
+          gap_policy      = gap_policy,
+          noniupac_policy = noniupac_policy
+        )
+      )
+      df <- ft$df        # FIX: use df, not db
+      filter_stats <- ft$stats
+      if (!nrow(df)) {
+        add_log("brepphylo.filters", FALSE, "All rows dropped by apply_filters.")
+        return(fail_local("All rows were dropped by sequence filters (gaps / non-IUPAC)."))
+      }
 
-    if (length(pal) == 0L || is.null(colour_col) || !nzchar(colour_col)) {
-      # fall back to a dummy column + single colour so cloneLineage never sees
-      # an empty 'colourSpecification$colours'
-      dummy_col <- ".brepphylo_class"
-      df[[dummy_col]] <- "UNK"
-      colour_col <- dummy_col
-      pal <- list(UNK = "#000000")
+      add_log(
+        "brepphylo.filters",
+        TRUE,
+        sprintf(
+          paste(
+            "apply_filters=TRUE; uppercase=%s; gap_policy=%s; noniupac_policy=%s;",
+            "uppercased_rows=%d; gap_rows_touched=%d; noniupac_rows_touched=%d."
+          ),
+          uppercase, gap_policy, noniupac_policy,
+          filter_stats$upper, filter_stats$gap_rows, filter_stats$noniupac_rows
+        )
+      )
+    } else {
+      add_log("brepphylo.filters", TRUE, "apply_filters=FALSE (no sequence text filters applied).")
+    }
 
-      warnings <- c(
-        warnings,
-        "No valid class column or class levels found; using a single default colour for all sequences."
+    # ---- class column handling: unknown + max_class_categories ----
+    class_unknown_replaced <- 0L
+    n_class_states <- 0L
+    class_states_capped <- FALSE
+
+    pal <- list()
+    colour_col <- NULL
+
+    if (!is.null(class_col)) {
+      vals <- as.character(df[[class_col]])
+      is_missing_class <- is.na(vals) | !nzchar(trimws(vals))
+      if (any(is_missing_class)) {
+        df[[class_col]] <- vals
+        df[[class_col]][is_missing_class] <- CLASS_UNKNOWN_DEFAULT
+        class_unknown_replaced <- sum(is_missing_class, na.rm = TRUE)
+        warnings <- c(
+          warnings,
+          sprintf(
+            "Class column '%s' had %d empty/NA values -> set to '%s' for colouring.",
+            class_col, class_unknown_replaced, CLASS_UNKNOWN_DEFAULT
+          )
+        )
+      }
+
+      vals2 <- as.character(df[[class_col]])
+      class_states <- sort(unique(vals2[!is.na(vals2)]))
+      n_class_states <- length(class_states)
+
+      if (n_class_states > max_class_categories) {
+        class_states_capped <- TRUE
+        warnings <- c(
+          warnings,
+          sprintf(
+            "Class column '%s' has %d unique values (> max_class_categories=%d); colouring will be disabled.",
+            class_col, n_class_states, max_class_categories
+          )
+        )
+        # leave pal empty and colour_col NULL -> no colouring
+      } else {
+        pal <- build_class_palette(df, class_col)
+        colour_col <- if (length(pal)) class_col else NULL
+      }
+    }
+
+    # ---- colour specification ----
+    colourSpecification <- NULL
+    if (!is.null(colour_col) && length(pal) > 0L) {
+      colourSpecification <- list(
+        colours        = pal,
+        coloursColumn  = colour_col,
+        germlineColour = params$germline_colour %||% "#808080"
+      )
+    } else {
+      # No colouring -> let BrepPhylo use its defaults
+      colourSpecification <- NULL
+    }
+
+    # ---- IgPhyML preflight: stops / frame ----
+    ig_stop_rows  <- 0L
+    ig_frame_rows <- 0L
+    ig_fallback   <- FALSE
+
+    if (identical(tree_type, "igphyml")) {
+      det <- detect_stops_and_frame(df[[seq_col]])
+      ig_stop_rows  <- sum(det$stop, na.rm = TRUE)
+      ig_frame_rows <- sum(det$frame_bad, na.rm = TRUE)
+
+      if (ig_stop_rows > 0L || ig_frame_rows > 0L) {
+        if (ig_stop_policy == "drop_seqs") {
+          keep <- !(det$stop | det$frame_bad)
+          dropped <- sum(!keep, na.rm = TRUE)
+          df <- df[keep, , drop = FALSE]
+          warnings <- c(
+            warnings,
+            sprintf(
+              "IgPhyML: dropped %d sequences with stop codons and %d out-of-frame sequences (policy=drop_seqs).",
+              ig_stop_rows, ig_frame_rows
+            )
+          )
+          if (!nrow(df)) {
+            add_log("brepphylo.igphymlPreflight", FALSE,
+                    "All sequences removed by IgPhyML preflight (stops/frame).")
+            return(fail_local(
+              sprintf(
+                "All sequences removed for IgPhyML: %d had stop codons and %d were out-of-frame.",
+                ig_stop_rows, ig_frame_rows
+              )
+            ))
+          }
+        } else if (ig_stop_policy == "fallback_dnapars") {
+          tree_type_effective <- "dnapars"
+          ig_fallback <- TRUE
+          warnings <- c(
+            warnings,
+            sprintf(
+              "IgPhyML fallback: switched to 'dnapars' because %d sequences had stop codons and %d were out-of-frame (policy=fallback_dnapars).",
+              ig_stop_rows, ig_frame_rows
+            )
+          )
+        } else { # "error"
+          add_log("brepphylo.igphymlPreflight", FALSE,
+                  sprintf("IgPhyML blocked: stops=%d, frame=%d (policy=error).", ig_stop_rows, ig_frame_rows))
+          return(fail_local(
+            sprintf(
+              "IgPhyML blocked: %d sequences contain stop codons and %d are out-of-frame (ig_stop_policy=error).",
+              ig_stop_rows, ig_frame_rows
+            )
+          ))
+        }
+      }
+
+      add_log(
+        "brepphylo.igphymlPreflight",
+        TRUE,
+        sprintf(
+          "IgPhyML preflight: stop_rows=%d, frame_rows=%d, policy=%s, fallback_to_dnapars=%s.",
+          ig_stop_rows, ig_frame_rows, ig_stop_policy, ig_fallback
+        )
       )
     }
 
-    colourSpecification <- list(
-      colours        = pal,
-      coloursColumn  = colour_col,
-      germlineColour = params$germline_colour %||% "#808080"
-    )
-
-    # ---- tree construction config (env-based executables, no params) ----
-    tree_type <- params$tree_type %||% "dnapars"
+    # ---- tree construction config (env-based executables) ----
+    tree_type_effective <- tree_type_effective %||% tree_type
     tc_params <- list()
 
-    if (identical(tree_type, "dnapars")) {
+    if (identical(tree_type_effective, "dnapars")) {
       tc_params$collapseAndReplace <- as_bool(params$collapse_and_replace, TRUE)
 
-      # prefer DNAPARS_PATH; fallback to PATH; let cloneLineage validate
+      # prefer DNAPARS_PATH; fallback to PATH; let cloneLineage validate if still missing
       dnapars_exec <- Sys.getenv("DNAPARS_PATH", "")
       if (!nzchar(dnapars_exec)) {
         dnapars_exec <- Sys.which("dnapars")
       }
       if (nzchar(dnapars_exec)) {
         tc_params$executable <- dnapars_exec
+        add_log("brepphylo.dnapars.exec", TRUE,
+                sprintf("Using DNAPARS executable: %s", dnapars_exec))
       } else {
         warnings <- c(
           warnings,
           "DNAPARS executable not found in DNAPARS_PATH or PATH; BrepPhylo will try its own lookup and may fail."
         )
+        add_log("brepphylo.dnapars.exec", FALSE,
+                "DNAPARS executable not found in DNAPARS_PATH or PATH.")
       }
-    } else if (identical(tree_type, "igphyml")) {
-      acc <- params$igphyml_accuracy %||% "basic"
-      if (nzchar(acc)) {
-        tc_params$accuracy <- acc
+    } else if (identical(tree_type_effective, "igphyml")) {
+      if (nzchar(igphyml_accuracy)) {
+        tc_params$accuracy <- igphyml_accuracy
       }
 
-      # Like Dowser: use IGPHYML_BIN if set, otherwise "igphyml"
-      igphyml_exec <- Sys.getenv("IGPHYML_BIN", "igphyml")
-      if (!nzchar(igphyml_exec)) {
-        igphyml_exec <- "igphyml"
+      resolved <- resolve_igphyml(require_ok = TRUE)
+      if (!isTRUE(resolved$ok)) {
+        return(fail_local(resolved$error))
       }
-      tc_params$executable <- igphyml_exec
+      tc_params$executable <- resolved$exec
+      add_log(
+        "brepphylo.igphyml.exec",
+        TRUE,
+        sprintf(
+          "Using IgPhyML exec=%s; motifs=%s",
+          resolved$exec, resolved$motifs %||% "<none>"
+        )
+      )
     }
 
     treeConstruction <- list(
-      type       = tree_type,
+      type       = tree_type_effective,
       parameters = tc_params
     )
 
@@ -402,14 +760,14 @@ run_handler_impl <- function(req, res) {
           germlineIdColumn = germ_col,
           labelColumn      = if (!is.null(label_col) && nzchar(label_col)) label_col else NULL,
           algorithm        = algorithm,
-          whichClones      = NULL,
-          ignoreClones     = NULL,
+          whichClones      = if (length(which_clones)) which_clones else NULL,
+          ignoreClones     = if (length(ignore_clones)) ignore_clones else NULL,
           colourSpecification = colourSpecification,
           plotType         = plot_type,
           plotFormat       = plot_format,
           gatherPlots      = gather_plots,
           useTempDir       = use_temp_dir,
-          germlineSet      = NULL,
+          germlineSet      = germline_set,
           treeConstruction = treeConstruction,
           makeAlignmentPDFConstruction = makeAlignmentPDFConstruction
         )
@@ -459,7 +817,7 @@ run_handler_impl <- function(req, res) {
     clone_ids <- sub("^clone_", "", basename(tree_files))
     clone_ids <- sub("\\.tree$", "", clone_ids)
 
-    # ---- collect figures ----
+    # ---- collect figures (tree images) ----
     plot_files <- list.files(
       out_dir,
       pattern   = paste0("\\.", plot_format, "$"),
@@ -487,10 +845,8 @@ run_handler_impl <- function(req, res) {
       }
       raw <- readBin(f, what = "raw", n = sz)
       if (grepl("\\.png$", f, ignore.case = TRUE)) {
-        png_data[[cid]] <- paste0(
-          "data:image/png;base64:",
-          jsonlite::base64_enc(raw)
-        )
+        # plain base64 – frontend will prepend "data:image/png;base64,"
+        png_data[[cid]] <- jsonlite::base64_enc(raw)
       }
       if (grepl("\\.pdf$", f, ignore.case = TRUE)) {
         pdf_data[[cid]] <- jsonlite::base64_enc(raw)
@@ -508,28 +864,55 @@ run_handler_impl <- function(req, res) {
 
     # ---- clones meta and stats ----
     clone_counts <- clone_seq_counts(df, clone_col, clone_ids)
+
+    # IMPORTANT: keep these as arrays even for length 1 to avoid auto_unbox
     clones_meta <- list(
-      clone_id = unname(clone_ids),
-      seqs     = unname(clone_counts)
+      clone_id = as.list(unname(clone_ids)),
+      seqs     = as.list(unname(clone_counts))
     )
 
     stats <- list(
-      method             = METHOD_ID,
-      tree_type          = tree_type,
-      species            = species,
-      algorithm          = algorithm,
-      plot_type          = plot_type,
-      plot_format        = plot_format,
-      min_clone_size     = min_clone_size,
-      gather_plots       = gather_plots,
-      use_temp_dir       = use_temp_dir,
-      sequence_column    = seq_col,
-      clone_id_column    = clone_col,
-      germline_id_column = germ_col,
-      class_column       = class_col,
-      label_column       = label_col,
-      n_clones           = length(clone_ids),
-      n_trees            = length(trees)
+      method               = METHOD_ID,
+      tree_type_requested  = tree_type,
+      tree_type            = tree_type_effective,
+      species              = species,
+      algorithm            = algorithm,
+      plot_type            = plot_type,
+      plot_format          = plot_format,
+      min_clone_size       = min_clone_size,
+      gather_plots         = gather_plots,
+      use_temp_dir         = use_temp_dir,
+      sequence_column      = seq_col,
+      clone_id_column      = clone_col,
+      germline_id_column   = germ_col,
+      class_column         = class_col,
+      label_column         = label_col,
+      which_clones         = which_clones,
+      ignore_clones        = ignore_clones,
+      germline_set         = germline_set,
+      n_clones             = length(clone_ids),
+      n_trees              = length(trees),
+
+      # colouring stats
+      class_unknown_value             = CLASS_UNKNOWN_DEFAULT,
+      class_unknown_replaced_in_input = class_unknown_replaced,
+      class_n_states                  = n_class_states,
+      class_states_capped             = class_states_capped,
+      max_class_categories            = max_class_categories,
+
+      # filter stats
+      filters_applied       = apply_filters,
+      uppercased_rows       = filter_stats$upper,
+      gap_rows_touched      = filter_stats$gap_rows,
+      noniupac_rows_touched = filter_stats$noniupac_rows,
+      gap_policy            = gap_policy,
+      noniupac_policy       = noniupac_policy,
+
+      # IgPhyML stats
+      ig_stop_policy              = ig_stop_policy,
+      igphyml_stop_rows           = ig_stop_rows,
+      igphyml_frame_rows          = ig_frame_rows,
+      igphyml_fallback_to_dnapars = ig_fallback
     )
 
     add_log(
@@ -537,6 +920,84 @@ run_handler_impl <- function(req, res) {
       TRUE,
       sprintf("Built %d trees for %d clones.", length(trees), length(clone_ids))
     )
+
+    # ---- build artifacts ZIP with all other files (per-clone folders etc.) ----
+    artifacts_zip_b64 <- NULL
+    all_files <- list.files(out_dir, recursive = TRUE, full.names = TRUE)
+
+    if (length(all_files)) {
+      # Exclude tree and main plot files (we already return them)
+      exclude_basenames <- unique(c(
+        paste0("clone_", clone_ids, ".tree"),
+        paste0("clone_", clone_ids, ".png"),
+        paste0("clone_", clone_ids, ".pdf")
+      ))
+
+      files_to_zip <- all_files[!(basename(all_files) %in% exclude_basenames)]
+
+      if (length(files_to_zip)) {
+        zip_path <- file.path(out_dir, "brepphylo_artifacts.zip")
+        if (file.exists(zip_path)) {
+          file.remove(zip_path)
+        }
+
+        old_wd <- getwd()
+        setwd(out_dir)
+        on.exit(setwd(old_wd), add = TRUE)
+
+        rel_paths <- unique(gsub(paste0("^", out_dir, "/?"), "", files_to_zip))
+        rel_paths <- rel_paths[nzchar(rel_paths)]
+
+        if (length(rel_paths)) {
+          utils::zip(zipfile = zip_path, files = rel_paths)
+          sz <- file.info(zip_path)$size
+          if (!is.na(sz) && sz > 0) {
+            zip_raw <- readBin(zip_path, what = "raw", n = sz)
+            artifacts_zip_b64 <- jsonlite::base64_enc(zip_raw)
+            add_log(
+              "brepphylo.artifacts",
+              TRUE,
+              sprintf("Zipped %d files into brepphylo_artifacts.zip (%d bytes).",
+                      length(rel_paths), sz)
+            )
+          } else {
+            add_log(
+              "brepphylo.artifacts",
+              FALSE,
+              "brepphylo_artifacts.zip was created but has zero size."
+            )
+          }
+        } else {
+          add_log("brepphylo.artifacts", TRUE, "No extra files to zip (rel_paths empty).")
+        }
+      } else {
+        add_log("brepphylo.artifacts", TRUE, "No extra files to zip (files_to_zip empty).")
+      }
+    } else {
+      add_log("brepphylo.artifacts", TRUE, "No files found in output directory.")
+    }
+
+    # ---- warnings aggregation for filters ----
+    if (apply_filters) {
+      if (uppercase && filter_stats$upper > 0L) {
+        warnings <- c(warnings, sprintf("Uppercased %d rows in '%s'.", filter_stats$upper, seq_col))
+      }
+      if (gap_policy == "remove" && filter_stats$gap_rows > 0L) {
+        warnings <- c(warnings, sprintf("Removed gaps in %d rows.", filter_stats$gap_rows))
+      }
+      if (gap_policy %in% c("replace_N", "replace_NNN") && filter_stats$gap_rows > 0L) {
+        warnings <- c(warnings, sprintf("Replaced gaps in %d rows.", filter_stats$gap_rows))
+      }
+      if (gap_policy == "drop_row" && filter_stats$gap_rows > 0L) {
+        warnings <- c(warnings, sprintf("Dropped %d rows due to gap characters.", filter_stats$gap_rows))
+      }
+      if (noniupac_policy == "replace_N" && filter_stats$noniupac_rows > 0L) {
+        warnings <- c(warnings, sprintf("Replaced non-IUPAC letters in %d rows.", filter_stats$noniupac_rows))
+      }
+      if (noniupac_policy == "drop_row" && filter_stats$noniupac_rows > 0L) {
+        warnings <- c(warnings, sprintf("Dropped %d rows with non-IUPAC letters.", filter_stats$noniupac_rows))
+      }
+    }
 
     # ---- final result ----
     result <- list(
@@ -549,8 +1010,11 @@ run_handler_impl <- function(req, res) {
       annotations = annotations,
       clones      = clones_meta,
       stats       = stats,
+      # single ZIP containing all clone_* folders and other artifacts,
+      # excluding clone_ID.tree / clone_ID.png / clone_ID.pdf
+      artifact_zip_b64  = artifacts_zip_b64,
       warnings    = unname(as.list(warnings)),
-      logs        = logs,
+      logs        = logs,              # full stdout + step logs
       render      = "phylogeny",
       error       = NULL
     )
