@@ -4,9 +4,9 @@
 library(plumber)
 SER <- plumber::serializer_json(
   auto_unbox = TRUE,
-  null = "null",
-  na = "null",
-  dataframe = "rows"
+  null       = "null",
+  na         = "null",
+  dataframe  = "rows"
 )
 plumber::register_serializer("SER", function(...) SER)
 
@@ -53,7 +53,7 @@ read_input_table <- function(path) {
   }
 }
 
-# Parse vectors from JSON / string ("a,b c;d") – same idea as Dowser
+# Parse vectors from JSON / string ("a,b c;d")
 parse_vec <- function(x) {
   if (is.null(x)) return(character(0))
   if (is.list(x)) x <- unlist(x, use.names = FALSE)
@@ -136,17 +136,17 @@ clean_input_df <- function(df, seq_col, clone_col, germ_col) {
 }
 
 # ---------------------------
-# Sequence / IgPhyML helpers (Dowser-style, adapted)
+# Sequence text filters (no IgPhyML preflight here)
 # ---------------------------
-IUPAC        <- "ACGTRYSWKMBDHVN"
-gap_re       <- "[-\\.\\s]"
-non_iupac_re <- "[^ACGTRYSWKMBDHVN]"
+IUPAC       <- "ACGTRYSWKMBDHVN"
+gap_re      <- "[-\\.\\s]"
+NONIUPAC_RE <- "[^ACGTRYSWKMBDHVN]"
 
 apply_text_filters <- function(df, seq_col, p) {
   if (!seq_col %in% names(df)) {
     return(list(
-      df    = df,
-      stats = list(upper = 0L, gap_rows = 0L, noniupac_rows = 0L),
+      df      = df,
+      stats   = list(upper = 0L, gap_rows = 0L, noniupac_rows = 0L),
       dropped = integer(0)
     ))
   }
@@ -177,10 +177,10 @@ apply_text_filters <- function(df, seq_col, p) {
   }
 
   # Non-IUPAC policy
-  bad_non <- grepl(non_iupac_re, s, perl = TRUE)
+  bad_non <- grepl(NONIUPAC_RE, s, perl = TRUE)
   stats$noniupac_rows <- sum(bad_non, na.rm = TRUE)
   if (p$noniupac_policy == "replace_N") {
-    s <- gsub(noniupac_re, "N", s, perl = TRUE)
+    s <- gsub(NONIUPAC_RE, "N", s, perl = TRUE)
   } else if (p$noniupac_policy == "drop_row") {
     drop_mask <- drop_mask | bad_non
   }
@@ -191,23 +191,10 @@ apply_text_filters <- function(df, seq_col, p) {
   list(df = df, stats = stats, dropped = which(drop_mask))
 }
 
-detect_stops_and_frame <- function(seq_vec) {
-  x <- toupper(gsub(gap_re, "", as.character(seq_vec), perl = TRUE))
-  x[is.na(x)] <- ""
-  frame_bad <- (nchar(x) %% 3) != 0
-  stop_bad  <- logical(length(x))
-  ok <- !frame_bad & nzchar(x)
-  if (any(ok)) {
-    aa <- translate(DNAStringSet(x[ok]), if.fuzzy.codon = "X")
-    stop_bad[ok] <- grepl("\\*", as.character(aa))
-  }
-  list(stop = stop_bad, frame_bad = frame_bad)
-}
-
 # ---------------------------
-# IgPhyML exec + motifs (Dowser-style, env-driven)
+# IgPhyML exec + motifs (env-driven only)
 # ---------------------------
-IG_EXEC_DEFAULT   <- Sys.getenv("IGPHYML_BIN", "igphyml")
+IG_EXEC_DEFAULT   <- Sys.getenv("IGPHYML_BIN", Sys.getenv("IG_EXEC_DEFAULT", "igphyml"))
 IG_MOTIFS_DEFAULT <- Sys.getenv("IGPHYML_MOTIFS", "")
 
 validate_motifs_dir <- function(path) {
@@ -217,10 +204,8 @@ validate_motifs_dir <- function(path) {
 }
 
 check_igphyml_exec <- function(user_exec = NULL) {
-  # We don't take user path from params, only env/ PATH.
   cand <- user_exec %||% Sys.which("igphyml")
   if (!nzchar(cand)) {
-    # Try a common default
     default <- "/usr/local/share/igphyml/src/igphyml"
     if (file.exists(default) && file.access(default, 1) == 0) cand <- default
   }
@@ -234,7 +219,6 @@ check_igphyml_exec <- function(user_exec = NULL) {
   if (file.access(path, 1) != 0) {
     stop(sprintf("IgPhyML path is not executable: %s (chmod +x?)", path))
   }
-  # Optional version logging
   try({
     v <- suppressWarnings(system2(path, "--version", stdout = TRUE, stderr = TRUE))
     logf("[brepphylo] igphyml --version: %s", paste(v, collapse = " | "))
@@ -307,9 +291,9 @@ CLASS_UNKNOWN_DEFAULT <- "unknown"
 # ---------------------------
 # Config & Contracts loading
 # ---------------------------
-METHOD_ID <- "brepphylo"
+METHOD_ID     <- "brepphylo"
 CONTRACTS_DIR <- Sys.getenv("CONTRACTS_DIR", "packages/contracts")
-METHOD_DIR <- file.path(CONTRACTS_DIR, "methods", METHOD_ID)
+METHOD_DIR    <- file.path(CONTRACTS_DIR, "methods", METHOD_ID)
 
 PARAM_SCHEMA_PATH  <- file.path(METHOD_DIR, "param.schema.json")
 RESULT_SCHEMA_PATH <- file.path(METHOD_DIR, "result.schema.json")
@@ -469,12 +453,8 @@ run_handler_impl <- function(req, res) {
     tree_type <- params$tree_type %||% "dnapars"
     tree_type_effective <- tree_type
 
-    ig_stop_policy <- params$ig_stop_policy %||% "drop_seqs"  # drop_seqs | fallback_dnapars | error
-    allowed_ig <- c("drop_seqs", "fallback_dnapars", "error")
-    if (!ig_stop_policy %in% allowed_ig) {
-      return(fail_local(sprintf("ig_stop_policy must be one of: %s", paste(allowed_ig, collapse = ", "))))
-    }
-
+    # IgPhyML stop/frame policy is no longer enforced at wrapper level.
+    ig_stop_policy <- params$ig_stop_policy %||% NULL
     igphyml_accuracy <- params$igphyml_accuracy %||% "basic"
 
     # ---- clean / filter DF (basic empties) ----
@@ -525,7 +505,7 @@ run_handler_impl <- function(req, res) {
           noniupac_policy = noniupac_policy
         )
       )
-      df <- ft$df        # FIX: use df, not db
+      df <- ft$df
       filter_stats <- ft$stats
       if (!nrow(df)) {
         add_log("brepphylo.filters", FALSE, "All rows dropped by apply_filters.")
@@ -546,6 +526,33 @@ run_handler_impl <- function(req, res) {
       )
     } else {
       add_log("brepphylo.filters", TRUE, "apply_filters=FALSE (no sequence text filters applied).")
+    }
+
+    # ---- apply which_clones / ignore_clones at wrapper level ----
+    if (length(which_clones)) {
+      before_n <- nrow(df)
+      df <- df[df[[clone_col]] %in% which_clones, , drop = FALSE]
+      add_log(
+        "brepphylo.whichClones",
+        TRUE,
+        sprintf("Applied which_clones filter: kept %d/%d rows.", nrow(df), before_n)
+      )
+      if (!nrow(df)) {
+        return(fail_local("No sequences remain after applying which_clones filter."))
+      }
+    }
+
+    if (length(ignore_clones)) {
+      before_n <- nrow(df)
+      df <- df[!(df[[clone_col]] %in% ignore_clones), , drop = FALSE]
+      add_log(
+        "brepphylo.ignoreClones",
+        TRUE,
+        sprintf("Applied ignore_clones filter: kept %d/%d rows.", nrow(df), before_n)
+      )
+      if (!nrow(df)) {
+        return(fail_local("No sequences remain after applying ignore_clones filter."))
+      }
     }
 
     # ---- class column handling: unknown + max_class_categories ----
@@ -585,7 +592,8 @@ run_handler_impl <- function(req, res) {
             class_col, n_class_states, max_class_categories
           )
         )
-        # leave pal empty and colour_col NULL -> no colouring
+        pal <- list()
+        colour_col <- NULL
       } else {
         pal <- build_class_palette(df, class_col)
         colour_col <- if (length(pal)) class_col else NULL
@@ -593,90 +601,89 @@ run_handler_impl <- function(req, res) {
     }
 
     # ---- colour specification ----
-    colourSpecification <- NULL
+    # cloneLineage expects a non-NULL colourSpecification; fall back to a
+    # monochrome palette if colouring is disabled.
+    germline_colour <- params$germline_colour %||% "#808080"
     if (!is.null(colour_col) && length(pal) > 0L) {
       colourSpecification <- list(
         colours        = pal,
         coloursColumn  = colour_col,
-        germlineColour = params$germline_colour %||% "#808080"
+        germlineColour = germline_colour
       )
     } else {
-      # No colouring -> let BrepPhylo use its defaults
-      colourSpecification <- NULL
+      warnings <- c(
+        warnings,
+        "Colouring disabled or palette unavailable; using fallback monochrome palette."
+      )
+      colourSpecification <- list(
+        colours        = list(default = "#000000"),
+        coloursColumn  = clone_col,
+        germlineColour = germline_colour
+      )
     }
 
-    # ---- IgPhyML preflight: stops / frame ----
-    ig_stop_rows  <- 0L
-    ig_frame_rows <- 0L
-    ig_fallback   <- FALSE
+    # ---- other params (tree construction, output, etc.) ----
+    out_dir <- tempfile("brepphylo_", tmpdir = tempdir())
+    dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
-    if (identical(tree_type, "igphyml")) {
-      det <- detect_stops_and_frame(df[[seq_col]])
-      ig_stop_rows  <- sum(det$stop, na.rm = TRUE)
-      ig_frame_rows <- sum(det$frame_bad, na.rm = TRUE)
+    min_clone_size <- as.integer(params$min_clone_size %||% 10L)
+    species        <- normalize_opt_string(params$species)
+    algorithm      <- params$algorithm %||% "ClustalOmega"
+    plot_type      <- params$plot_type %||% "phylogram"
+    plot_format    <- params$plot_format %||% "png"
 
-      if (ig_stop_rows > 0L || ig_frame_rows > 0L) {
-        if (ig_stop_policy == "drop_seqs") {
-          keep <- !(det$stop | det$frame_bad)
-          dropped <- sum(!keep, na.rm = TRUE)
-          df <- df[keep, , drop = FALSE]
-          warnings <- c(
-            warnings,
-            sprintf(
-              "IgPhyML: dropped %d sequences with stop codons and %d out-of-frame sequences (policy=drop_seqs).",
-              ig_stop_rows, ig_frame_rows
-            )
-          )
-          if (!nrow(df)) {
-            add_log("brepphylo.igphymlPreflight", FALSE,
-                    "All sequences removed by IgPhyML preflight (stops/frame).")
-            return(fail_local(
-              sprintf(
-                "All sequences removed for IgPhyML: %d had stop codons and %d were out-of-frame.",
-                ig_stop_rows, ig_frame_rows
-              )
-            ))
-          }
-        } else if (ig_stop_policy == "fallback_dnapars") {
-          tree_type_effective <- "dnapars"
-          ig_fallback <- TRUE
-          warnings <- c(
-            warnings,
-            sprintf(
-              "IgPhyML fallback: switched to 'dnapars' because %d sequences had stop codons and %d were out-of-frame (policy=fallback_dnapars).",
-              ig_stop_rows, ig_frame_rows
-            )
-          )
-        } else { # "error"
-          add_log("brepphylo.igphymlPreflight", FALSE,
-                  sprintf("IgPhyML blocked: stops=%d, frame=%d (policy=error).", ig_stop_rows, ig_frame_rows))
-          return(fail_local(
-            sprintf(
-              "IgPhyML blocked: %d sequences contain stop codons and %d are out-of-frame (ig_stop_policy=error).",
-              ig_stop_rows, ig_frame_rows
-            )
-          ))
-        }
-      }
+    if (is.null(species) && is.null(germline_set)) {
+      return(fail_local("Either 'species' or 'germline_set' must be provided."))
+    }
+    
+    if (!nzchar(algorithm))    return(fail_local("algorithm is required."))
+    if (!nzchar(plot_type))    return(fail_local("plot_type is required."))
+    if (!nzchar(plot_format))  return(fail_local("plot_format is required."))
+    allowed_alg <- c("ClustalOmega", "ClustalW")
+    if (!algorithm %in% allowed_alg) {
+      return(fail_local(sprintf("algorithm must be one of: %s",
+                                paste(allowed_alg, collapse = ", "))))
+    }
 
+    gather_plots <- as_bool(params$gather_plots, TRUE)
+    use_temp_dir <- as_bool(params$use_temp_dir, TRUE)
+
+    # ---- sanity check: clones & min_clone_size before calling BrepPhylo ----
+    clone_counts_pre <- table(df[[clone_col]])
+    n_clones_pre <- length(clone_counts_pre)
+    if (n_clones_pre == 0L) {
       add_log(
-        "brepphylo.igphymlPreflight",
-        TRUE,
+        "brepphylo.preBrepphylo",
+        FALSE,
+        "No clones remain in the input after preprocessing."
+      )
+      return(fail_local("No clones remain after preprocessing; nothing to build."))
+    }
+    n_large_clones <- sum(clone_counts_pre >= min_clone_size)
+    if (n_large_clones == 0L) {
+      add_log(
+        "brepphylo.preBrepphylo",
+        FALSE,
         sprintf(
-          "IgPhyML preflight: stop_rows=%d, frame_rows=%d, policy=%s, fallback_to_dnapars=%s.",
-          ig_stop_rows, ig_frame_rows, ig_stop_policy, ig_fallback
+          "No clones with at least %d sequences after preprocessing (clones=%d).",
+          min_clone_size, n_clones_pre
         )
       )
+      return(fail_local(
+        sprintf(
+          "No clones with at least %d sequences remain after preprocessing; adjust 'min_clone_size' or filters.",
+          min_clone_size
+        )
+      ))
     }
 
     # ---- tree construction config (env-based executables) ----
-    tree_type_effective <- tree_type_effective %||% tree_type
+    tree_type_effective <- tree_type %||% "dnapars"
     tc_params <- list()
 
     if (identical(tree_type_effective, "dnapars")) {
       tc_params$collapseAndReplace <- as_bool(params$collapse_and_replace, TRUE)
 
-      # prefer DNAPARS_PATH; fallback to PATH; let cloneLineage validate if still missing
       dnapars_exec <- Sys.getenv("DNAPARS_PATH", "")
       if (!nzchar(dnapars_exec)) {
         dnapars_exec <- Sys.which("dnapars")
@@ -721,56 +728,41 @@ run_handler_impl <- function(req, res) {
     makeAlignmentPDFConstruction <- list(
       makeAlignmentPDF = as_bool(params$make_alignment_pdf, FALSE)
     )
-
-    # ---- other params ----
-    out_dir <- tempfile("brepphylo_", tmpdir = tempdir())
-    dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
-
-    min_clone_size <- as.integer(params$min_clone_size %||% 10L)
-    species        <- params$species   %||% "Homo_sapiens"
-    algorithm      <- params$algorithm %||% "ClustalOmega"
-    plot_type      <- params$plot_type %||% "phylogram"
-    plot_format    <- params$plot_format %||% "png"
-
-    if (!nzchar(species))      return(fail_local("species is required."))
-    if (!nzchar(algorithm))    return(fail_local("algorithm is required."))
-    if (!nzchar(plot_type))    return(fail_local("plot_type is required."))
-    if (!nzchar(plot_format))  return(fail_local("plot_format is required."))
-
-    allowed_alg <- c("ClustalOmega", "ClustalW")
-    if (!algorithm %in% allowed_alg) {
-      return(fail_local(sprintf("algorithm must be one of: %s",
-                                paste(allowed_alg, collapse = ", "))))
-    }
-
-    gather_plots <- as_bool(params$gather_plots, TRUE)
-    use_temp_dir <- as_bool(params$use_temp_dir, TRUE)
-
+    
     # ---- run BrepPhylo::cloneLineage with captured output ----
     log_vec <- character(0)
     err <- tryCatch({
       log_vec <- capture.output({
-        BrepPhylo::cloneLineage(
+        args <- list(
           input        = df,
           outputFolder = out_dir,
-          species      = species,
           minCloneSize = min_clone_size,
           sequenceColumn   = seq_col,
           cloneIdColumn    = clone_col,
           germlineIdColumn = germ_col,
-          labelColumn      = if (!is.null(label_col) && nzchar(label_col)) label_col else NULL,
           algorithm        = algorithm,
           whichClones      = if (length(which_clones)) which_clones else NULL,
           ignoreClones     = if (length(ignore_clones)) ignore_clones else NULL,
-          colourSpecification = colourSpecification,
-          plotType         = plot_type,
-          plotFormat       = plot_format,
-          gatherPlots      = gather_plots,
-          useTempDir       = use_temp_dir,
-          germlineSet      = germline_set,
-          treeConstruction = treeConstruction,
-          makeAlignmentPDFConstruction = makeAlignmentPDFConstruction
+          colourSpecification           = colourSpecification,
+          plotType                      = plot_type,
+          plotFormat                    = plot_format,
+          gatherPlots                   = gather_plots,
+          useTempDir                    = use_temp_dir,
+          treeConstruction              = treeConstruction,
+          makeAlignmentPDFConstruction  = makeAlignmentPDFConstruction
         )
+
+        if (!is.null(label_col) && nzchar(label_col)) {
+          args$labelColumn <- label_col
+        }
+        if (!is.null(species)) {
+          args$species <- species
+        }
+        if (!is.null(germline_set)) {
+          args$germlineSet <- germline_set
+        }
+
+        do.call(BrepPhylo::cloneLineage, args)
       })
       NULL
     }, error = function(e) e)
@@ -791,8 +783,8 @@ run_handler_impl <- function(req, res) {
     # ---- collect trees ----
     tree_files <- list.files(
       out_dir,
-      pattern   = "^clone_.*\\.tree$",
-      recursive = TRUE,
+      pattern    = "^clone_.*\\.tree$",
+      recursive  = TRUE,
       full.names = TRUE
     )
     if (!length(tree_files)) {
@@ -820,8 +812,8 @@ run_handler_impl <- function(req, res) {
     # ---- collect figures (tree images) ----
     plot_files <- list.files(
       out_dir,
-      pattern   = paste0("\\.", plot_format, "$"),
-      recursive = TRUE,
+      pattern    = paste0("\\.", plot_format, "$"),
+      recursive  = TRUE,
       full.names = TRUE
     )
     plot_files <- plot_files[grepl("clone_", basename(plot_files), fixed = TRUE)]
@@ -845,7 +837,6 @@ run_handler_impl <- function(req, res) {
       }
       raw <- readBin(f, what = "raw", n = sz)
       if (grepl("\\.png$", f, ignore.case = TRUE)) {
-        # plain base64 – frontend will prepend "data:image/png;base64,"
         png_data[[cid]] <- jsonlite::base64_enc(raw)
       }
       if (grepl("\\.pdf$", f, ignore.case = TRUE)) {
@@ -865,7 +856,6 @@ run_handler_impl <- function(req, res) {
     # ---- clones meta and stats ----
     clone_counts <- clone_seq_counts(df, clone_col, clone_ids)
 
-    # IMPORTANT: keep these as arrays even for length 1 to avoid auto_unbox
     clones_meta <- list(
       clone_id = as.list(unname(clone_ids)),
       seqs     = as.list(unname(clone_counts))
@@ -894,6 +884,11 @@ run_handler_impl <- function(req, res) {
       n_trees              = length(trees),
 
       # colouring stats
+      tip_color_by                    = if (is.null(colour_col)) NULL else colour_col,
+      unknown_value                   = CLASS_UNKNOWN_DEFAULT,
+      unknown_replaced_in_input       = class_unknown_replaced,
+      n_tip_states                    = if (is.null(colour_col)) 0L else n_class_states,
+      tip_states_capped               = class_states_capped,
       class_unknown_value             = CLASS_UNKNOWN_DEFAULT,
       class_unknown_replaced_in_input = class_unknown_replaced,
       class_n_states                  = n_class_states,
@@ -908,11 +903,8 @@ run_handler_impl <- function(req, res) {
       gap_policy            = gap_policy,
       noniupac_policy       = noniupac_policy,
 
-      # IgPhyML stats
-      ig_stop_policy              = ig_stop_policy,
-      igphyml_stop_rows           = ig_stop_rows,
-      igphyml_frame_rows          = ig_frame_rows,
-      igphyml_fallback_to_dnapars = ig_fallback
+      # IgPhyML stop policy: reported only (no preflight filtering)
+      ig_stop_policy        = ig_stop_policy
     )
 
     add_log(
@@ -926,7 +918,6 @@ run_handler_impl <- function(req, res) {
     all_files <- list.files(out_dir, recursive = TRUE, full.names = TRUE)
 
     if (length(all_files)) {
-      # Exclude tree and main plot files (we already return them)
       exclude_basenames <- unique(c(
         paste0("clone_", clone_ids, ".tree"),
         paste0("clone_", clone_ids, ".png"),
@@ -1007,16 +998,14 @@ run_handler_impl <- function(req, res) {
         phylogeny     = phylogeny_png,
         phylogeny_pdf = phylogeny_pdf
       ),
-      annotations = annotations,
-      clones      = clones_meta,
-      stats       = stats,
-      # single ZIP containing all clone_* folders and other artifacts,
-      # excluding clone_ID.tree / clone_ID.png / clone_ID.pdf
-      artifact_zip_b64  = artifacts_zip_b64,
-      warnings    = unname(as.list(warnings)),
-      logs        = logs,              # full stdout + step logs
-      render      = "phylogeny",
-      error       = NULL
+      annotations      = annotations,
+      clones           = clones_meta,
+      artifact_zip_b64 = artifacts_zip_b64,
+      stats            = stats,
+      warnings         = unname(as.list(warnings)),
+      logs             = logs,
+      render           = "phylogeny",
+      error            = NULL
     )
 
     return(result)

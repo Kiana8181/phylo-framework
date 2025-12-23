@@ -55,11 +55,7 @@
       "type": "string",
       "title": "Tree builder",
       "description": "Tree construction method passed to treeConstruction$type ('simple', 'dnapars', or 'igphyml').",
-      "enum": [
-        "simple",
-        "dnapars",
-        "igphyml"
-      ],
+      "enum": ["simple", "dnapars", "igphyml"],
       "default": "dnapars"
     },
     "collapse_and_replace": {
@@ -72,23 +68,7 @@
       "type": "string",
       "title": "IgPhyML accuracy preset",
       "description": "Accuracy preset passed to IgPhyML (e.g. 'basic', 'high', 'extreme'); leave blank for the BrepPhylo default.",
-      "enum": [
-        "basic",
-        "high",
-        "extreme"
-      ],
-      "default": "basic"
-    },
-    "ig_stop_policy": {
-      "type": "string",
-      "title": "IgPhyML stop/frame policy",
-      "description": "How to handle sequences with stop codons or out-of-frame lengths when tree_type = 'igphyml': drop sequences, fall back to dnapars, or error.",
-      "enum": [
-        "drop_seqs",
-        "fallback_dnapars",
-        "error"
-      ],
-      "default": "drop_seqs"
+      "enum": ["basic", "high", "extreme"]
     },
 
     "make_alignment_pdf": {
@@ -114,10 +94,7 @@
       "type": "string",
       "title": "Alignment algorithm",
       "description": "Multiple sequence aligner; default (model) is ClustalOmega.",
-      "enum": [
-        "ClustalOmega",
-        "ClustalW"
-      ],
+      "enum": ["ClustalOmega", "ClustalW"],
       "default": "ClustalOmega"
     },
     "plot_type": {
@@ -130,10 +107,7 @@
       "type": "string",
       "title": "Plot format",
       "description": "Output format for phylogeny plots.",
-      "enum": [
-        "png",
-        "pdf"
-      ],
+      "enum": ["png", "pdf"],
       "default": "png"
     },
     "gather_plots": {
@@ -165,24 +139,14 @@
       "type": "string",
       "title": "Gap policy",
       "description": "How to treat gap characters ('-', '.', whitespace) in the sequence column when apply_filters = true.",
-      "enum": [
-        "keep",
-        "remove",
-        "replace_N",
-        "replace_NNN",
-        "drop_row"
-      ],
+      "enum": ["keep", "remove", "replace_N", "replace_NNN", "drop_row"],
       "default": "keep"
     },
     "noniupac_policy": {
       "type": "string",
       "title": "Non-IUPAC policy",
       "description": "How to treat non-IUPAC nucleotides in the sequence column when apply_filters = true.",
-      "enum": [
-        "keep",
-        "replace_N",
-        "drop_row"
-      ],
+      "enum": ["keep", "replace_N", "drop_row"],
       "default": "keep"
     },
     "max_class_categories": {
