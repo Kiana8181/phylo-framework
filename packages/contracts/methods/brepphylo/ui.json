@@ -17,7 +17,6 @@
     "tree_type",
     "collapse_and_replace",
     "igphyml_accuracy",
-    "ig_stop_policy",
     "make_alignment_pdf",
 
     "min_clone_size",
@@ -40,9 +39,6 @@
       "when": { "tree_type": "dnapars" }
     },
     "igphyml_accuracy": {
-      "when": { "tree_type": "igphyml" }
-    },
-    "ig_stop_policy": {
       "when": { "tree_type": "igphyml" }
     },
     "uppercase": {
