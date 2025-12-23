@@ -97,16 +97,16 @@ services:
     environment:
       CONTRACTS_DIR: /contracts
       STRICT_CONTRACT_ROUTES: ${STRICT_CONTRACT_ROUTES:-true}
-      RUNS_DIR: /runtime/runs   # not used by R, but nice to keep consistent
+      RUNS_DIR: /runtime/runs
     volumes:
       - type: bind
         source: ./packages/contracts
         target: /contracts
         read_only: true
       - type: bind
-        source: ./runtime/runs   # <---- same host folder
-        target: /runtime/runs    # <---- same path inside dowser
-        read_only: true          # dowser only reads files
+        source: ./runtime/runs
+        target: /runtime/runs
+        read_only: true
     expose: ["8001"]
     profiles: ["dev","prod"]
 
@@ -118,10 +118,15 @@ services:
     environment:
       CONTRACTS_DIR: /contracts
       STRICT_CONTRACT_ROUTES: ${STRICT_CONTRACT_ROUTES:-true}
+      RUNS_DIR: /runtime/runs
     volumes:
       - type: bind
-        source: ./runtime
-        target: /shared        
+        source: ./packages/contracts
+        target: /contracts
+        read_only: true
+      - type: bind
+        source: ./runtime/runs
+        target: /runtime/runs
         read_only: true
     expose: ["8002"]
     profiles: ["dev","prod"]
