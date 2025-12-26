@@ -1,6 +1,4 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "GCtree inference parameters",
   "type": "object",
   "properties": {
     "root": {
@@ -102,8 +100,38 @@
       "title": "Compute detailed tree statistics",
       "description": "If true, pass --tree_stats and generate per-tree statistics and pairplot figures (can be slow for large forests).",
       "default": false
+    },
+    "apply_coloring_settings": {
+      "type": "boolean",
+      "default": false,
+      "title": "Apply Coloring Settings"
+    },
+     "color_mode": {
+      "type": "string",
+      "title": "Coloring mode",
+      "enum": ["none", "abundance", "LBI", "feature"],
+      "default": "none",
+      "description": "How to color GCtree figures. 'abundance' and 'LBI' use built-in features; 'feature' expects a custom numeric node feature name on the GCtree CollapsedTree."
+    },
+    "color_feature": {
+      "type": "string",
+      "title": "Custom feature name",
+      "default": "",
+      "description": "Feature name for coloring when color_mode = 'feature' (e.g. 'affinity'). Must exist on all nodes in the CollapsedTree."
+    },
+    "color_palette": {
+      "type": "string",
+      "title": "Colormap (Matplotlib name)",
+      "default": "viridis",
+      "description": "Any Matplotlib colormap name (e.g. 'viridis', 'magma', 'plasma')."
+    },
+    "color_scale": {
+      "type": "string",
+      "title": "Color scale",
+      "enum": ["linear", "log", "symlog"],
+      "default": "linear",
+      "description": "Scale for mapping feature values to colors."
     }
   },
-  "required": ["root"],
-  "additionalProperties": false
+  "required": ["root"]
 }

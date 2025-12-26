@@ -1,0 +1,171 @@
+{
+  "type": "object",
+  "properties": {
+    "sequence_column": {
+      "type": "string",
+      "title": "Sequence column",
+      "description": "Column containing aligned BCR nucleotide sequences (gapped or ungapped).",
+      "default": "sequence"
+    },
+    "clone_id_column": {
+      "type": "string",
+      "title": "Clone ID column",
+      "description": "Column used to group sequences into clones.",
+      "default": "clone_id"
+    },
+    "germline_id_column": {
+      "type": "string",
+      "title": "Germline/allele column",
+      "description": "Column storing V germline IDs or alleles that BrepPhylo will map to its germline database.",
+      "default": "V.GENE.and.allele"
+    },
+    "label_column": {
+      "type": "string",
+      "title": "Label column",
+      "description": "Optional human-readable label for tips; falls back to sequence order if empty.",
+      "default": ""
+    },
+    "class_column": {
+      "type": "string",
+      "title": "Class column",
+      "description": "Optional column used by BrepPhylo for per-class colouring and palette generation.",
+      "default": ""
+    },
+
+    "which_clones": {
+      "type": "string",
+      "title": "Restrict to clone IDs",
+      "description": "Optional list of clone IDs to include, as a comma/space/semicolon-separated string (e.g. 'c1, c2 c3'). Empty means all clones.",
+      "default": ""
+    },
+    "ignore_clones": {
+      "type": "string",
+      "title": "Ignore clone IDs",
+      "description": "Optional list of clone IDs to exclude, as a comma/space/semicolon-separated string. Applied after which_clones.",
+      "default": ""
+    },
+    "germline_set": {
+      "type": "string",
+      "title": "Germline set",
+      "description": "Optional germline set identifier or path passed to BrepPhylo::cloneLineage (germlineSet). Leave blank for package defaults.",
+      "default": ""
+    },
+
+    "tree_type": {
+      "type": "string",
+      "title": "Tree builder",
+      "description": "Tree construction method passed to treeConstruction$type ('simple', 'dnapars', or 'igphyml').",
+      "enum": ["simple", "dnapars", "igphyml"],
+      "default": "dnapars"
+    },
+    "collapse_and_replace": {
+      "type": "boolean",
+      "title": "Collapse identical sequences (dnapars)",
+      "description": "If true, collapse identical sequences before parsimony reconstruction and re-expand afterwards (tree_type = 'dnapars').",
+      "default": true
+    },
+    "igphyml_accuracy": {
+      "type": "string",
+      "title": "IgPhyML accuracy preset",
+      "description": "Accuracy preset passed to IgPhyML (e.g. 'basic', 'high', 'extreme'); leave blank for the BrepPhylo default.",
+      "enum": ["basic", "high", "extreme"]
+    },
+
+    "make_alignment_pdf": {
+      "type": "boolean",
+      "title": "Write alignment PDF",
+      "description": "Generate alignment PDF per clone (makeAlignmentPDFConstruction).",
+      "default": false
+    },
+    "min_clone_size": {
+      "type": "integer",
+      "title": "Minimum clone size",
+      "description": "Discard clones with fewer sequences than this threshold before tree building.",
+      "minimum": 1,
+      "default": 10
+    },
+    "species": {
+      "type": "string",
+      "title": "Species",
+      "description": "Species identifier for selecting BrepPhylo germline references.",
+      "default": "Homo_sapiens"
+    },
+    "algorithm": {
+      "type": "string",
+      "title": "Alignment algorithm",
+      "description": "Multiple sequence aligner; default (model) is ClustalOmega.",
+      "enum": ["ClustalOmega", "ClustalW"],
+      "default": "ClustalOmega"
+    },
+    "plot_type": {
+      "type": "string",
+      "title": "Plot type",
+      "description": "Plot flavour used by BrepPhylo (e.g. 'phylogram').",
+      "default": "phylogram"
+    },
+    "plot_format": {
+      "type": "string",
+      "title": "Plot format",
+      "description": "Output format for phylogeny plots.",
+      "enum": ["png", "pdf"],
+      "default": "png"
+    },
+    "gather_plots": {
+      "type": "boolean",
+      "title": "Gather plots",
+      "description": "Gather individual clone plots into a combined PDF where supported.",
+      "default": true
+    },
+    "use_temp_dir": {
+      "type": "boolean",
+      "title": "Use per-run temp dir",
+      "description": "Let BrepPhylo stage intermediate files in a temp directory inside the container.",
+      "default": true
+    },
+
+    "apply_filters": {
+      "type": "boolean",
+      "title": "Apply sequence text filters",
+      "description": "Enable sequence-level preprocessing on the sequence column (uppercase, gap policy, non-IUPAC policy).",
+      "default": false
+    },
+    "uppercase": {
+      "type": "boolean",
+      "title": "Uppercase sequences",
+      "description": "Convert all letters in the sequence column to uppercase before further processing.",
+      "default": false
+    },
+    "gap_policy": {
+      "type": "string",
+      "title": "Gap policy",
+      "description": "How to treat gap characters ('-', '.', whitespace) in the sequence column when apply_filters = true.",
+      "enum": ["keep", "remove", "replace_N", "replace_NNN", "drop_row"],
+      "default": "keep"
+    },
+    "noniupac_policy": {
+      "type": "string",
+      "title": "Non-IUPAC policy",
+      "description": "How to treat non-IUPAC nucleotides in the sequence column when apply_filters = true.",
+      "enum": ["keep", "replace_N", "drop_row"],
+      "default": "keep"
+    },
+    "max_class_categories": {
+      "type": "integer",
+      "title": "Max class categories for colouring",
+      "description": "Maximum number of distinct class values allowed for colouring. If exceeded, class-based colouring is disabled and a warning is returned.",
+      "minimum": 1,
+      "default": 30
+    }
+  },
+  "required": [
+    "sequence_column",
+    "clone_id_column",
+    "germline_id_column",
+    "tree_type",
+    "species",
+    "algorithm",
+    "plot_type",
+    "plot_format",
+    "min_clone_size"
+  ]
+}
