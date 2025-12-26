@@ -375,6 +375,8 @@ Open **http://localhost:3000** and you should see the app. The UI will call the 
 - `CORS_ORIGINS` — dev default includes `http://localhost:3000`
 - `METHOD_DOWSER_URL` — URL of Dowser service, e.g. `http://localhost:8001` in dev
 - `NEXT_PUBLIC_API_BASE_URL` — Web UI → API base URL (set in `apps/web/.env*`)
+- `RUNS_DIR_SERVICE` — optional; when API runs on the host but methods run in Docker, set to the in-container mount (e.g., `/runtime/runs`) so method services can read uploaded files.
+- `IGPHYML_BIN` / `IGPHYML_MOTIFS` — for BrepPhylo; in Docker images they default to `/usr/local/share/igphyml/src/igphyml` and `/usr/local/share/igphyml/src/motifs`.
 
 ---
 
