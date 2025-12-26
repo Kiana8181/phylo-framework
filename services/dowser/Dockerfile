@@ -2,6 +2,9 @@ FROM immcantation/suite:4.6.0
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CONTRACTS_DIR=/contracts
+ENV IGPHYML_BIN=/usr/local/bin/igphyml
+ENV IGPHYML_MOTIFS=/usr/local/share/igphyml/src/motifs
+ENV IGPHYML_PATH=/usr/local/share/igphyml/src/motifs
 
 RUN DOWNLOAD_STATIC_LIBV8=1 R -q -e "install.packages( \
     c('plumber', 'jsonlite', 'httpuv', 'swagger', 'jsonvalidate', 'httr'), \
