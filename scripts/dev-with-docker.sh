@@ -99,6 +99,9 @@ docker build -t phylo-dowser:dev "$ROOT/services/dowser"
 docker run -d --name phylo-dowser-dev -p 8001:8001 \
   -e CONTRACTS_DIR=/contracts -e STRICT_CONTRACT_ROUTES=true \
   -e RUNS_DIR="$HOST_RUNS_DIR" \
+  -e IGPHYML_BIN=igphyml \
+  -e IGPHYML_MOTIFS=/usr/local/share/igphyml/src/motifs \
+  -e IGPHYML_PATH=/usr/local/share/igphyml/src/motifs \
   -v "$ROOT/packages/contracts:/contracts:ro" \
   -v "$HOST_RUNTIME_DIR:$HOST_RUNTIME_DIR:ro" \
   phylo-dowser:dev >/dev/null
@@ -133,6 +136,8 @@ docker run -d --name phylo-brepphylo-dev -p 8003:8003 \
   -e RUNS_DIR="$HOST_RUNS_DIR" \
   -e DNAPARS_PATH=/usr/local/bin/dnapars \
   -e IGPHYML_BIN=igphyml \
+  -e IGPHYML_MOTIFS=/usr/local/share/igphyml/src/motifs \
+  -e IGPHYML_PATH=/usr/local/share/igphyml/src/motifs \
   -v "$ROOT/packages/contracts:/contracts:ro" \
   -v "$HOST_RUNTIME_DIR:$HOST_RUNTIME_DIR:ro" \
   phylo-brepphylo:dev >/dev/null

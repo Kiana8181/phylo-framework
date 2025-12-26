@@ -123,6 +123,11 @@ if [[ -z "${IGPHYML_BIN:-}" ]]; then
   echo "${YLW}WARN:${CLR} IGPHYML_BIN not set in ${BREP_ENV}; defaulting to /usr/local/bin/igphyml"
   export IGPHYML_BIN="/usr/local/bin/igphyml"
 fi
+if [[ -z "${IGPHYML_MOTIFS:-}" ]]; then
+  echo "${YLW}WARN:${CLR} IGPHYML_MOTIFS not set in ${BREP_ENV}; defaulting to /usr/local/share/igphyml/src/motifs"
+  export IGPHYML_MOTIFS="/usr/local/share/igphyml/src/motifs"
+  export IGPHYML_PATH="$IGPHYML_MOTIFS"
+fi
 
 ABS_CONTRACTS="$(resolve_contracts_abs)"
 R_CONTRACTS_REL="$(relpath_from_dir "$ABS_CONTRACTS" "$PLUMBER_DIR")"
