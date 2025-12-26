@@ -98,7 +98,7 @@ services:
       CONTRACTS_DIR: /contracts
       STRICT_CONTRACT_ROUTES: ${STRICT_CONTRACT_ROUTES:-true}
       RUNS_DIR: /runtime/runs
-      IGPHYML_BIN: igphyml
+      IGPHYML_BIN: /usr/local/share/igphyml/src/igphyml
       IGPHYML_MOTIFS: /usr/local/share/igphyml/src/motifs
       IGPHYML_PATH: /usr/local/share/igphyml/src/motifs
     volumes:
@@ -144,7 +144,7 @@ services:
       STRICT_CONTRACT_ROUTES: ${STRICT_CONTRACT_ROUTES:-true}
       RUNS_DIR: /runtime/runs
       DNAPARS_PATH: /usr/local/bin/dnapars
-      IGPHYML_BIN: igphyml
+      IGPHYML_BIN: /usr/local/share/igphyml/src/igphyml
       IGPHYML_MOTIFS: /usr/local/share/igphyml/src/motifs
       IGPHYML_PATH: /usr/local/share/igphyml/src/motifs
     volumes:

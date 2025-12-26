@@ -3,6 +3,8 @@ set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HOST_RUNTIME_DIR="$(realpath "$ROOT/runtime")"
 HOST_RUNS_DIR="${HOST_RUNTIME_DIR}/runs"
+CONTAINER_RUNTIME_DIR="/runtime"
+CONTAINER_RUNS_DIR="${CONTAINER_RUNTIME_DIR}/runs"
 
 RED=$'\033[31m'; GRN=$'\033[32m'; YLW=$'\033[33m'; BLU=$'\033[34m'; CLR=$'\033[0m'
 die(){ echo "${RED}ERROR:${CLR} $*" >&2; exit 1; }
@@ -98,12 +100,12 @@ docker rm -f phylo-dowser-dev >/dev/null 2>&1 || true
 docker build -t phylo-dowser:dev "$ROOT/services/dowser"
 docker run -d --name phylo-dowser-dev -p 8001:8001 \
   -e CONTRACTS_DIR=/contracts -e STRICT_CONTRACT_ROUTES=true \
-  -e RUNS_DIR="$HOST_RUNS_DIR" \
-  -e IGPHYML_BIN=igphyml \
+  -e RUNS_DIR="$CONTAINER_RUNS_DIR" \
+  -e IGPHYML_BIN=/usr/local/share/igphyml/src/igphyml \
   -e IGPHYML_MOTIFS=/usr/local/share/igphyml/src/motifs \
   -e IGPHYML_PATH=/usr/local/share/igphyml/src/motifs \
   -v "$ROOT/packages/contracts:/contracts:ro" \
-  -v "$HOST_RUNTIME_DIR:$HOST_RUNTIME_DIR:ro" \
+  -v "$HOST_RUNTIME_DIR:$CONTAINER_RUNTIME_DIR:ro" \
   phylo-dowser:dev >/dev/null
 
 echo "${BLU}==> Waiting for Dowser HTTP on :8001${CLR}"
@@ -119,10 +121,10 @@ HOST_CONTRACTS_DIR="$(realpath "$ROOT/packages/contracts")"
 docker run -d --name phylo-gctree-dev \
   -e CONTRACTS_DIR="/contracts" \
   -e STRICT_CONTRACT_ROUTES="${STRICT_CONTRACT_ROUTES:-true}" \
-  -e RUNS_DIR="$HOST_RUNS_DIR" \
+  -e RUNS_DIR="$CONTAINER_RUNS_DIR" \
   -p 8002:8002 \
   -v "$HOST_CONTRACTS_DIR":/contracts:ro \
-  -v "$HOST_RUNTIME_DIR:$HOST_RUNTIME_DIR:ro" \
+  -v "$HOST_RUNTIME_DIR:$CONTAINER_RUNTIME_DIR:ro" \
   phylo-gctree:dev                                                                      # [gctree]
 
 # make sure METHOD_GCTREE_URL exists in API env (optional but helpful):
@@ -133,13 +135,13 @@ docker rm -f phylo-brepphylo-dev >/dev/null 2>&1 || true
 docker build -t phylo-brepphylo:dev "$ROOT/services/brepphylo"
 docker run -d --name phylo-brepphylo-dev -p 8003:8003 \
   -e CONTRACTS_DIR=/contracts -e STRICT_CONTRACT_ROUTES=true \
-  -e RUNS_DIR="$HOST_RUNS_DIR" \
+  -e RUNS_DIR="$CONTAINER_RUNS_DIR" \
   -e DNAPARS_PATH=/usr/local/bin/dnapars \
-  -e IGPHYML_BIN=igphyml \
+  -e IGPHYML_BIN=/usr/local/share/igphyml/src/igphyml \
   -e IGPHYML_MOTIFS=/usr/local/share/igphyml/src/motifs \
   -e IGPHYML_PATH=/usr/local/share/igphyml/src/motifs \
   -v "$ROOT/packages/contracts:/contracts:ro" \
-  -v "$HOST_RUNTIME_DIR:$HOST_RUNTIME_DIR:ro" \
+  -v "$HOST_RUNTIME_DIR:$CONTAINER_RUNTIME_DIR:ro" \
   phylo-brepphylo:dev >/dev/null
 
 echo "${BLU}==> Waiting for BrepPhylo HTTP on :8003${CLR}"
@@ -158,6 +160,10 @@ echo "${BLU}==> Setting up Python venv for API${CLR}"
 source "$ROOT/.venv/bin/activate"
 python -m pip install -U pip >/dev/null
 python -m pip install -r "$ROOT/apps/api/requirements.txt"
+
+# ensure API writes to host path but sends container-visible paths to method services
+export RUNS_DIR="$HOST_RUNS_DIR"
+export RUNS_DIR_SERVICE="$CONTAINER_RUNS_DIR"
 
 echo "${BLU}==> Ensuring Node deps and building @phylo/contracts${CLR}"
 ensure_node_deps_and_build_contracts
