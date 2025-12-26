@@ -1,0 +1,70 @@
+{
+  "requiresFile": true,
+  "maxFiles": 1,
+  "fileLabel": "AIRR / rearrangement table (CSV or TSV)",
+
+  "order": [
+    "sequence_column",
+    "clone_id_column",
+    "germline_id_column",
+    "label_column",
+    "class_column",
+
+    "which_clones",
+    "ignore_clones",
+    "germline_set",
+
+    "tree_type",
+    "collapse_and_replace",
+    "igphyml_accuracy",
+    "make_alignment_pdf",
+
+    "min_clone_size",
+    "species",
+    "algorithm",
+    "plot_type",
+    "plot_format",
+    "gather_plots",
+    "use_temp_dir",
+
+    "apply_filters",
+    "uppercase",
+    "gap_policy",
+    "noniupac_policy",
+    "max_class_categories"
+  ],
+
+  "visibility": {
+    "collapse_and_replace": {
+      "when": { "tree_type": "dnapars" }
+    },
+    "igphyml_accuracy": {
+      "when": { "tree_type": "igphyml" }
+    },
+    "uppercase": {
+      "when": { "apply_filters": true }
+    },
+    "gap_policy": {
+      "when": { "apply_filters": true }
+    },
+    "noniupac_policy": {
+      "when": { "apply_filters": true }
+    }
+  },
+
+  "placeholders": {
+    "sequence_column":    "sequence",
+    "clone_id_column":    "clone_id",
+    "germline_id_column": "V.GENE.and.allele",
+    "label_column":       "optional; Seq_ID / sequence_id",
+    "class_column":       "optional; e.g. isotype",
+
+    "which_clones":       "optional; e.g. c1, c2 c3",
+    "ignore_clones":      "optional; comma/space-separated clone IDs to exclude",
+    "germline_set":       "optional; BrepPhylo germline set ID or path",
+
+    "algorithm":          "Default (model): ClustalOmega",
+    "gap_policy":         "keep / remove / replace_N / replace_NNN / drop_row",
+    "noniupac_policy":    "keep / replace_N / drop_row"
+  }
+}

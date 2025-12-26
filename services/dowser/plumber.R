@@ -25,8 +25,8 @@ Sys.setenv(PCRE2_MATCH_LIMIT_RECURSION="2000000")
 # ---------------------------
 # Config & Contracts loading
 # ---------------------------
-IG_EXEC_DEFAULT   <- Sys.getenv("IGPHYML_BIN", "igphyml")  # binary path
-IG_MOTIFS_DEFAULT <- Sys.getenv("IGPHYML_MOTIFS", "/usr/local/share/igphyml/src/motifs")
+IG_EXEC_DEFAULT   <- Sys.getenv("IGPHYML_BIN", "igphyml") 
+IG_MOTIFS_DEFAULT <- Sys.getenv("IGPHYML_MOTIFS", "") 
 CONTRACTS_DIR <- Sys.getenv("CONTRACTS_DIR", "packages/contracts")
 METHOD_DIR    <- file.path(CONTRACTS_DIR, "methods", "dowser")
 
@@ -583,23 +583,9 @@ run_handler_impl <- function(req, res) {
     }
 
     # ---- Build clones & trees ----
-    # Always keep sequence_id (to map tips back), the color-by column (if any),
-    # and any requested annotation fields.
     keep_text <- unique(c(
-      "sequence_id",
-      if (!is.null(tip_col)) tip_col,
-      p$annotation_fields
+      if (!is.null(tip_col)) tip_col
     ))
-
-    # Warn for annotation fields that don't exist
-    if (length(p$annotation_fields)) {
-      missing_anno <- setdiff(p$annotation_fields, names(db))
-      if (length(missing_anno)) {
-        for (mm in missing_anno) {
-          warnings <- c(warnings, sprintf("Requested annotation column '%s' not found; skipped.", mm))
-        }
-      }
-    }
 
     clones <- dowser::formatClones(
       db,
@@ -814,7 +800,7 @@ run_handler_impl <- function(req, res) {
     )
     stats$label_field <- p$label_field
 
-    warnings <- NULL
+    # --- Warnings aggregation ---
     if (!is.null(tip_col) && unknown_replaced_total > 0) {
       warnings <- c(warnings, sprintf(
         "Column '%s' had %d empty/NA values → set to '%s' for tip coloring.",

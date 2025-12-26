@@ -130,6 +130,47 @@ export default function Home() {
               ))}
             </div>
           </details>
+
+          {/* Backend Logs (optional) */}
+          {Array.isArray(result.logs) && result.logs.length > 0 && (
+            <details className="rounded border p-3 bg-card/50">
+              <summary className="cursor-pointer text-sm font-medium">
+                Show model logs
+              </summary>
+              <div className="mt-2 max-h-64 overflow-y-auto space-y-3 text-xs font-mono">
+                {result.logs.map((L, i) => (
+                  <div
+                    key={i}
+                    className="border-b last:border-0 pb-2 last:pb-0"
+                  >
+                    <div className="flex justify-between gap-2 text-[11px]">
+                      <span className="font-semibold">
+                        {L.step || `Step ${i + 1}`}
+                      </span>
+                      {typeof L.ok === "boolean" && (
+                        <span
+                          className={L.ok ? "text-emerald-500" : "text-red-500"}
+                        >
+                          {L.ok ? "OK" : "FAIL"}
+                        </span>
+                      )}
+                    </div>
+
+                    {L.cmd && (
+                      <div className="mt-1 text-[11px] text-muted-foreground">
+                        <span className="font-semibold">cmd: </span>
+                        <code className="break-all">{L.cmd}</code>
+                      </div>
+                    )}
+
+                    {L.out && (
+                      <pre className="mt-1 whitespace-pre-wrap">{L.out}</pre>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
         </section>
       )}
     </main>

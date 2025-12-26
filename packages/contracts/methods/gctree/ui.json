@@ -1,33 +1,7 @@
 {
   "requiresFile": true,
   "maxFiles": 1,
-  "sections": [
-    {
-      "id": "core",
-      "title": "Core settings",
-      "description": "Basic GCtree inference options.",
-      "fields": ["root", "frame", "pipeline", "infer", "top_n"]
-    },
-    {
-      "id": "ranking",
-      "title": "Ranking",
-      "description": "Control how GCtree ranks parsimony trees.",
-      "fields": ["ranking_strategy"]
-    },
-    {
-      "id": "parsimony",
-      "title": "Parsimony search (DNAPARS)",
-      "description": "Tune DNAPARS search thoroughness.",
-      "fields": ["quick", "jumble", "bootstrap"]
-    },
-    {
-      "id": "rendering",
-      "title": "Rendering and outputs",
-      "description": "Control image outputs and extra logs.",
-      "fields": ["img_type", "outbase", "idlabel", "show_nucleotide_mutations", "summarize_forest", "tree_stats"]
-    }
-  ],
-  "fieldOrder": [
+  "order": [
     "root",
     "frame",
     "pipeline",
@@ -42,6 +16,17 @@
     "idlabel",
     "show_nucleotide_mutations",
     "summarize_forest",
-    "tree_stats"
-  ]
+    "tree_stats",
+    "apply_coloring_settings",
+    "color_mode",
+    "color_feature",
+    "color_palette",
+    "color_scale"
+  ],
+  "visibility": {
+    "color_mode": { "when": { "apply_coloring_settings": true } },
+    "color_feature": { "when": { "apply_coloring_settings": true } },
+    "color_palette": { "when": { "apply_coloring_settings": true } },
+    "color_scale": { "when": { "apply_coloring_settings": true } }
+  }
 }
