@@ -20,6 +20,7 @@ router = APIRouter(prefix="/runs", tags=["runs"])
 
 DEFAULT_RUNS_DIR = os.path.join(os.getcwd(), "runtime", "runs")
 RUNS_DIR = os.environ.get("RUNS_DIR", DEFAULT_RUNS_DIR)
+RUNS_DIR_SERVICE = os.environ.get("RUNS_DIR_SERVICE")  # optional override for method-facing path
 
 def _ensure_dir(path: str) -> str:
   try:
@@ -38,6 +39,28 @@ def _public_status(rec: Dict[str, Any]) -> Dict[str, Any]:
   return {"status": rec.get("status", STAT_PENDING),
           "progress": rec.get("progress", 0),
           "message": rec.get("message")}
+
+def _service_file_path(host_path: str | None) -> str | None:
+  """Map a host run path to the path expected by the method service.
+
+  When the API runs on the host but methods run in containers, the shared
+  volume may be mounted at a different location (e.g., host
+  `/home/.../runtime/runs` → container `/runtime/runs`). Set RUNS_DIR_SERVICE
+  to the container mount point so the service receives a valid path.
+  """
+  if not host_path:
+    return None
+  if not RUNS_DIR_SERVICE:
+    return host_path
+  try:
+    host_root = os.path.realpath(RUNS_DIR)
+    host_path_real = os.path.realpath(host_path)
+    if os.path.commonpath([host_root, host_path_real]) == host_root:
+      rel = os.path.relpath(host_path_real, host_root)
+      return os.path.join(RUNS_DIR_SERVICE, rel)
+  except Exception:
+    return host_path
+  return host_path
 
 def _soft_progress_worker(run_id: str, floor: int = 10, ceiling: int = 95, step: int = 3, interval: float = 2.0):
   """Increase progress gradually while RUNNING so the UI doesn't stick at 5%."""
@@ -136,10 +159,10 @@ def _execute_method_sync(run_id: str, params: dict):
     rec["message"] = f"Submitting to {method_id}"
     rec["progress"] = max(int(rec.get("progress") or 0), 5)
 
-    payload = {"file_path": rec.get("file_path"), "params": params or {}}
+    payload = {"file_path": _service_file_path(rec.get("file_path")), "params": params or {}}
 
     try:
-        with httpx.Client(timeout=None) as client:
+        with httpx.Client(timeout=None, trust_env=False) as client:
             r = client.post(url, json=payload)
             if r.status_code >= 400:
                 err_msg = None

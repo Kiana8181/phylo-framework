@@ -16,6 +16,6 @@ read -rp "Enter 1/2/3: " choice
 case "$choice" in
   1) exec "$ROOT/scripts/dev-with-docker.sh" ;;
   2) exec "$ROOT/scripts/dev-with-local-r.sh" ;;
-  3) command -v docker >/dev/null 2>&1 || die "Docker not found"; exec docker compose up -d --build ;;
+  3) command -v docker >/dev/null 2>&1 || die "Docker not found"; exec docker compose --profile prod up -d --build ;;
   *) die "Invalid choice" ;;
 esac
