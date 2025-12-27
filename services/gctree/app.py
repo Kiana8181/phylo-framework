@@ -86,7 +86,13 @@ def _env(extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     if extra:
         env.update(extra)
     try:
-        Path(env["XDG_RUNTIME_DIR"]).mkdir(parents=True, exist_ok=True)
+        rt_dir = Path(env["XDG_RUNTIME_DIR"])
+        rt_dir.mkdir(parents=True, exist_ok=True)
+        # ete3/Qt is picky about mode on XDG_RUNTIME_DIR
+        try:
+            rt_dir.chmod(0o700)
+        except Exception:
+            pass
     except Exception:
         pass
     return env
@@ -368,13 +374,45 @@ def render_colored_phylogeny_from_pickle(
     p_path = p_files[0]
     try:
         with p_path.open("rb") as fh:
-            tree = pickle.load(fh)  # CollapsedTree
+            tree_obj = pickle.load(fh)
     except Exception as e:
         logs.append(
             {
                 "step": "coloring_load_pickle",
                 "ok": False,
                 "out": f"Failed to load CollapsedTree pickle {p_path.name}: {e}",
+            }
+        )
+        return None
+
+    # Some runs pickle a CollapsedForest; normalize to a single CollapsedTree
+    try:
+        if hasattr(tree_obj, "feature_colormap"):
+            tree = tree_obj
+        elif hasattr(tree_obj, "sample_tree"):
+            tree = tree_obj.sample_tree()
+            logs.append(
+                {
+                    "step": "coloring_sample_tree",
+                    "ok": True,
+                    "out": "Loaded CollapsedForest pickle; sampled a representative tree for coloring.",
+                }
+            )
+        else:
+            logs.append(
+                {
+                    "step": "coloring_unsupported_pickle",
+                    "ok": False,
+                    "out": f"Loaded {type(tree_obj).__name__} from {p_path.name} but could not obtain a CollapsedTree.",
+                }
+            )
+            return None
+    except Exception as e:
+        logs.append(
+            {
+                "step": "coloring_normalize_tree",
+                "ok": False,
+                "out": f"Failed to normalize pickled object for coloring: {e}",
             }
         )
         return None
@@ -415,7 +453,28 @@ def render_colored_phylogeny_from_pickle(
         scale = (color_scale or "linear").strip() or "linear"
 
         # feature_colormap builds node_name -> color mapping
-        colormap = tree.feature_colormap(feature, cmap=cmap_name, scale=scale)
+        try:
+            colormap = tree.feature_colormap(feature, cmap=cmap_name, scale=scale)
+        except Exception:
+            # Fallback: if log/symlog invalid or vmin/vmax degenerate, retry linear
+            try:
+                colormap = tree.feature_colormap(feature, cmap=cmap_name, scale="linear")
+                logs.append(
+                    {
+                        "step": "coloring_fallback_linear",
+                        "ok": True,
+                        "out": f"feature_colormap failed for scale='{scale}', retried with linear.",
+                    }
+                )
+            except Exception as e:
+                logs.append(
+                    {
+                        "step": "coloring_colormap_failed",
+                        "ok": False,
+                        "out": f"Failed to build feature colormap for feature '{feature}': {e}",
+                    }
+                )
+                return None
 
         colored_svg_path = tmp / f"{outbase}.colored.phylogeny.svg"
         tree.render(str(colored_svg_path), colormap=colormap)

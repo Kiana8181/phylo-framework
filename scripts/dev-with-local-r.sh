@@ -51,8 +51,8 @@ require_envs(){
   local cfg="${CONTRACTS_DIR:-packages/contracts}"
   [[ -d "$ROOT/$cfg" || -d "$cfg" ]] || die "CONTRACTS_DIR not found (got '$cfg'). Put a valid path in ${API_ENV}."
 
-  [[ -n "${METHOD_DOWSER_URL:-}" ]]  || die "METHOD_DOWSER_URL is not set in ${API_ENV}"
-  [[ -n "${METHOD_GCTREE_URL:-}" ]]  || die "METHOD_GCTREE_URL is not set in ${API_ENV} (e.g., http://localhost:8002)"
+  [[ -n "${METHOD_DOWSER_URL:-}" ]]     || die "METHOD_DOWSER_URL is not set in ${API_ENV}"
+  [[ -n "${METHOD_GCTREE_URL:-}" ]]     || die "METHOD_GCTREE_URL is not set in ${API_ENV} (e.g., http://localhost:8002)"
   [[ -n "${METHOD_BREPPHYLO_URL:-}" ]]  || die "METHOD_BREPPHYLO_URL is not set in ${API_ENV} (e.g., http://localhost:8003)"
 
   if ! grep -qE '^NEXT_PUBLIC_API_BASE_URL=' "$WEB_ENV"; then
@@ -69,9 +69,8 @@ resolve_contracts_abs(){
     abs="$ROOT/$cfg"
   fi
   abs="$(python3 - <<PY 2>/dev/null || true
-import os,sys
-p=os.path.normpath(os.path.abspath("$abs"))
-print(p)
+import os
+print(os.path.normpath(os.path.abspath("$abs")))
 PY
 )"
   [[ -d "$abs" ]] || die "Resolved contracts dir does not exist: $abs"
@@ -105,6 +104,30 @@ Either upgrade npm (npm i -g npm@latest) or set:
     echo "${BLU}==> Building @phylo/contracts (workspace)${CLR}"
     (cd "$ROOT" && npm -w @phylo/contracts run build) || echo "${YLW}(contracts build skipped or failed)${CLR}"
   fi
+}
+
+# ---- NEW: ensure sitecustomize patch is loaded via PYTHONPATH (no copying) ----
+ensure_gctree_sitecustomize_on_pythonpath(){
+  local sc="$GCTREE_DIR/sitecustomize.py"
+  if [[ ! -f "$sc" ]]; then
+    echo "${YLW}WARN:${CLR} No sitecustomize.py found at $sc. ete3 render patch will not be applied."
+    return 0
+  fi
+
+  # Prepend services/gctree so Python auto-imports sitecustomize.py from there.
+  # This affects: uvicorn, gctree CLI, and any python spawned from this shell.
+  export PYTHONPATH="$GCTREE_DIR${PYTHONPATH:+:$PYTHONPATH}"
+
+  # Optional: prove it is active (non-fatal; helpful for debugging)
+  python - <<'PY' || true
+import sys
+print("PYTHONPATH[0] =", sys.path[0])
+try:
+    import sitecustomize  # noqa: F401
+    print("OK: sitecustomize imported from:", getattr(sitecustomize, "__file__", "<unknown>"))
+except Exception as e:
+    print("WARN: sitecustomize import failed:", e)
+PY
 }
 
 echo "${BLU}==> Checking prerequisites${CLR}"
@@ -172,10 +195,15 @@ echo "${BLU}==> Installing GCtree service requirements${CLR}"
 [[ -f "$GCTREE_DIR/requirements.txt" ]] || die "Missing $GCTREE_DIR/requirements.txt"
 python -m pip install -r "$GCTREE_DIR/requirements.txt"
 
+# NEW: no copying into site-packages. Ensure patch is loaded via PYTHONPATH.
+echo "${BLU}==> Enabling ete3 render patch via PYTHONPATH (sitecustomize)${CLR}"
+ensure_gctree_sitecustomize_on_pythonpath
+
 echo "${BLU}==> Checking GCtree CLIs on PATH (from the venv)${CLR}"
 need_cmd gctree
 need_cmd deduplicate
 need_cmd mkconfig
+
 # DNAPARS is system-provided; warn if absent. GCtree can still run parts without it.
 if ! command -v dnapars >/dev/null 2>&1 && ! command -v phylip >/dev/null 2>&1; then
   echo "${YLW}WARN:${CLR} Neither 'dnapars' nor 'phylip' wrapper found on PATH."
