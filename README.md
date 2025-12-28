@@ -4,7 +4,7 @@ A one-page UI to run phylogeny/lineage tree methods behind a simple orchestrator
 
 - **Web**: Next.js (apps/web)
 - **API**: FastAPI (apps/api)
-- **Methods**: pluggable microservices (R/plumber for **Dowser** provided)
+- **Methods**: pluggable microservices (Dowser, GCtree, BrepPhylo included)
 - **Contracts**: JSON schemas (packages/contracts) used by both UI & API to drive parameters, validation, and results
 
 > **Heads-up**: Running with Docker for the first time is **time-consuming** because large R images and packages need to be downloaded and built.
@@ -99,6 +99,8 @@ Pick:
 |     Web | http://localhost:3000 | 3000 |
 |     API | http://localhost:8000 | 8000 |
 |  Dowser | http://localhost:8001 | 8001 |
+| GCtree  | http://localhost:8002 | 8002 |
+|BrepPhylo| http://localhost:8003 | 8003 |
 
 > Ensure these ports are **free** before running. The helper scripts will check and exit with a clear error if not.
 
@@ -196,6 +198,8 @@ Create and fill these files (adjust ports/paths if you changed them).
 ```env
 CONTRACTS_DIR=packages/contracts
 METHOD_DOWSER_URL=http://localhost:8001
+METHOD_GCTREE_URL=http://localhost:8002
+METHOD_BREPPHYLO_URL=http://localhost:8003
 CORS_ORIGINS=http://localhost:3000
 ```
 
@@ -222,7 +226,7 @@ pip install -r apps/api/requirements.txt
 npm -w @phylo/contracts run build
 ```
 
-### 3) Start a method service (Dowser) — pick ONE option
+### 3.1) Start a method service (Dowser) — pick ONE option
 
 #### Option A — Docker (recommended; no local R needed)
 
@@ -259,6 +263,87 @@ Rscript -e 'setwd("services/dowser"); Sys.setenv(CONTRACTS_DIR="../../packages/c
 
 Keep this terminal open; it’s your method server.
 
+### 3.2) Start a method service (GCtree) — pick ONE option
+
+#### Option A — Docker (recommended; no local PHYLIP needed)
+
+Build the image **from the gctree folder**, then run it **from repo root**:
+
+```bash
+# build
+cd services/gctree
+docker build -t phylo-gctree:dev .
+
+# run (from REPO ROOT)
+cd ../..
+docker run --rm -p 8002:8002   -v "$(pwd)/packages/contracts:/contracts:ro"   -e CONTRACTS_DIR=/contracts   phylo-gctree:dev
+```
+
+**Windows PowerShell** (repo root):
+
+```powershell
+docker run --rm -p 8002:8002 `
+  -v ${PWD}/packages/contracts:/contracts:ro `
+  -e CONTRACTS_DIR=/contracts `
+  phylo-gctree:dev
+```
+
+This exposes GCtree at **http://localhost:8002** with contracts mounted read-only.
+
+> If you changed the service port in code/env, adjust `-p 8002:8002` accordingly.
+
+#### Option B — Local Python (requires Python 3.10+ and PHYLIP `dnapars`)
+
+From the **repo root**:
+
+```bash
+# 1) Install service deps
+pip install -r services/gctree/requirements.txt
+
+# --- Choose ONE way to get 'dnapars' ---
+
+# Ubuntu/Debian:
+# (universe repo needed; if unavailable, use conda option below)
+sudo apt-get update && sudo apt-get install -y phylip
+
+# OR via conda/mamba (any OS):
+#   - you can use existing base conda, no need to put GCtree itself in conda
+#   - this just provides the 'dnapars' binary
+# mamba install -c bioconda phylip
+# conda install -c bioconda phylip
+
+# 4) (Optional) sanity-check tools
+gctree --help
+dnapars 2>/dev/null || dnapars -help
+
+# 5) Run the service
+export CONTRACTS_DIR="$(pwd)/packages/contracts"
+python -m uvicorn services.gctree.app:app --host 0.0.0.0 --port 8002
+```
+
+**Windows PowerShell**:
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+
+pip install -r services/gctree/requirements.txt
+pip install gctree
+
+# Prefer conda on Windows for PHYLIP:
+# conda install -c bioconda phylip
+
+$env:CONTRACTS_DIR = (Join-Path (Get-Location) "packages\contracts")
+python -m uvicorn services.gctree.app:app --host 0.0.0.0 --port 8002
+```
+
+Open **http://localhost:8002** when it’s running.
+
+> **Notes**
+>
+> - If you see `Parsed 0 from outfile but -1 expected!` or `No trees found in 'outfile'`, it usually means `dnapars` didn’t produce a valid `outfile` (bad input, wrong working dir, or `dnapars` not found in PATH). Verify `dnapars` is installed and accessible, and that inputs exist.
+> - If your service module isn’t `services.gctree.app:app`, replace it with your actual ASGI path (e.g., `services.gctree.main:app`).
+
 ### 4) Start the API (FastAPI)
 
 In a **new terminal** (repo root):
@@ -290,6 +375,8 @@ Open **http://localhost:3000** and you should see the app. The UI will call the 
 - `CORS_ORIGINS` — dev default includes `http://localhost:3000`
 - `METHOD_DOWSER_URL` — URL of Dowser service, e.g. `http://localhost:8001` in dev
 - `NEXT_PUBLIC_API_BASE_URL` — Web UI → API base URL (set in `apps/web/.env*`)
+- `RUNS_DIR_SERVICE` — optional; when API runs on the host but methods run in Docker, set to the in-container mount (e.g., `/runtime/runs`) so method services can read uploaded files.
+- `IGPHYML_BIN` / `IGPHYML_MOTIFS` — for BrepPhylo; in Docker images they default to `/usr/local/share/igphyml/src/igphyml` and `/usr/local/share/igphyml/src/motifs`.
 
 ---
 

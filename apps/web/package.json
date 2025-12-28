@@ -10,7 +10,9 @@
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.1",
+    "@phylo/contracts": "0.1.0",
     "@radix-ui/react-label": "^2.1.7",
+    "@radix-ui/react-progress": "^1.1.7",
     "@radix-ui/react-select": "^2.2.5",
     "@radix-ui/react-slider": "^1.3.5",
     "@radix-ui/react-slot": "^1.2.3",
@@ -28,8 +30,7 @@
     "react-hook-form": "^7.62.0",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.3.1",
-    "zod": "^4.0.16",
-    "@phylo/contracts": "0.1.0"
+    "zod": "^4.0.16"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",

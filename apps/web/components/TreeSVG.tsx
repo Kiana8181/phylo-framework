@@ -1,10 +1,9 @@
-// apps/web/components/TreeSVG.tsx
 "use client";
 
 import { useMemo, useRef, useState } from "react";
 import { parseNewick, NewickNode } from "@/lib/newick";
 
-type Anno = { label: string; c_call?: string };
+type Anno = { label: string } & Record<string, any>;
 
 type Props = {
   newick: string;
@@ -13,23 +12,17 @@ type Props = {
   filename?: string;
   fontSize?: number;
   strokeWidth?: number;
-  showLabels?: boolean; // default false
+  showLabels?: boolean;
   annotations?: Anno[];
   colorMap?: Record<string, string>;
+  colorBy?: string | null;
+  unknownValue?: string;
 };
 
 type LNode = NewickNode & { parent?: LNode; x?: number; y?: number };
 
-const DEFAULT_COLORS: Record<string, string> = {
-  Germline: "#222222",
-  IGHA2: "#1abc9c",
-  IGHG1: "#e67e22",
-  IGHG2: "#34495e",
-  IGHG3: "#e91e63",
-  IGHG4: "#2ecc71",
-};
+/** ---- Helpers ---- */
 
-// Belt & suspenders: clean up R's printed vectors like `[1] "..."`
 function sanitizeNewick(s: string): string {
   let x = s.trim();
   x = x.replace(/^\[\d+\]\s*"/, "");
@@ -38,10 +31,88 @@ function sanitizeNewick(s: string): string {
   return x;
 }
 
-// lightweight text-width estimator (good enough for margin sizing)
 function estimateTextWidth(label: string, fontSize: number) {
-  // ~0.6em per character is a decent approximation for sans fonts
   return Math.ceil(fontSize * 0.6 * (label?.length ?? 0));
+}
+
+const GOLDEN_ANGLE = 137.50776405003785;
+
+const SAT_BANDS = [74, 62, 82, 55] as const;
+const LIG_BANDS = [45, 58, 36, 66] as const;
+
+function colorByIndex(k: number): string {
+  const hue = (k * GOLDEN_ANGLE) % 360;
+  const sat = SAT_BANDS[k % SAT_BANDS.length];
+  const lig = LIG_BANDS[Math.floor(k / SAT_BANDS.length) % LIG_BANDS.length];
+
+  return `hsl(${hue.toFixed(3)}, ${sat}%, ${lig}%)`;
+}
+
+function buildColorMapDistinct(
+  list: Anno[] | undefined,
+  field: string | null,
+  unknownValue: string
+): Record<string, string> {
+  const map: Record<string, string> = {};
+  if (!list?.length || !field) return map;
+
+  const set = new Set<string>();
+  for (const a of list) {
+    const v = (a as any)?.[field];
+    if (typeof v === "string") {
+      const vv = v.trim();
+      if (vv && vv !== "Germline" && vv !== unknownValue) {
+        set.add(vv);
+      }
+    }
+  }
+  const values = Array.from(set).sort((a, b) => a.localeCompare(b, "en"));
+
+  values.forEach((v, i) => {
+    map[v] = colorByIndex(i);
+  });
+
+  map["Germline"] = "#000000";
+  map[unknownValue] = "#000000";
+  return map;
+}
+
+function buildTipTitle(
+  label: string,
+  anno: Anno | undefined,
+  colorField: string | null
+): string {
+  const lines: string[] = [];
+
+  // 1) display label
+  if (label) lines.push(label);
+
+  if (!anno) return lines.join("\n");
+
+  // 2) sequence_id (if present and not duplicate of label)
+  const seqId = String(anno.sequence_id ?? "").trim();
+  if (seqId && seqId !== label) lines.push(`sequence_id: ${seqId}`);
+
+  // 3) colorBy field (if set)
+  if (colorField) {
+    const cval = String(anno[colorField] ?? "").trim();
+    if (cval) lines.push(`${colorField}: ${cval}`);
+  }
+
+  // 4) all remaining fields (sorted), excluding label + sequence_id + colorField
+  const skip = new Set<string>(["label", "sequence_id"]);
+  if (colorField) skip.add(colorField);
+
+  const extras = Object.keys(anno)
+    .filter((k) => !skip.has(k))
+    .sort((a, b) => a.localeCompare(b, "en"));
+
+  for (const k of extras) {
+    const v = String(anno[k] ?? "").trim();
+    if (v) lines.push(`${k}: ${v}`);
+  }
+
+  return lines.join("\n");
 }
 
 export default function TreeSVG({
@@ -54,38 +125,69 @@ export default function TreeSVG({
   showLabels: showLabelsProp = false,
   annotations,
   colorMap,
+  colorBy,
+  unknownValue,
 }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [showLabels, setShowLabels] = useState<boolean>(showLabelsProp);
 
-  // Annotation lookup by leaf label
+  const coloringEnabled = !!colorBy;
+  const colorField = colorBy || null;
+  const unknown = (unknownValue && unknownValue.trim()) || "unknown";
+
   const annoByLabel = useMemo(() => {
-    const m: Record<string, { c_call?: string }> = {};
+    const m: Record<string, Anno> = {};
     (annotations ?? []).forEach((a) => {
-      if (a?.label) m[a.label] = { c_call: a.c_call };
+      if (a?.label) m[a.label] = a;
     });
     return m;
   }, [annotations]);
 
-  const colors = { ...DEFAULT_COLORS, ...(colorMap ?? {}) };
+  const colors = useMemo(() => {
+    if (!coloringEnabled) return {};
+    if (colorMap && Object.keys(colorMap).length) {
+      return {
+        ...colorMap,
+        Germline: "#000000",
+        [unknown]: "#000000",
+      };
+    }
+    return buildColorMapDistinct(annotations, colorField, unknown);
+  }, [coloringEnabled, colorMap, annotations, colorField, unknown]);
+
+  const leafCount = useMemo(() => {
+    try {
+      const root = parseNewick(sanitizeNewick(newick)) as LNode;
+      let cnt = 0;
+      (function walk(n: LNode) {
+        if (!n.children || n.children.length === 0) cnt += 1;
+        else n.children.forEach((c) => walk(c as LNode));
+      })(root);
+      return cnt;
+    } catch {
+      return 0;
+    }
+  }, [newick]);
+
+  const tipGap = 14;
+  const minBody = Math.max(0, (leafCount - 1) * tipGap);
+  const computedHeight = Math.max(height, 20 + minBody + 20);
 
   const layout = useMemo(() => {
     const input = sanitizeNewick(newick);
     const root = parseNewick(input) as LNode;
 
-    // We'll compute leaves early to size the label margin if needed
     const tmpLeaves: LNode[] = [];
     (function collectLeaves(n: LNode) {
       if (!n.children || n.children.length === 0) tmpLeaves.push(n);
       else n.children.forEach((c) => collectLeaves(c as LNode));
     })(root);
 
-    // dynamic right margin when labels are visible
     const longestLabelLen =
       tmpLeaves.length === 0
         ? 0
         : Math.max(...tmpLeaves.map((n) => (n.name ?? "").length));
-    const labelPad = 10; // space between plot and labels
+    const labelPad = 10;
     const labelArea =
       showLabels && longestLabelLen
         ? Math.max(
@@ -96,13 +198,11 @@ export default function TreeSVG({
 
     const margin = { top: 20, right: labelArea, bottom: 20, left: 20 };
     const innerW = Math.max(1, width - margin.left - margin.right);
-    const innerH = Math.max(1, height - margin.top - margin.bottom);
+    const innerH = Math.max(1, computedHeight - margin.top - margin.bottom);
 
-    // y positions (equally spaced)
     const yStep = tmpLeaves.length > 1 ? innerH / (tmpLeaves.length - 1) : 0;
     tmpLeaves.forEach((leaf, i) => (leaf.y = margin.top + i * yStep));
 
-    // longest path length for x scaling
     function pathLen(n: LNode): number {
       const len = n.length ?? 0;
       if (!n.children || n.children.length === 0) return len;
@@ -111,7 +211,6 @@ export default function TreeSVG({
     const maxDepth = pathLen(root) || 1;
     const scaleX = innerW / maxDepth;
 
-    // assign x/y recursively
     function assignXY(n: LNode, parent?: LNode) {
       n.parent = parent;
       const parentX = parent?.x ?? margin.left;
@@ -120,14 +219,13 @@ export default function TreeSVG({
       if (n.children && n.children.length) {
         n.children.forEach((c) => assignXY(c as LNode, n));
         const ys = n.children.map((c) => (c as LNode).y ?? 0);
-        n.y = ys.reduce((a, b) => a + b, 0) / ys.length; // internal at avg y
+        n.y = ys.reduce((a, b) => a + b, 0) / ys.length;
       } else if (typeof n.y !== "number") {
-        n.y = margin.top; // single-node tree edge-case
+        n.y = margin.top;
       }
     }
     assignXY(root, undefined);
 
-    // Align leftmost to left margin
     function minX(n: LNode): number {
       let v = n.x ?? 0;
       (n.children ?? []).forEach((c) => {
@@ -144,7 +242,6 @@ export default function TreeSVG({
       })(root);
     }
 
-    // Build edges (rectangular)
     const edges: Array<{ x1: number; y1: number; x2: number; y2: number }> = [];
     function walkEdges(n: LNode) {
       if (!n.children || !n.children.length) return;
@@ -161,21 +258,18 @@ export default function TreeSVG({
     }
     walkEdges(root);
 
-    // leaf nodes list
     const leafNodes: LNode[] = [];
     (function collect(n: LNode) {
       if (!n.children || !n.children.length) leafNodes.push(n);
       else n.children.forEach((c) => collect(c as LNode));
     })(root);
 
-    // label anchor x: right outside plotting area so labels never sit "inside" the plot
-    const plotRightX = width - margin.right; // end of branches
+    const plotRightX = width - margin.right;
     const labelX = plotRightX + labelPad;
 
     return { root, edges, leafNodes, margin, labelX };
-  }, [newick, width, height, fontSize, showLabels]);
+  }, [newick, width, computedHeight, fontSize, showLabels]);
 
-  // Downloads
   function downloadSVG() {
     const svg = svgRef.current;
     if (!svg) return;
@@ -199,11 +293,11 @@ export default function TreeSVG({
     img.onload = () => {
       const canvas = document.createElement("canvas");
       canvas.width = width;
-      canvas.height = height;
+      canvas.height = computedHeight;
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
       ctx.fillStyle = "white";
-      ctx.fillRect(0, 0, width, height);
+      ctx.fillRect(0, 0, width, computedHeight);
       ctx.drawImage(img, 0, 0);
       const png = canvas.toDataURL("image/png");
       const a = document.createElement("a");
@@ -226,11 +320,11 @@ export default function TreeSVG({
   }
 
   return (
-    <div className="w-full">
+    <div className="w-full overflow-auto">
       <svg
         ref={svgRef}
         width={width}
-        height={height}
+        height={computedHeight}
         className="rounded border bg-background text-foreground"
         role="img"
       >
@@ -245,40 +339,67 @@ export default function TreeSVG({
           ))}
         </g>
 
-        {/* tip points (colored by c_call / Germline) */}
+        {/* tips */}
         <g>
           {layout.leafNodes.map((n, i) => {
             const label = n.name ?? "";
-            const call = annoByLabel[label]?.c_call ?? "Germline";
-            const fill = colors[call] ?? "#444";
-            return <circle key={i} cx={n.x!} cy={n.y!} r={3} fill={fill} />;
+            const anno = annoByLabel[label];
+
+            let fill = "#000000";
+            if (coloringEnabled && colorField) {
+              const call = (anno?.[colorField] as string) || "";
+              if (call && call !== "Germline" && call !== unknown) {
+                fill = colors[call] ?? "#000000";
+              }
+            }
+
+            const title = buildTipTitle(label, anno, colorField);
+
+            return (
+              <circle
+                key={i}
+                cx={n.x!}
+                cy={n.y!}
+                r={3}
+                fill={fill}
+                style={{ cursor: "pointer" }}
+              >
+                <title>{title}</title>
+              </circle>
+            );
           })}
         </g>
 
-        {/* labels outside + leader lines */}
+        {/* labels */}
         {showLabels && (
           <g fontSize={fontSize} fill="currentColor">
-            {layout.leafNodes.map((n, i) => (
-              <g key={i}>
-                <line
-                  x1={n.x!}
-                  y1={n.y!}
-                  x2={Math.round(layout.labelX) - 4}
-                  y2={n.y!}
-                  stroke="currentColor"
-                  strokeWidth={0.5}
-                  opacity={0.4}
-                  vectorEffect="non-scaling-stroke"
-                />
-                <text
-                  x={Math.round(layout.labelX)}
-                  y={n.y!}
-                  dominantBaseline="middle" // <-- aligns text vertically to the tip
-                >
-                  {n.name ?? ""}
-                </text>
-              </g>
-            ))}
+            {layout.leafNodes.map((n, i) => {
+              const label = n.name ?? "";
+              const anno = annoByLabel[label];
+              const title = buildTipTitle(label, anno, colorField);
+              return (
+                <g key={i}>
+                  <line
+                    x1={n.x!}
+                    y1={n.y!}
+                    x2={Math.round(layout.labelX) - 4}
+                    y2={n.y!}
+                    stroke="currentColor"
+                    strokeWidth={0.5}
+                    opacity={0.4}
+                    vectorEffect="non-scaling-stroke"
+                  />
+                  <text
+                    x={Math.round(layout.labelX)}
+                    y={n.y!}
+                    dominantBaseline="middle"
+                  >
+                    {label}
+                    <title>{title}</title>
+                  </text>
+                </g>
+              );
+            })}
           </g>
         )}
       </svg>

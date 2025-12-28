@@ -1,0 +1,9 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.9
+gctree==4.3.0
+ete3==3.1.2
+PyQt5==5.15.11
+numpy==2.2.6
+scipy==1.15.3
+SCons>=4.5.2
