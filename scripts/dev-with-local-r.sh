@@ -4,6 +4,7 @@ set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PLUMBER_DIR="$ROOT/services/dowser"
 GCTREE_DIR="$ROOT/services/gctree"
+BREP_DIR="$ROOT/services/brepphylo"
 
 RED=$'\033[31m'; GRN=$'\033[32m'; YLW=$'\033[33m'; BLU=$'\033[34m'; CLR=$'\033[0m'
 die(){ echo "${RED}ERROR:${CLR} $*" >&2; exit 1; }
@@ -50,15 +51,16 @@ require_envs(){
   local cfg="${CONTRACTS_DIR:-packages/contracts}"
   [[ -d "$ROOT/$cfg" || -d "$cfg" ]] || die "CONTRACTS_DIR not found (got '$cfg'). Put a valid path in ${API_ENV}."
 
-  [[ -n "${METHOD_DOWSER_URL:-}" ]]  || die "METHOD_DOWSER_URL is not set in ${API_ENV}"
-  [[ -n "${METHOD_GCTREE_URL:-}" ]]  || die "METHOD_GCTREE_URL is not set in ${API_ENV} (e.g., http://localhost:8002)"
+  [[ -n "${METHOD_DOWSER_URL:-}" ]]     || die "METHOD_DOWSER_URL is not set in ${API_ENV}"
+  [[ -n "${METHOD_GCTREE_URL:-}" ]]     || die "METHOD_GCTREE_URL is not set in ${API_ENV} (e.g., http://localhost:8002)"
+  [[ -n "${METHOD_BREPPHYLO_URL:-}" ]]  || die "METHOD_BREPPHYLO_URL is not set in ${API_ENV} (e.g., http://localhost:8003)"
 
   if ! grep -qE '^NEXT_PUBLIC_API_BASE_URL=' "$WEB_ENV"; then
     die "NEXT_PUBLIC_API_BASE_URL is missing in ${WEB_ENV}"
   fi
 }
 
-resolve_contracts_rel_to_plumber(){
+resolve_contracts_abs(){
   local cfg="${CONTRACTS_DIR:-packages/contracts}"
   local abs
   if [[ "$cfg" = /* ]] || [[ "$cfg" =~ ^[A-Za-z]:[\\/].* ]]; then
@@ -67,25 +69,20 @@ resolve_contracts_rel_to_plumber(){
     abs="$ROOT/$cfg"
   fi
   abs="$(python3 - <<PY 2>/dev/null || true
-import os,sys
-p=os.path.normpath(os.path.abspath("$abs"))
-print(p)
+import os
+print(os.path.normpath(os.path.abspath("$abs")))
 PY
 )"
   [[ -d "$abs" ]] || die "Resolved contracts dir does not exist: $abs"
+  echo "$abs"
+}
 
-  local rel
-  if command -v realpath >/dev/null 2>&1; then
-    rel="$(realpath --relative-to="$PLUMBER_DIR" "$abs" 2>/dev/null || true)"
-  fi
-  if [[ -z "$rel" ]]; then
-    rel="$(python3 - <<PY
+relpath_from_dir(){
+  local target="$1"; local base="$2"
+  python3 - <<PY
 import os
-print(os.path.relpath("$abs", "$PLUMBER_DIR"))
+print(os.path.relpath("$target", "$base"))
 PY
-)"
-  fi
-  echo "$rel"
 }
 
 ensure_node_deps_and_build_contracts(){
@@ -109,19 +106,60 @@ Either upgrade npm (npm i -g npm@latest) or set:
   fi
 }
 
+# ---- NEW: ensure sitecustomize patch is loaded via PYTHONPATH (no copying) ----
+ensure_gctree_sitecustomize_on_pythonpath(){
+  local sc="$GCTREE_DIR/sitecustomize.py"
+  if [[ ! -f "$sc" ]]; then
+    echo "${YLW}WARN:${CLR} No sitecustomize.py found at $sc. ete3 render patch will not be applied."
+    return 0
+  fi
+
+  # Prepend services/gctree so Python auto-imports sitecustomize.py from there.
+  # This affects: uvicorn, gctree CLI, and any python spawned from this shell.
+  export PYTHONPATH="$GCTREE_DIR${PYTHONPATH:+:$PYTHONPATH}"
+
+  # Optional: prove it is active (non-fatal; helpful for debugging)
+  python - <<'PY' || true
+import sys
+print("PYTHONPATH[0] =", sys.path[0])
+try:
+    import sitecustomize  # noqa: F401
+    print("OK: sitecustomize imported from:", getattr(sitecustomize, "__file__", "<unknown>"))
+except Exception as e:
+    print("WARN: sitecustomize import failed:", e)
+PY
+}
+
 echo "${BLU}==> Checking prerequisites${CLR}"
 need_cmd Rscript; need_cmd node; need_cmd npm; need_cmd python3; need_cmd curl
 
-for p in 3000 8000 8001 8002; do
+for p in 3000 8000 8001 8002 8003; do
   port_busy "$p" && die "Port $p is not free."
 done
 
 require_envs
 
+BREP_ENV="$(find_env_file "$BREP_DIR")" || die "BrepPhylo env not found. Create services/brepphylo/.env (or .env.local)."
+echo "${BLU}==> Loading BrepPhylo env: ${BREP_ENV}${CLR}"
+set -a; source "$BREP_ENV"; set +a
+if [[ -z "${IGPHYML_BIN:-}" ]]; then
+  echo "${YLW}WARN:${CLR} IGPHYML_BIN not set in ${BREP_ENV}; defaulting to /usr/local/bin/igphyml"
+  export IGPHYML_BIN="/usr/local/bin/igphyml"
+fi
+if [[ -z "${IGPHYML_MOTIFS:-}" ]]; then
+  echo "${YLW}WARN:${CLR} IGPHYML_MOTIFS not set in ${BREP_ENV}; defaulting to /usr/local/share/igphyml/src/motifs"
+  export IGPHYML_MOTIFS="/usr/local/share/igphyml/src/motifs"
+  export IGPHYML_PATH="$IGPHYML_MOTIFS"
+fi
+
+ABS_CONTRACTS="$(resolve_contracts_abs)"
+R_CONTRACTS_REL="$(relpath_from_dir "$ABS_CONTRACTS" "$PLUMBER_DIR")"
+BREP_CONTRACTS_REL="$(relpath_from_dir "$ABS_CONTRACTS" "$BREP_DIR")"
+
 echo "${BLU}==> Checking required R packages${CLR}"
 set +e
 MISSING=$(Rscript --vanilla -e 'suppressPackageStartupMessages(suppressWarnings({
-  pkgs <- c("plumber","dowser","alakazam","shazam","ggtree","ape","jsonlite","jsonvalidate","sodium")
+  pkgs <- c("plumber","dowser","alakazam","shazam","ggtree","ape","jsonlite","jsonvalidate","sodium","BrepPhylo","Biostrings","igraph")
   miss <- pkgs[!sapply(pkgs, require, character.only=TRUE, quietly=TRUE)]
   if (length(miss)>0) { cat(paste(miss, collapse=",")); quit(status=10) }
 }))' 2>/dev/null)
@@ -130,13 +168,6 @@ set -e
 [[ $STATUS -eq 0 ]] || die "Missing R packages: ${MISSING:-unknown}. See README for install commands."
 echo "${GRN}All required R packages are present.${CLR}"
 
-R_CONTRACTS_REL="$(resolve_contracts_rel_to_plumber)"
-
-ABS_CONTRACTS="$(cd "$PLUMBER_DIR" && python3 - <<PY
-import os
-print(os.path.normpath(os.path.abspath(os.path.join("$PLUMBER_DIR","$R_CONTRACTS_REL"))))
-PY
-)"
 [[ -f "$ABS_CONTRACTS/methods/dowser/result.schema.json" ]] || \
   die "Expected schema not found at: $ABS_CONTRACTS/methods/dowser/result.schema.json"
 [[ -f "$ABS_CONTRACTS/methods/gctree/param.schema.json" ]] || \
@@ -147,7 +178,7 @@ Rscript --vanilla -e "setwd('$PLUMBER_DIR'); Sys.setenv(CONTRACTS_DIR='${R_CONTR
   >/tmp/dowser.log 2>&1 &
 R_PID=$!
 
-trap 'echo; echo "${YLW}Shutting down...${CLR}"; kill $R_PID $API_PID ${GCTREE_PID:-} 2>/dev/null || true' EXIT
+trap 'echo; echo "${YLW}Shutting down...${CLR}"; kill $R_PID $API_PID ${GCTREE_PID:-} ${BREP_PID:-} 2>/dev/null || true' EXIT
 
 wait_http 8001 || { echo "${YLW}Last 200 R logs:${CLR}"; tail -n 200 /tmp/dowser.log || true; die "Dowser failed readiness check"; }
 echo "${GRN}Dowser is up on http://localhost:8001${CLR}"
@@ -164,10 +195,15 @@ echo "${BLU}==> Installing GCtree service requirements${CLR}"
 [[ -f "$GCTREE_DIR/requirements.txt" ]] || die "Missing $GCTREE_DIR/requirements.txt"
 python -m pip install -r "$GCTREE_DIR/requirements.txt"
 
+# NEW: no copying into site-packages. Ensure patch is loaded via PYTHONPATH.
+echo "${BLU}==> Enabling ete3 render patch via PYTHONPATH (sitecustomize)${CLR}"
+ensure_gctree_sitecustomize_on_pythonpath
+
 echo "${BLU}==> Checking GCtree CLIs on PATH (from the venv)${CLR}"
 need_cmd gctree
 need_cmd deduplicate
 need_cmd mkconfig
+
 # DNAPARS is system-provided; warn if absent. GCtree can still run parts without it.
 if ! command -v dnapars >/dev/null 2>&1 && ! command -v phylip >/dev/null 2>&1; then
   echo "${YLW}WARN:${CLR} Neither 'dnapars' nor 'phylip' wrapper found on PATH."
@@ -206,6 +242,15 @@ GCTREE_PID=$!
 
 wait_http 8002 || { echo "${YLW}Last 200 GCtree logs:${CLR}"; tail -n 200 /tmp/gctree.log || true; die "GCtree failed readiness check"; }
 echo "${GRN}GCtree is up on http://localhost:8002${CLR}"
+
+# --- BrepPhylo micro (R/plumber) ---
+echo "${BLU}==> Starting BrepPhylo (R/plumber) on :8003${CLR}"
+Rscript --vanilla -e "setwd('$BREP_DIR'); Sys.setenv(CONTRACTS_DIR='${BREP_CONTRACTS_REL}', STRICT_CONTRACT_ROUTES='true'); pr <- plumber::plumb('plumber.R'); pr\$run(host='0.0.0.0', port=8003)" \
+  >/tmp/brepphylo.log 2>&1 &
+BREP_PID=$!
+
+wait_http 8003 || { echo "${YLW}Last 200 BrepPhylo logs:${CLR}"; tail -n 200 /tmp/brepphylo.log || true; die "BrepPhylo failed readiness check"; }
+echo "${GRN}BrepPhylo is up on http://localhost:8003${CLR}"
 
 echo "${BLU}==> Starting Next.js dev on :3000${CLR}"
 (cd "$ROOT/apps/web" && npm run dev)

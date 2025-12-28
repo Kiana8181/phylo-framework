@@ -6,11 +6,7 @@ import RunParameters from "@/components/phylo/RunParameters";
 import RunProgress from "@/components/phylo/RunProgress";
 import TreesCarousel from "@/components/phylo/TreesCarousel";
 import { useMethods, useMethodSpec } from "@/features/methods/hooks";
-import {
-  useCreateRun,
-  useRunResult,
-  useRunStatus,
-} from "@/features/runs/hooks";
+import { useRunResult, useRunStatus } from "@/features/runs/hooks";
 import { cleanNewick } from "@/lib/newick";
 import type { MethodInfo } from "@phylo/contracts";
 import { useEffect, useMemo, useState } from "react";
@@ -23,7 +19,6 @@ export default function Home() {
   const [files, setFiles] = useState<File[]>([]);
   const [runId, setRunId] = useState<string | null>(null);
 
-  const createRun = useCreateRun();
   const { data: status } = useRunStatus(runId ?? undefined);
   const resultEnabled = status?.status === "DONE" && !!runId;
   const { data: result } = useRunResult(runId ?? undefined, resultEnabled);
@@ -40,6 +35,11 @@ export default function Home() {
   useEffect(() => {
     if (status?.status === "ERROR") setRunId(null);
   }, [status]);
+
+  const svgColorBy: string | undefined = result?.stats?.tip_states_capped
+    ? undefined
+    : result?.stats?.tip_color_by;
+  const svgUnknown = result?.stats?.unknown_value ?? "unknown";
 
   return (
     <main className="mx-auto max-w-6xl p-6 space-y-8">
@@ -74,52 +74,7 @@ export default function Home() {
           spec={spec}
           files={files}
           onFiles={setFiles}
-          onSubmit={async (params) => {
-            try {
-              const { notify } = await import("@/lib/notify");
-
-              const requiresFile = !!spec?.uiHints?.requiresFile;
-              const maxFiles = spec?.uiHints?.maxFiles ?? 1;
-
-              if (requiresFile && (!files || files.length === 0)) {
-                notify.error(
-                  "File required",
-                  "Please attach a file for this method."
-                );
-                return;
-              }
-              if (maxFiles === 1 && files && files.length > 1) {
-                notify.error(
-                  "Only one file allowed",
-                  "Please attach exactly one file."
-                );
-                return;
-              }
-              const fd = new FormData();
-              fd.set("params", JSON.stringify(params));
-
-              if (files && files.length) {
-                if (maxFiles === 1) {
-                  const f = files[0];
-                  fd.set("file", f, f.name);
-                } else {
-                  files.forEach((f) => fd.append("file", f, f.name));
-                }
-              }
-
-              setRunId(null);
-
-              const res = await createRun.mutateAsync({
-                methodId: spec.id,
-                formData: fd,
-              });
-
-              setRunId(res.run_id);
-            } catch (e: any) {
-              const { notify } = await import("@/lib/notify");
-              notify.error("Run failed", e?.message ?? "Unknown error");
-            }
-          }}
+          onSubmitDone={(id) => setRunId(id)}
         />
       )}
 
@@ -136,13 +91,30 @@ export default function Home() {
       {/* Results */}
       {result && (
         <section className="space-y-6">
-          <ResultsSummary stats={result?.stats} cloneRows={cloneRows} />
+          <ResultsSummary
+            stats={result?.stats}
+            cloneRows={cloneRows}
+            artifact_zip_b64={result?.artifact_zip_b64}
+            artifact_name={result?.artifact_name || ""}
+          />
+
+          {/* backend warnings */}
+          {Array.isArray((result as any)?.warnings) &&
+            (result as any).warnings.length > 0 && (
+              <div className="rounded border p-3 bg-yellow-50 text-yellow-900 text-sm space-y-1">
+                {(result as any).warnings.map((w: string, i: number) => (
+                  <div key={i}>• {w}</div>
+                ))}
+              </div>
+            )}
 
           <TreesCarousel
             trees={result.trees ?? []}
             figures={result.figures}
             annotations={result.annotations}
             cleanNewick={cleanNewick}
+            colorBy={svgColorBy}
+            unknownValue={svgUnknown}
           />
 
           {/* Raw Newick (optional) */}
@@ -158,6 +130,47 @@ export default function Home() {
               ))}
             </div>
           </details>
+
+          {/* Backend Logs (optional) */}
+          {Array.isArray(result.logs) && result.logs.length > 0 && (
+            <details className="rounded border p-3 bg-card/50">
+              <summary className="cursor-pointer text-sm font-medium">
+                Show model logs
+              </summary>
+              <div className="mt-2 max-h-64 overflow-y-auto space-y-3 text-xs font-mono">
+                {result.logs.map((L, i) => (
+                  <div
+                    key={i}
+                    className="border-b last:border-0 pb-2 last:pb-0"
+                  >
+                    <div className="flex justify-between gap-2 text-[11px]">
+                      <span className="font-semibold">
+                        {L.step || `Step ${i + 1}`}
+                      </span>
+                      {typeof L.ok === "boolean" && (
+                        <span
+                          className={L.ok ? "text-emerald-500" : "text-red-500"}
+                        >
+                          {L.ok ? "OK" : "FAIL"}
+                        </span>
+                      )}
+                    </div>
+
+                    {L.cmd && (
+                      <div className="mt-1 text-[11px] text-muted-foreground">
+                        <span className="font-semibold">cmd: </span>
+                        <code className="break-all">{L.cmd}</code>
+                      </div>
+                    )}
+
+                    {L.out && (
+                      <pre className="mt-1 whitespace-pre-wrap">{L.out}</pre>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
         </section>
       )}
     </main>

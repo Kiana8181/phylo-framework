@@ -1,0 +1,274 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "BrepPhylo result schema",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "type": "boolean",
+      "description": "True if the BrepPhylo run finished successfully."
+    },
+    "trees": {
+      "type": "array",
+      "description": "One Newick tree per clone, aligned with annotations and clones.clone_id.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "figures": {
+      "type": "object",
+      "description": "Rendered tree plots per clone.",
+      "properties": {
+        "phylogeny": {
+          "type": "array",
+          "description": "Per-clone PNG plots as plain base64-encoded blobs (no 'data:image/png;base64,' prefix; may contain null for clones without a figure).",
+          "items": {
+            "type": ["string", "null"]
+          }
+        },
+        "phylogeny_pdf": {
+          "type": "array",
+          "description": "Per-clone PDF plots as base64 blobs (may contain null).",
+          "items": {
+            "type": ["string", "null"]
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "annotations": {
+      "type": "array",
+      "description": "Per-clone list of per-sequence annotation objects.",
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "description": "Original input row plus a 'label' field.",
+          "additionalProperties": true
+        }
+      }
+    },
+    "clones": {
+      "type": "object",
+      "description": "Lightweight per-clone summary aligned with trees and annotations.",
+      "properties": {
+        "clone_id": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "seqs": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "stats": {
+      "type": "object",
+      "description": "Run-level metadata and summary statistics.",
+      "properties": {
+        "method": {
+          "type": "string"
+        },
+        "tree_type_requested": {
+          "type": ["string", "null"],
+          "description": "Tree builder requested by the user (tree_type parameter)."
+        },
+        "tree_type": {
+          "type": "string",
+          "description": "Effective tree builder actually used (may differ from requested when IgPhyML falls back to dnapars)."
+        },
+        "species": {
+          "type": "string"
+        },
+        "algorithm": {
+          "type": "string"
+        },
+        "plot_type": {
+          "type": "string"
+        },
+        "plot_format": {
+          "type": "string"
+        },
+        "min_clone_size": {
+          "type": "integer"
+        },
+        "gather_plots": {
+          "type": "boolean"
+        },
+        "use_temp_dir": {
+          "type": "boolean"
+        },
+        "sequence_column": {
+          "type": "string"
+        },
+        "clone_id_column": {
+          "type": "string"
+        },
+        "germline_id_column": {
+          "type": "string"
+        },
+        "class_column": {
+          "type": ["string", "null"]
+        },
+        "label_column": {
+          "type": ["string", "null"]
+        },
+
+        "which_clones": {
+          "description": "Clone IDs explicitly included, if any.",
+          "anyOf": [
+            { "type": "null" },
+            {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          ]
+        },
+        "ignore_clones": {
+          "description": "Clone IDs explicitly excluded, if any.",
+          "anyOf": [
+            { "type": "null" },
+            {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          ]
+        },
+        "germline_set": {
+          "type": ["string", "null"],
+          "description": "Germline set identifier or path passed to BrepPhylo."
+        },
+
+        "n_clones": {
+          "type": "integer"
+        },
+        "n_trees": {
+          "type": "integer"
+        },
+
+        "class_unknown_value": {
+          "type": ["string", "null"],
+          "description": "Value used to fill empty/NA entries in the class column (typically 'unknown')."
+        },
+        "class_unknown_replaced_in_input": {
+          "type": "integer",
+          "description": "Number of empty/NA class values replaced by class_unknown_value."
+        },
+        "class_n_states": {
+          "type": "integer",
+          "description": "Number of distinct class values after preprocessing."
+        },
+        "class_states_capped": {
+          "type": "boolean",
+          "description": "True if the number of class values exceeded max_class_categories and colouring was disabled."
+        },
+        "max_class_categories": {
+          "type": "integer",
+          "description": "Maximum allowed number of distinct class values for colouring."
+        },
+
+        "filters_applied": {
+          "type": "boolean",
+          "description": "True if sequence text filters were applied."
+        },
+        "uppercased_rows": {
+          "type": "integer",
+          "description": "Number of rows whose sequence values were changed to uppercase."
+        },
+        "gap_rows_touched": {
+          "type": "integer",
+          "description": "Number of rows whose sequences contained gaps (according to gap_policy)."
+        },
+        "noniupac_rows_touched": {
+          "type": "integer",
+          "description": "Number of rows whose sequences contained non-IUPAC characters (according to noniupac_policy)."
+        },
+        "gap_policy": {
+          "type": "string",
+          "description": "Gap policy used when filters_applied = true."
+        },
+        "noniupac_policy": {
+          "type": "string",
+          "description": "Non-IUPAC policy used when filters_applied = true."
+        },
+
+        "ig_stop_policy": {
+          "type": ["string", "null"],
+          "description": "Policy used to handle stop codons / out-of-frame sequences for IgPhyML."
+        },
+        "igphyml_stop_rows": {
+          "type": "integer",
+          "description": "Number of sequences flagged as containing stop codons in IgPhyML preflight."
+        },
+        "igphyml_frame_rows": {
+          "type": "integer",
+          "description": "Number of sequences flagged as out-of-frame in IgPhyML preflight."
+        },
+        "igphyml_fallback_to_dnapars": {
+          "type": "boolean",
+          "description": "True if IgPhyML was requested but execution fell back to dnapars due to stop/frame policy."
+        }
+      },
+      "additionalProperties": true
+    },
+    "artifact_zip_b64": {
+      "type": "object",
+      "description": "Additional BrepPhylo output files bundled as compressed archives.",
+      "properties": {
+        "clone_bundle_zip": {
+          "type": ["string", "null"],
+          "description": "Single ZIP containing all BrepPhylo output files (per-clone folders, alignment PDFs, logs, etc.) except the main clone_*.tree and clone_*.png/clone_*.pdf that are returned separately. Base64-encoded."
+        }
+      },
+      "additionalProperties": false
+    },
+    "warnings": {
+      "type": "array",
+      "description": "Human-readable warning messages (e.g. dropped rows, missing columns, caps on colouring).",
+      "items": {
+        "type": "string"
+      }
+    },
+    "logs": {
+      "description": "Pipeline step logs, including raw stdout from BrepPhylo::cloneLineage and high-level step summaries.",
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "step": {
+                "type": "string"
+              },
+              "ok": {
+                "type": "boolean"
+              },
+              "out": {
+                "type": "string"
+              }
+            },
+            "required": ["step", "ok", "out"],
+            "additionalProperties": true
+          }
+        }
+      ]
+    },
+    "render": {
+      "type": ["string", "null"],
+      "description": "Hint for the frontend renderer; for BrepPhylo this is 'phylogeny'."
+    },
+    "error": {
+      "type": ["string", "null"],
+      "description": "Error message when ok = false; null on success."
+    }
+  },
+  "required": ["ok"],
+  "additionalProperties": false
+}
