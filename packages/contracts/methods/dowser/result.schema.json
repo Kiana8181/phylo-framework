@@ -8,7 +8,7 @@
     "figures": {
       "type": ["object", "null"],
       "properties": {
-        "png_base64": { "type": "array", "items": { "type": "string" } }
+        "phylogeny": { "type": "array", "items": { "type": "string" } }
       },
       "additionalProperties": true
     },

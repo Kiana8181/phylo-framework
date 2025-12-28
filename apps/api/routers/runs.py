@@ -1,95 +1,190 @@
 from __future__ import annotations
+
+import os
+import json
 import uuid
-import asyncio
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Query
-from fastapi.responses import JSONResponse
-from typing import Any, Dict
+import traceback
+import threading
+import time
+from typing import Dict, Any
+from datetime import datetime
 
-from apps.api.contracts.loader import get_result_schema, load_spec_from_contracts
-from apps.api.clients.method_client import submit_run
-from apps.api.services.validate import validate_json, ValidationError
-from apps.api.services.progress import soft_progress
-from apps.api.services.storage import RUNS, RESULTS
+import aiofiles
+import httpx
+from fastapi import APIRouter, BackgroundTasks, UploadFile, File, Form, Query, HTTPException
 
-router = APIRouter()
+from apps.api.contracts.loader import get_service_routes
+from apps.api.config import method_service_url
 
-def ok(data, message: str | None = None, status_code: int = 200) -> JSONResponse:
-    return JSONResponse(status_code=status_code, content={"status": "success", "message": message, "data": data})
+router = APIRouter(prefix="/runs", tags=["runs"])
 
-@router.post("/runs")
+DEFAULT_RUNS_DIR = os.path.join(os.getcwd(), "runtime", "runs")
+RUNS_DIR = os.environ.get("RUNS_DIR", DEFAULT_RUNS_DIR)
+RUNS_DIR_SERVICE = os.environ.get("RUNS_DIR_SERVICE")  # optional override for method-facing path
+
+def _ensure_dir(path: str) -> str:
+  try:
+    os.makedirs(path, exist_ok=True); return path
+  except PermissionError:
+    fb = DEFAULT_RUNS_DIR; os.makedirs(fb, exist_ok=True); return fb
+
+RUNS_DIR = _ensure_dir(RUNS_DIR)
+RUNS: Dict[str, Dict[str, Any]] = {}
+
+STAT_PENDING = "PENDING"; STAT_RUNNING = "RUNNING"; STAT_DONE = "DONE"; STAT_ERROR = "ERROR"
+
+def _now() -> str: return datetime.utcnow().isoformat() + "Z"
+
+def _public_status(rec: Dict[str, Any]) -> Dict[str, Any]:
+  return {"status": rec.get("status", STAT_PENDING),
+          "progress": rec.get("progress", 0),
+          "message": rec.get("message")}
+
+def _service_file_path(host_path: str | None) -> str | None:
+  """Map a host run path to the path expected by the method service.
+
+  When the API runs on the host but methods run in containers, the shared
+  volume may be mounted at a different location (e.g., host
+  `/home/.../runtime/runs` → container `/runtime/runs`). Set RUNS_DIR_SERVICE
+  to the container mount point so the service receives a valid path.
+  """
+  if not host_path:
+    return None
+  if not RUNS_DIR_SERVICE:
+    return host_path
+  try:
+    host_root = os.path.realpath(RUNS_DIR)
+    host_path_real = os.path.realpath(host_path)
+    if os.path.commonpath([host_root, host_path_real]) == host_root:
+      rel = os.path.relpath(host_path_real, host_root)
+      return os.path.join(RUNS_DIR_SERVICE, rel)
+  except Exception:
+    return host_path
+  return host_path
+
+def _soft_progress_worker(run_id: str, floor: int = 10, ceiling: int = 95, step: int = 3, interval: float = 2.0):
+  """Increase progress gradually while RUNNING so the UI doesn't stick at 5%."""
+  try:
+    while True:
+      rec = RUNS.get(run_id)
+      if not rec or rec.get("status") != STAT_RUNNING: return
+      cur = int(rec.get("progress") or floor)
+      if cur < ceiling:
+        rec["progress"] = min(cur + step, ceiling)
+        rec.setdefault("message", "Processing…")
+      time.sleep(interval)
+  except Exception:
+    return
+
+@router.post("")
 async def create_run(
-    method: str = Query(...),
-    params: str = Form("{}"),
-    file: UploadFile | None = File(None),
+  background: BackgroundTasks,
+  method: str = Query(..., description="Method ID (e.g., 'dowser')"),
+  params: str = Form("{}", description="JSON string of parameters"),
+  file: UploadFile | None = File(None),
 ):
-    run_id = str(uuid.uuid4())
-    RUNS[run_id] = {"status": "RUNNING", "progress": 5, "message": f"Dispatching {method}"}
+  base = method_service_url(method)
+  if not base:
+    raise HTTPException(400, f"No service URL configured for method '{method}'. Set METHOD_{method.upper()}_URL.")
 
-    # Load spec so we can know if file is required from contracts/ui.json
-    spec = load_spec_from_contracts(method)
-    requires_file: bool = bool(spec.get("uiHints", {}).get("requiresFile", True))
+  try:
+    p = json.loads(params or "{}")
+    if not isinstance(p, dict):
+      raise ValueError("params must be a JSON object")
+  except Exception as e:
+    raise HTTPException(400, f"Invalid params JSON: {e}")
 
-    if requires_file and file is None:
-        RUNS[run_id] = {"status": "ERROR", "message": f"File is required for {method}"}
-        raise HTTPException(status_code=400, detail=f"File is required for {method}")
+  run_id = str(uuid.uuid4())
+  run_dir = os.path.join(RUNS_DIR, run_id)
+  os.makedirs(run_dir, exist_ok=True)
 
-    file_bytes = await file.read() if file else None
-    filename = file.filename if file else None
-    content_type = file.content_type if (file and file.content_type) else "application/octet-stream"
+  rec = {
+    "id": run_id, "method_id": method, "status": STAT_PENDING, "progress": 0,
+    "message": "Queued", "created_at": _now(), "started_at": None, "finished_at": None,
+    "file_path": None, "result": None, "error": None,
+  }
+  RUNS[run_id] = rec
 
-    async def worker():
-        try:
-            RUNS[run_id] = {"status": "RUNNING", "progress": 10, "message": f"Submitting to {method}"}
-            data = {"params": params}
-            files_payload: Dict[str, Any] = {}
-            if file_bytes is not None:
-                files_payload["file"] = (filename, file_bytes, content_type)
+  if file is not None:
+    rec["status"] = STAT_RUNNING
+    rec["message"] = f"Uploading {file.filename}…"
+    rec["progress"] = 1
+    dst = os.path.join(run_dir, file.filename)
+    try:
+      async with aiofiles.open(dst, "wb") as out:
+        while True:
+          chunk = await file.read(1024 * 1024)  # 1MB
+          if not chunk: break
+          await out.write(chunk)
+      rec["file_path"] = dst
+    except Exception as e:
+      raise HTTPException(500, f"Failed to save upload: {e}")
 
-            r = await submit_run(method, data=data, files=files_payload)
+  background.add_task(_execute_method_sync, run_id, p)
+  threading.Thread(target=_soft_progress_worker, args=(run_id,), daemon=True).start()
 
-            # parse response body
-            content_type_resp = r.headers.get("content-type", "")
-            if "application/json" in content_type_resp:
-                body = r.json()
-            else:
-                body = {"ok": r.status_code < 400, "raw": r.text}
+  return {"run_id": run_id}
 
-            if r.status_code >= 400 or not body.get("ok", False):
-                msg = body.get("error") or body.get("raw") or f"{method} error (HTTP {r.status_code})"
-                RUNS[run_id] = {"status": "ERROR", "progress": 100, "message": msg}
-                return
+@router.get("/{run_id}/status")
+async def run_status(run_id: str):
+  rec = RUNS.get(run_id)
+  if not rec: raise HTTPException(404, "Run not found")
+  return _public_status(rec)
 
-            # Validate result against contracts result.schema.json (if present)
-            result_schema = get_result_schema(method)
-            if result_schema:
+@router.get("/{run_id}/result")
+async def run_result(run_id: str):
+  rec = RUNS.get(run_id)
+  if not rec: raise HTTPException(404, "Run not found")
+  if rec.get("status") != STAT_DONE: raise HTTPException(409, "Run not finished")
+  return rec.get("result") or {"ok": False}
+
+# -------- background worker --------
+def _execute_method_sync(run_id: str, params: dict):
+    rec = RUNS.get(run_id)
+    if not rec: return
+    method_id = rec["method_id"]
+    base = method_service_url(method_id)
+    if not base:
+        msg = f"No service URL configured for method '{method_id}'. Set METHOD_{method_id.upper()}_URL."
+        rec.update({"status": STAT_ERROR, "progress": 100, "message": msg,
+                    "error": msg, "finished_at": _now()})
+        return
+
+    routes = get_service_routes(method_id) or {"run": "/run"}
+    url = f"{base.rstrip('/')}{routes.get('run', '/run')}"
+
+    # mark running
+    rec["status"] = STAT_RUNNING
+    rec["started_at"] = _now()
+    rec["message"] = f"Submitting to {method_id}"
+    rec["progress"] = max(int(rec.get("progress") or 0), 5)
+
+    payload = {"file_path": _service_file_path(rec.get("file_path")), "params": params or {}}
+
+    try:
+        with httpx.Client(timeout=None, trust_env=False) as client:
+            r = client.post(url, json=payload)
+            if r.status_code >= 400:
+                err_msg = None
                 try:
-                    validate_json(body, result_schema)
-                except ValidationError as e:
-                    msg = f"Invalid {method} result: {e.message}"
-                    RUNS[run_id] = {"status": "ERROR", "progress": 100, "message": msg}
-                    raise HTTPException(status_code=502, detail=msg)
+                    j = r.json()
+                    if isinstance(j, dict):
+                        err_msg = j.get("error") or j.get("message")
+                except Exception:
+                    pass
+                err_msg = err_msg or r.text or f"{r.status_code} {r.reason_phrase}"
+                rec.update({"status": STAT_ERROR, "progress": 100, "message": err_msg,
+                            "error": err_msg, "finished_at": _now()})
+                return
+            result = r.json()
 
-            RESULTS[run_id] = body
-            RUNS[run_id] = {"status": "DONE", "progress": 100, "message": "Finished"}
+        with open(os.path.join(RUNS_DIR, run_id, "result.json"), "w") as f:
+            json.dump(result, f)
 
-        except Exception as e:
-            RUNS[run_id] = {"status": "ERROR", "progress": 100, "message": f"Internal error: {e}"}
+        rec.update({"result": result, "status": STAT_DONE, "progress": 100,
+                    "message": "Completed", "finished_at": _now()})
 
-    asyncio.create_task(worker())
-    asyncio.create_task(soft_progress(RUNS, run_id))
-
-    return ok({"run_id": run_id})
-
-@router.get("/runs/{run_id}/status")
-def run_status(run_id: str):
-    if run_id not in RUNS:
-        raise HTTPException(status_code=404, detail="Run not found")
-    # Keep legacy behavior (not wrapped) to avoid breaking the web
-    return RUNS[run_id]
-
-@router.get("/runs/{run_id}/result")
-def run_result(run_id: str):
-    if run_id not in RESULTS:
-        raise HTTPException(status_code=404, detail="Result not ready")
-    # Keep legacy behavior (not wrapped) to avoid breaking the web
-    return RESULTS[run_id]
+    except Exception as e:
+        msg = str(e)
+        rec.update({"status": STAT_ERROR, "progress": 100, "message": msg,
+                    "error": f"{msg}\n{traceback.format_exc()}", "finished_at": _now()})

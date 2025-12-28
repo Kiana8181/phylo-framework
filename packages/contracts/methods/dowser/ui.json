@@ -1,5 +1,35 @@
 {
   "requiresFile": true,
   "maxFiles": 1,
-  "order": ["tree_model", "minseq", "nproc"]
+  "order": [
+    "tree_model",
+    "minseq",
+    "nproc",
+    "label_field",
+    "tip_color_by",
+    "unknown_value",
+    "annotation_fields",
+    "tipsize",
+
+    "apply_filters",
+    "len_policy",
+    "gap_policy",
+    "noniupac_policy",
+    "uppercase",
+
+    "ig_stop_policy",
+    "max_tip_categories"
+  ],
+  "placeholders": {
+    "label_field": "empty = sequence_id",
+    "tip_color_by": "empty = no coloring"
+  },
+  "visibility": {
+    "len_policy": { "when": { "apply_filters": true } },
+    "gap_policy": { "when": { "apply_filters": true } },
+    "noniupac_policy": { "when": { "apply_filters": true } },
+    "uppercase": { "when": { "apply_filters": true } },
+
+    "ig_stop_policy": { "when": { "tree_model": "igphyml" } }
+  }
 }
