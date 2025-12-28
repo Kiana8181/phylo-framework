@@ -1,0 +1,137 @@
+{
+  "type": "object",
+  "properties": {
+    "root": {
+      "type": "string",
+      "title": "Root sequence ID",
+      "description": "ID of the germline / outgroup sequence in the input FASTA/PHYLIP alignment.",
+      "default": "GL"
+    },
+    "frame": {
+      "type": "integer",
+      "title": "Coding frame (0, 1, 2 ⇒ frames 1–3)",
+      "description": "0 means frame 1 (start at first nucleotide), 1 ⇒ frame 2, 2 ⇒ frame 3. Used for amino-acid mutation annotation in GCtree.",
+      "minimum": 0,
+      "maximum": 2,
+      "default": 0
+    },
+    "pipeline": {
+      "type": "string",
+      "title": "Pipeline backend",
+      "description": "Use the built-in PHYLIP + GCtree pipeline (recommended) or the SCons pipeline if available in the container.",
+      "enum": ["phylip", "scons"],
+      "default": "phylip"
+    },
+    "infer": {
+      "type": "boolean",
+      "title": "Run GCtree likelihood ranking",
+      "description": "If false, stop after DNAPARS and return parsimony trees from PHYLIP outtree (no GCtree ranking).",
+      "default": true
+    },
+    "top_n": {
+      "type": "integer",
+      "title": "Number of trees to return",
+      "description": "Maximum number of top trees to extract from GCtree output (or DNAPARS outtree, if GCtree fails).",
+      "minimum": 1,
+      "maximum": 50,
+      "default": 3
+    },
+    "ranking_strategy": {
+      "type": "string",
+      "title": "Ranking strategy expression",
+      "description": "Optional GCtree ranking expression, e.g. \"B,A\" (lexicographic) or \"B+I+0.1C+0.01A\" (linear combination). Leave empty for the default ranking.",
+      "default": ""
+    },
+
+    "quick": {
+      "type": "boolean",
+      "title": "Quick parsimony search",
+      "description": "If true, pass --quick to mkconfig/dnapars for a faster but less exhaustive parsimony search.",
+      "default": false
+    },
+    "jumble": {
+      "type": "integer",
+      "title": "DNAPARS jumble replicates",
+      "description": "If set, pass --jumble N to mkconfig so DNAPARS searches N random permutations of the input sequences.",
+      "minimum": 0,
+      "default": 0
+    },
+    "bootstrap": {
+      "type": "integer",
+      "title": "Bootstrap replicates",
+      "description": "If set, pass --bootstrap N to mkconfig for DNAPARS bootstrap resampling.",
+      "minimum": 0,
+      "default": 0
+    },
+
+    "img_type": {
+      "type": "string",
+      "title": "Image file type",
+      "description": "Image format for GCtree output figures (CLI --img_type).",
+      "enum": ["svg", "png", "pdf"],
+      "default": "svg"
+    },
+    "outbase": {
+      "type": "string",
+      "title": "Output basename",
+      "description": "Basename for GCtree outputs (CLI --outbase). Files like '<outbase>.inference.1.svg' will be created.",
+      "default": "gctree.out"
+    },
+    "idlabel": {
+      "type": "boolean",
+      "title": "Label nodes with sequence IDs",
+      "description": "Pass --idlabel so tree images are labeled with unique sequence IDs and a FASTA alignment of inferred sequences is written.",
+      "default": false
+    },
+    "show_nucleotide_mutations": {
+      "type": "boolean",
+      "title": "Show nucleotide mutations on branches",
+      "description": "If true, pass --show_nucleotide_mutations to annotate rendered trees with nucleotide changes.",
+      "default": false
+    },
+    "summarize_forest": {
+      "type": "boolean",
+      "title": "Summarize forest",
+      "description": "If true, pass --summarize_forest and write a forest summary log for all trees in the parsimony forest.",
+      "default": false
+    },
+    "tree_stats": {
+      "type": "boolean",
+      "title": "Compute detailed tree statistics",
+      "description": "If true, pass --tree_stats and generate per-tree statistics and pairplot figures (can be slow for large forests).",
+      "default": false
+    },
+    "apply_coloring_settings": {
+      "type": "boolean",
+      "default": false,
+      "title": "Apply Coloring Settings"
+    },
+     "color_mode": {
+      "type": "string",
+      "title": "Coloring mode",
+      "enum": ["none", "abundance", "LBI", "feature"],
+      "default": "none",
+      "description": "How to color GCtree figures. 'abundance' and 'LBI' use built-in features; 'feature' expects a custom numeric node feature name on the GCtree CollapsedTree."
+    },
+    "color_feature": {
+      "type": "string",
+      "title": "Custom feature name",
+      "default": "",
+      "description": "Feature name for coloring when color_mode = 'feature' (e.g. 'affinity'). Must exist on all nodes in the CollapsedTree."
+    },
+    "color_palette": {
+      "type": "string",
+      "title": "Colormap (Matplotlib name)",
+      "default": "viridis",
+      "description": "Any Matplotlib colormap name (e.g. 'viridis', 'magma', 'plasma')."
+    },
+    "color_scale": {
+      "type": "string",
+      "title": "Color scale",
+      "enum": ["linear", "log", "symlog"],
+      "default": "linear",
+      "description": "Scale for mapping feature values to colors."
+    }
+  },
+  "required": ["root"]
+}
