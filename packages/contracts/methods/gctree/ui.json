@@ -1,6 +1,32 @@
 {
   "requiresFile": true,
   "maxFiles": 1,
-  "order": ["root", "frame", "ranking_strategy", "top_n", "headless"],
-  "help": "Upload a FASTA that includes the naive germline sequence (root id) and all observed sequences with duplicates; or upload a .p (pickled GCtree forest) to continue ranking."
+  "order": [
+    "root",
+    "frame",
+    "pipeline",
+    "infer",
+    "top_n",
+    "ranking_strategy",
+    "quick",
+    "jumble",
+    "bootstrap",
+    "img_type",
+    "outbase",
+    "idlabel",
+    "show_nucleotide_mutations",
+    "summarize_forest",
+    "tree_stats",
+    "apply_coloring_settings",
+    "color_mode",
+    "color_feature",
+    "color_palette",
+    "color_scale"
+  ],
+  "visibility": {
+    "color_mode": { "when": { "apply_coloring_settings": true } },
+    "color_feature": { "when": { "apply_coloring_settings": true } },
+    "color_palette": { "when": { "apply_coloring_settings": true } },
+    "color_scale": { "when": { "apply_coloring_settings": true } }
+  }
 }
