@@ -18,16 +18,11 @@
     "uppercase",
 
     "ig_stop_policy",
-    "exec",
-    "igphyml_motifs_path",
-
     "max_tip_categories"
   ],
   "placeholders": {
     "label_field": "empty = sequence_id",
-    "tip_color_by": "empty = no coloring",
-    "exec": "/usr/local/bin/igphyml",
-    "igphyml_motifs_path": "/usr/local/share/igphyml/src/motifs"
+    "tip_color_by": "empty = no coloring"
   },
   "visibility": {
     "len_policy": { "when": { "apply_filters": true } },
@@ -35,8 +30,6 @@
     "noniupac_policy": { "when": { "apply_filters": true } },
     "uppercase": { "when": { "apply_filters": true } },
 
-    "ig_stop_policy": { "when": { "tree_model": "igphyml" } },
-    "exec": { "when": { "tree_model": "igphyml" } },
-    "igphyml_motifs_path": { "when": { "tree_model": "igphyml" } }
+    "ig_stop_policy": { "when": { "tree_model": "igphyml" } }
   }
 }
