@@ -4,6 +4,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from apps.api.config import CORS_ORIGINS
 from apps.api.routers import methods as methods_router
 from apps.api.routers import runs as runs_router

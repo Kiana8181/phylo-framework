@@ -1,13 +1,14 @@
 "use client";
 
+import FileInput from "@/components/common/FileInput";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import FormBuilder from "@/components/ui/FormBuilder";
-import FileInput from "@/components/common/FileInput";
-import type { MethodSpec } from "@phylo/contracts";
-import { useState } from "react";
+import { Label } from "@/components/ui/label";
 import { useCreateRun } from "@/features/runs/hooks";
-import { Button } from "@/components/ui/button";
-import { Progress } from "../ui/progress";
+import { notify } from "@/lib/notify";
+import type { MethodSpec } from "@phylo/contracts";
+import { useMemo, useState } from "react";
 
 export default function RunParameters({
   spec,
@@ -23,27 +24,18 @@ export default function RunParameters({
   const createRun = useCreateRun();
   const [uploadPct, setUploadPct] = useState<number | null>(null);
 
-  const requiresFile = !!spec?.uiHints?.requiresFile;
-  const maxFiles = spec?.uiHints?.maxFiles ?? 1;
+  const schemaMemo = useMemo(
+    () => ({ ...(spec.paramSchema ?? {}), uiHints: spec.uiHints }),
+    [spec.id, spec.paramSchema, spec.uiHints]
+  );
 
-  async function handleSubmit(params: Record<string, any>) {
-    const { notify } = await import("@/lib/notify");
-
-    // basic validations
-    if (requiresFile && (!files || files.length === 0)) {
-      notify.error("File required", "Please attach a file for this method.");
-      return;
-    }
-    if (maxFiles === 1 && files && files.length > 1) {
-      notify.error("Only one file allowed", "Please attach exactly one file.");
-      return;
-    }
-
+  async function handleSubmit(values: Record<string, any>) {
     const fd = new FormData();
-    fd.set("params", JSON.stringify(params));
+    fd.set("params", JSON.stringify(values ?? {}));
 
-    if (files && files.length) {
-      if (maxFiles === 1) {
+    const maxFiles = Number(spec.uiHints?.maxFiles ?? 1);
+    if (files?.length) {
+      if (maxFiles <= 1) {
         const f = files[0];
         fd.set("file", f, f.name);
       } else {
@@ -67,55 +59,74 @@ export default function RunParameters({
   }
 
   return (
-    <section className="grid gap-4 md:grid-cols-2">
-      <Card className="p-4 space-y-4">
-        <div>
-          <h3 className="text-lg font-medium">{spec.name} parameters</h3>
-          <p className="text-xs text-muted-foreground">
-            Configure inputs for this method
-          </p>
-        </div>
-        <FormBuilder
-          schema={{ ...spec.paramSchema, uiHints: spec.uiHints }}
-          onSubmit={handleSubmit}
-        />
+    <Card className="p-4 space-y-4">
+      <div>
+        <h3 className="text-lg font-medium">{spec.name} parameters</h3>
+        <p className="text-xs text-muted-foreground">
+          Configure inputs for this method
+        </p>
+      </div>
 
-        {uploadPct !== null && (
-          <div className="space-y-1">
-            <div className="text-xs text-muted-foreground">
-              Uploading… {uploadPct}%
+      <FormBuilder
+        schema={schemaMemo}
+        onSubmit={handleSubmit}
+        footer={
+          <div className="col-span-full">
+            <div className="flex items-center justify-between mb-2">
+              <div>
+                <Label className="text-sm">Input files</Label>
+                <p className="text-xs text-muted-foreground">
+                  Accepted: {(spec?.accepts ?? []).join(", ") || "—"}
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                onClick={() => onFiles([])}
+                disabled={!files?.length}
+                type="button"
+              >
+                Clear
+              </Button>
             </div>
-            <Progress value={uploadPct} />
+
+            {/* upload box */}
+            <div className="rounded-2xl border-2 border-dashed bg-muted/30 p-6">
+              <FileInput
+                accept={(spec?.accepts ?? []).join(",")}
+                multiple={(spec?.uiHints?.maxFiles ?? 1) > 1}
+                onFiles={onFiles}
+              />
+              {files?.length ? (
+                <ul className="mt-3 space-y-1 text-sm">
+                  {files.map((f, i) => (
+                    <li key={i} className="truncate">
+                      • {f.name}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <div className="mt-3 text-xs text-muted-foreground">
+                  No files selected.
+                </div>
+              )}
+            </div>
           </div>
-        )}
+        }
+      />
 
-        {createRun.isPending && uploadPct === null && (
-          <div className="text-xs text-muted-foreground">Starting run…</div>
-        )}
-      </Card>
-
-      <Card className="p-4 space-y-3">
-        <div>
-          <h3 className="text-lg font-medium">Upload data</h3>
-          <p className="text-xs text-muted-foreground">
-            Accepted: {spec.accepts.join(", ")}
-          </p>
+      {uploadPct !== null && (
+        <div className="space-y-2">
+          <div className="text-sm">
+            Uploading{Number.isFinite(uploadPct) ? ` (${uploadPct}%)` : ""}
+          </div>
+          <div className="h-2 w-full bg-muted rounded overflow-hidden">
+            <div
+              className="h-full rounded bg-gradient-to-r from-blue-500 to-indigo-500 transition-[width]"
+              style={{ width: `${uploadPct ?? 0}%` }}
+            />
+          </div>
         </div>
-        <FileInput multiple accept={spec.accepts.join(",")} onFiles={onFiles} />
-        {files?.length ? (
-          <ul className="text-xs text-muted-foreground mt-2 space-y-1">
-            {files.map((f, i) => (
-              <li key={i} className="truncate">
-                • {f.name}
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <div className="text-xs text-muted-foreground">
-            No files selected.
-          </div>
-        )}
-      </Card>
-    </section>
+      )}
+    </Card>
   );
 }
