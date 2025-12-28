@@ -67,12 +67,6 @@
       "default": "drop_seqs",
       "title": "IgPhyML stop-codon policy"
     },
-    "exec": { "type": "string", "default": "", "title": "IgPhyML binary path" },
-    "igphyml_motifs_path": {
-      "type": "string",
-      "default": "",
-      "title": "IgPhyML motifs directory"
-    },
 
     "max_tip_categories": {
       "type": "integer",

@@ -25,8 +25,8 @@ Sys.setenv(PCRE2_MATCH_LIMIT_RECURSION="2000000")
 # ---------------------------
 # Config & Contracts loading
 # ---------------------------
-IG_EXEC_DEFAULT   <- Sys.getenv("IGPHYML_BIN", "igphyml") 
-IG_MOTIFS_DEFAULT <- Sys.getenv("IGPHYML_MOTIFS", "") 
+IG_EXEC_DEFAULT   <- Sys.getenv("IGPHYML_BIN", Sys.getenv("IG_EXEC_DEFAULT", "igphyml"))
+IG_MOTIFS_DEFAULT <- Sys.getenv("IGPHYML_MOTIFS", "")
 CONTRACTS_DIR <- Sys.getenv("CONTRACTS_DIR", "packages/contracts")
 METHOD_DIR    <- file.path(CONTRACTS_DIR, "methods", "dowser")
 
@@ -155,7 +155,7 @@ check_igphyml_exec <- function(user_exec = NULL) {
     return(default)
   }
 
-  stop("IgPhyML not found. Provide 'exec' (absolute path) or install igphyml so it's on $PATH.")
+  stop("IgPhyML not found. Set IGPHYML_BIN or install igphyml so it's on $PATH.")
 }
 
 # ---------------------------
@@ -167,14 +167,14 @@ validate_motifs_dir <- function(path) {
   length(list.files(path, all.files = FALSE)) > 0
 }
 
-resolve_igphyml <- function(user_exec = NULL, user_motifs = NULL, require_ok = TRUE) {
+resolve_igphyml <- function(user_exec = IG_EXEC_DEFAULT, user_motifs = NULL, require_ok = TRUE) {
   # --- resolve exec ---
   exec_path <- tryCatch(
     check_igphyml_exec(user_exec),
     error = function(e) if (require_ok) stop(e) else NULL
   )
   if (is.null(exec_path)) {
-    return(list(ok = FALSE, error = "IgPhyML executable not found or not executable. Provide 'exec' (absolute path) or install igphyml on PATH."))
+    return(list(ok = FALSE, error = "IgPhyML executable not found or not executable. Set IGPHYML_BIN or install igphyml on PATH."))
   }
 
   # --- resolve motifs ---
@@ -201,7 +201,7 @@ resolve_igphyml <- function(user_exec = NULL, user_motifs = NULL, require_ok = T
         ok = FALSE,
         error = paste0(
           "IgPhyML hotspot motif tables not found. ",
-          "Please set 'igphyml_motifs_path' to the directory that contains motif tables ",
+          "Set IGPHYML_MOTIFS or IGPHYML_PATH to the directory that contains motif tables ",
           "(e.g., '/usr/local/share/igphyml/src/motifs'). ",
           "Tried: ", if (nzchar(tried)) tried else "<none>"
         )
@@ -223,14 +223,14 @@ ensure_igphyml_path <- function(exec, user_path = NULL, require_ok = FALSE) {
   if (!is.null(user_path) && nzchar(user_path)) {
     if (validate_motifs_dir(user_path)) {
       Sys.setenv(IGPHYML_MOTIFS = user_path)
-      logf("[dowser] IGPHYML_MOTIFS set from user param: %s", user_path)
+      logf("[dowser] IGPHYML_MOTIFS set from override: %s", user_path)
       return(TRUE)
     } else {
       if (require_ok) {
         return(paste0(
           "IgPhyML motifs directory is invalid: '", user_path, "'. ",
           "It must be a readable, non-empty directory containing motif tables. ",
-          "Set 'igphyml_motifs_path' to the path of igphyml/src/motifs."
+          "Set IGPHYML_MOTIFS or IGPHYML_PATH to the path of igphyml/src/motifs."
         ))
       }
       return(FALSE)
@@ -262,7 +262,7 @@ ensure_igphyml_path <- function(exec, user_path = NULL, require_ok = FALSE) {
   if (require_ok) {
     return(paste0(
       "IgPhyML hotspot motif tables not found. ",
-      "Set 'igphyml_motifs_path' to the directory containing the motif tables ",
+      "Set IGPHYML_MOTIFS or IGPHYML_PATH to the directory containing the motif tables ",
       "(e.g., '/usr/local/share/igphyml/src/motifs') or set the IGPHYML_PATH environment variable."
     ))
   }
@@ -388,13 +388,6 @@ run_handler_impl <- function(req, res) {
         p$label_field <- trimws(p$label_field)
       }
       if (!nzchar(p$label_field)) p$label_field <- "sequence_id"
-
-      p$exec <- p$exec %||% NULL
-      if (is.character(p$exec) && !nzchar(p$exec)) p$exec <- NULL
-
-      # optional user-provided motifs dir
-      p$igphyml_motifs_path <- p$igphyml_motifs_path %||% NULL
-      if (is.character(p$igphyml_motifs_path) && !nzchar(p$igphyml_motifs_path)) p$igphyml_motifs_path <- NULL
 
       p$max_tip_categories <- as.integer(p$max_tip_categories %||% 30L)
 
@@ -609,38 +602,23 @@ run_handler_impl <- function(req, res) {
 
     # IgPhyML exec resolution & validation
     if (build == "igphyml") {
-      # Prefer user inputs; else fall back to env/defaults
-      if (is.null(p$exec) || !nzchar(p$exec)) p$exec <- IG_EXEC_DEFAULT
-      if (is.null(p$igphyml_motifs_path) || !nzchar(p$igphyml_motifs_path)) {
-        p$igphyml_motifs_path <- IG_MOTIFS_DEFAULT
-      }
-
-      # ---- resolve exec safely ----
-      exec_path <- tryCatch(
-        check_igphyml_exec(p$exec),
+      resolved <- tryCatch(
+        resolve_igphyml(user_exec = IG_EXEC_DEFAULT, user_motifs = IG_MOTIFS_DEFAULT, require_ok = TRUE),
         error = function(e) {
           res$status <- 400
           return(structure(list(.error = TRUE, msg = conditionMessage(e)), class = "exec_error"))
         }
       )
-      if (inherits(exec_path, "exec_error")) {
-        return(list(
-          ok = FALSE,
-          error = paste0(
-            "IgPhyML executable not found or not executable. ",
-            "Provide 'exec' as an absolute path or install 'igphyml' on PATH. Details: ",
-            exec_path$msg
-          )
-        ))
-      }
-      args$exec <- exec_path
 
-      # ---- resolve motifs safely (sets both envs for compatibility) ----
-      resolved <- resolve_igphyml(user_exec = exec_path, user_motifs = p$igphyml_motifs_path, require_ok = TRUE)
+      if (inherits(resolved, "exec_error")) {
+        return(list(ok = FALSE, error = resolved$msg))
+      }
       if (!isTRUE(resolved$ok)) {
         res$status <- 400
         return(list(ok = FALSE, error = resolved$error))
       }
+
+      args$exec <- resolved$exec
     }
 
     trees_tbl <- tryCatch(
@@ -663,7 +641,7 @@ run_handler_impl <- function(req, res) {
             ok = FALSE,
             error = paste0(
               "IgPhyML hotspot motif tables not found. ",
-              "Set 'igphyml_motifs_path' or $IGPHYML_PATH to the motifs directory."
+              "Set IGPHYML_MOTIFS or $IGPHYML_PATH to the motifs directory."
             )
           ))
         }
