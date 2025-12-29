@@ -41,8 +41,10 @@ A one-page UI to run phylogeny/lineage tree methods behind a simple orchestrator
 npm i
 
 # Python deps for the API
+python3 -m venv .venv
+source .venv/bin/activate
 python -m pip install -U pip
-python -m pip install -r apps/api/requirements.txt
+pip install -r apps/api/requirements.txt
 ```
 
 2. **Make helper scripts executable** (they are expected at the repo root):
@@ -218,8 +220,9 @@ From the **repo root**:
 npm i
 
 # Python venv for API
-python -m venv .venv
-source .venv/bin/activate      # Windows (PowerShell): .venv\Scripts\Activate.ps1
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -U pip
 pip install -r apps/api/requirements.txt
 
 # (Optional if your contracts package compiles TS)
