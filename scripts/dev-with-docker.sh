@@ -58,6 +58,7 @@ require_envs(){
   [[ -n "${METHOD_DOWSER_URL:-}" ]] || die "METHOD_DOWSER_URL is not set in ${API_ENV}"
   [[ -n "${METHOD_GCTREE_URL:-}" ]] || die "METHOD_GCTREE_URL is not set in ${API_ENV}"
   [[ -n "${METHOD_BREPPHYLO_URL:-}" ]] || die "METHOD_BREPPHYLO_URL is not set in ${API_ENV}"
+  [[ -n "${METHOD_CLONALTREE_URL:-}" ]] || die "METHOD_CLONALTREE_URL is not set in ${API_ENV}"
 
   if ! grep -qE '^NEXT_PUBLIC_API_BASE_URL=' "$WEB_ENV"; then
     die "NEXT_PUBLIC_API_BASE_URL is missing in ${WEB_ENV}"
@@ -88,7 +89,7 @@ Either upgrade npm (npm i -g npm@latest) or set:
 echo "${BLU}==> Checking prerequisites${CLR}"
 need_cmd docker; need_cmd node; need_cmd npm; need_cmd python3; need_cmd curl
 
-for p in 3000 8000 8001 8002 8003; do
+for p in 3000 8000 8001 8002 8003 8004; do
   port_busy "$p" && die "Port $p is not free."
 done
 
@@ -130,6 +131,20 @@ docker run -d --name phylo-gctree-dev \
 # make sure METHOD_GCTREE_URL exists in API env (optional but helpful):
 [[ -n "${METHOD_GCTREE_URL:-}" ]] || die "METHOD_GCTREE_URL is not set in ${API_ENV}"    # [gctree]
 
+echo "${BLU}==> Building and starting ClonalTree container${CLR}"
+docker rm -f phylo-clonaltree-dev >/dev/null 2>&1 || true
+docker build -t phylo-clonaltree:dev "$ROOT/services/clonaltree"
+docker run -d --name phylo-clonaltree-dev -p 8004:8004 \
+  -e CONTRACTS_DIR=/contracts -e STRICT_CONTRACT_ROUTES=true \
+  -e RUNS_DIR="$CONTAINER_RUNS_DIR" \
+  -v "$ROOT/packages/contracts:/contracts:ro" \
+  -v "$HOST_RUNTIME_DIR:$CONTAINER_RUNTIME_DIR:ro" \
+  phylo-clonaltree:dev >/dev/null
+
+echo "${BLU}==> Waiting for ClonalTree HTTP on :8004${CLR}"
+wait_http 8004 || { docker logs --tail=200 phylo-clonaltree-dev || true; die "ClonalTree failed readiness check"; }
+echo "${GRN}ClonalTree is up on http://localhost:8004${CLR}"
+
 echo "${BLU}==> Building and starting BrepPhylo container${CLR}"
 docker rm -f phylo-brepphylo-dev >/dev/null 2>&1 || true
 docker build -t phylo-brepphylo:dev "$ROOT/services/brepphylo"
@@ -153,6 +168,7 @@ trap 'echo; echo "${YLW}Shutting down...${CLR}"; \
       if [[ -n "${API_PID:-}" ]]; then kill "$API_PID" 2>/dev/null || true; fi; \
       docker rm -f phylo-dowser-dev >/dev/null 2>&1 || true; \
       docker rm -f phylo-gctree-dev >/dev/null 2>&1 || true; \
+      docker rm -f phylo-clonaltree-dev >/dev/null 2>&1 || true; \
       docker rm -f phylo-brepphylo-dev >/dev/null 2>&1 || true' EXIT
 
 echo "${BLU}==> Setting up Python venv for API${CLR}"

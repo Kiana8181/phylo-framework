@@ -103,6 +103,7 @@ Pick:
 |  Dowser | http://localhost:8001 | 8001 |
 | GCtree  | http://localhost:8002 | 8002 |
 |BrepPhylo| http://localhost:8003 | 8003 |
+|ClonalTree| http://localhost:8004 | 8004 |
 
 > Ensure these ports are **free** before running. The helper scripts will check and exit with a clear error if not.
 
