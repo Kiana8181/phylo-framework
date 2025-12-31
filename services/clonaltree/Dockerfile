@@ -10,17 +10,20 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       build-essential \
-      muscle \
+      curl \
       ca-certificates && \
-    rm -rf /var/lib/apt/lists/*
+    curl -L -o /tmp/muscle3.tgz https://drive5.com/muscle/downloads3.8.31/muscle3.8.31_i86linux64.tar.gz && \
+    tar -xzf /tmp/muscle3.tgz -C /tmp && \
+    install -m 0755 /tmp/muscle3.8.31_i86linux64 /usr/local/bin/muscle && \
+    rm -rf /var/lib/apt/lists/* /tmp/muscle3.tgz /tmp/muscle3.8.31_i86linux64
 
 WORKDIR /srv/clonaltree
 
-COPY services/clonaltree/requirements.txt /tmp/requirements.txt
+COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
-COPY services/clonaltree/app.py /srv/clonaltree/app.py
-COPY services/clonaltree/base-codes /srv/clonaltree/base-codes
+COPY app.py /srv/clonaltree/app.py
+COPY base-codes /srv/clonaltree/base-codes
 
 EXPOSE 8004
 
