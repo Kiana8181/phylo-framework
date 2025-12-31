@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PLUMBER_DIR="$ROOT/services/dowser"
 GCTREE_DIR="$ROOT/services/gctree"
 BREP_DIR="$ROOT/services/brepphylo"
+CLONAL_DIR="$ROOT/services/clonaltree"
 
 RED=$'\033[31m'; GRN=$'\033[32m'; YLW=$'\033[33m'; BLU=$'\033[34m'; CLR=$'\033[0m'
 die(){ echo "${RED}ERROR:${CLR} $*" >&2; exit 1; }
@@ -54,6 +55,7 @@ require_envs(){
   [[ -n "${METHOD_DOWSER_URL:-}" ]]     || die "METHOD_DOWSER_URL is not set in ${API_ENV}"
   [[ -n "${METHOD_GCTREE_URL:-}" ]]     || die "METHOD_GCTREE_URL is not set in ${API_ENV} (e.g., http://localhost:8002)"
   [[ -n "${METHOD_BREPPHYLO_URL:-}" ]]  || die "METHOD_BREPPHYLO_URL is not set in ${API_ENV} (e.g., http://localhost:8003)"
+  [[ -n "${METHOD_CLONALTREE_URL:-}" ]] || die "METHOD_CLONALTREE_URL is not set in ${API_ENV} (e.g., http://localhost:8004)"
 
   if ! grep -qE '^NEXT_PUBLIC_API_BASE_URL=' "$WEB_ENV"; then
     die "NEXT_PUBLIC_API_BASE_URL is missing in ${WEB_ENV}"
@@ -133,7 +135,7 @@ PY
 echo "${BLU}==> Checking prerequisites${CLR}"
 need_cmd Rscript; need_cmd node; need_cmd npm; need_cmd python3; need_cmd curl
 
-for p in 3000 8000 8001 8002 8003; do
+for p in 3000 8000 8001 8002 8003 8004; do
   port_busy "$p" && die "Port $p is not free."
 done
 
@@ -178,7 +180,7 @@ Rscript --vanilla -e "setwd('$PLUMBER_DIR'); Sys.setenv(CONTRACTS_DIR='${R_CONTR
   >/tmp/dowser.log 2>&1 &
 R_PID=$!
 
-trap 'echo; echo "${YLW}Shutting down...${CLR}"; kill $R_PID $API_PID ${GCTREE_PID:-} ${BREP_PID:-} 2>/dev/null || true' EXIT
+trap 'echo; echo "${YLW}Shutting down...${CLR}"; kill $R_PID $API_PID ${GCTREE_PID:-} ${CLONAL_PID:-} ${BREP_PID:-} 2>/dev/null || true' EXIT
 
 wait_http 8001 || { echo "${YLW}Last 200 R logs:${CLR}"; tail -n 200 /tmp/dowser.log || true; die "Dowser failed readiness check"; }
 echo "${GRN}Dowser is up on http://localhost:8001${CLR}"
@@ -194,6 +196,10 @@ python -m pip install -r "$ROOT/apps/api/requirements.txt"
 echo "${BLU}==> Installing GCtree service requirements${CLR}"
 [[ -f "$GCTREE_DIR/requirements.txt" ]] || die "Missing $GCTREE_DIR/requirements.txt"
 python -m pip install -r "$GCTREE_DIR/requirements.txt"
+
+echo "${BLU}==> Installing ClonalTree service requirements${CLR}"
+[[ -f "$CLONAL_DIR/requirements.txt" ]] || die "Missing $CLONAL_DIR/requirements.txt"
+python -m pip install -r "$CLONAL_DIR/requirements.txt"
 
 # NEW: no copying into site-packages. Ensure patch is loaded via PYTHONPATH.
 echo "${BLU}==> Enabling ete3 render patch via PYTHONPATH (sitecustomize)${CLR}"
@@ -242,6 +248,21 @@ GCTREE_PID=$!
 
 wait_http 8002 || { echo "${YLW}Last 200 GCtree logs:${CLR}"; tail -n 200 /tmp/gctree.log || true; die "GCtree failed readiness check"; }
 echo "${GRN}GCtree is up on http://localhost:8002${CLR}"
+
+# --- ClonalTree micro (FastAPI) ---
+echo "${BLU}==> Starting ClonalTree (FastAPI) on :8004${CLR}"
+(
+  cd "$CLONAL_DIR"
+  export CONTRACTS_DIR="$ABS_CONTRACTS"
+  export STRICT_CONTRACT_ROUTES="true"
+  export QT_QPA_PLATFORM="offscreen"
+  export MPLBACKEND="agg"
+  uvicorn app:app --host 0.0.0.0 --port 8004
+) >/tmp/clonaltree.log 2>&1 &
+CLONAL_PID=$!
+
+wait_http 8004 || { echo "${YLW}Last 200 ClonalTree logs:${CLR}"; tail -n 200 /tmp/clonaltree.log || true; die "ClonalTree failed readiness check"; }
+echo "${GRN}ClonalTree is up on http://localhost:8004${CLR}"
 
 # --- BrepPhylo micro (R/plumber) ---
 echo "${BLU}==> Starting BrepPhylo (R/plumber) on :8003${CLR}"
