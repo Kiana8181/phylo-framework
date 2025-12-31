@@ -1,0 +1,61 @@
+{
+  "type": "object",
+  "properties": {
+    "run_name": {
+      "type": "string",
+      "title": "Run label",
+      "description": "Optional label used as the output prefix; defaults to the uploaded file name without extension."
+    },
+    "abundance_threshold": {
+      "type": "integer",
+      "title": "Unique sequence abundance threshold",
+      "description": "Minimum count for a unique sequence to be retained during AIRR formatting (format_labeling_imgt_airr.py -t).",
+      "minimum": 1,
+      "default": 3
+    },
+    "clone_cdr3_similarity": {
+      "type": "number",
+      "title": "Clone CDR3 similarity",
+      "description": "CDR3 amino-acid similarity threshold (0–1) for GTM clone grouping (initial_clustering_f.py -s).",
+      "minimum": 0,
+      "maximum": 1,
+      "default": 0.7
+    },
+    "top_clones": {
+      "type": "integer",
+      "title": "Top clones for trees",
+      "description": "Number of the most abundant clones to align and build trees for (intraclonal_study_input_creator.py -s).",
+      "minimum": 1,
+      "default": 5
+    },
+    "clonotypes_per_clone": {
+      "type": "string",
+      "title": "Clonotypes per clone",
+      "description": "Comma/space-separated clonotype counts per clone to align (e.g. \"30, 200\" or \"all\"). Each value produces one tree per selected clone.",
+      "default": "30, 200"
+    },
+    "use_refinement": {
+      "type": "boolean",
+      "title": "Run refinement step",
+      "description": "Apply silhouette-based refinement before clonotype building (refinement.py).",
+      "default": true
+    },
+    "tree_use_abundance": {
+      "type": "boolean",
+      "title": "Weight trees by abundance",
+      "description": "Let clonalTree weight nodes by abundance (-a 0 enables abundance weighting).",
+      "default": true
+    },
+    "tree_revision": {
+      "type": "boolean",
+      "title": "Enable tree revision",
+      "description": "Allow clonalTree to revise/optimise the MST (-r 0 enables revision).",
+      "default": true
+    }
+  },
+  "required": [
+    "clone_cdr3_similarity",
+    "top_clones",
+    "clonotypes_per_clone"
+  ]
+}
