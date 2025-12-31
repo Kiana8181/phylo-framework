@@ -108,6 +108,49 @@ Either upgrade npm (npm i -g npm@latest) or set:
   fi
 }
 
+muscle_major(){
+  local raw major
+  raw=$(muscle -version 2>&1 | head -n 2 || true)
+  major=$(echo "$raw" | sed -n 's/.*[Vv]ersion[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p')
+  if [[ -z "$major" ]]; then
+    major=$(echo "$raw" | sed -n 's/.*[Vv]\\([0-9][0-9]*\\).*/\\1/p')
+  fi
+  echo "${major:-}:::${raw:-}"
+}
+
+install_muscle3(){
+  local url="https://drive5.com/muscle/downloads3.8.31/muscle3.8.31_i86linux64.tar.gz"
+  local tmp tgz bin
+  tmp="$(mktemp -d)"
+  tgz="$tmp/muscle3.tgz"
+  echo "${BLU}==> Installing MUSCLE v3.8.31 into .venv/bin${CLR}"
+  curl -L -o "$tgz" "$url"
+  tar -xzf "$tgz" -C "$tmp"
+  bin="$(find "$tmp" -type f -name 'muscle3.8.31_i86linux64' | head -n 1)"
+  [[ -n "$bin" ]] || die "Failed to unpack MUSCLE v3.8.31 binary"
+  install -m 0755 "$bin" "$ROOT/.venv/bin/muscle"
+  rm -rf "$tmp"
+  echo "${GRN}MUSCLE v3.8.31 installed at $ROOT/.venv/bin/muscle${CLR}"
+}
+
+ensure_muscle_v3(){
+  if command -v muscle >/dev/null 2>&1; then
+    local parsed major out
+    parsed="$(muscle_major)"
+    major="${parsed%%:::*}"
+    out="${parsed#*:::}"
+    if [[ -n "$major" && "$major" -lt 5 ]]; then
+      echo "${GRN}MUSCLE available:${CLR} ${out}"
+      return 0
+    fi
+    echo "${YLW}WARN:${CLR} MUSCLE >=5 or unknown version detected (${out:-unknown}); replacing with v3.8.31"
+  else
+    echo "${YLW}WARN:${CLR} MUSCLE not found on PATH; installing v3.8.31"
+  fi
+
+  install_muscle3
+}
+
 # ---- NEW: ensure sitecustomize patch is loaded via PYTHONPATH (no copying) ----
 ensure_gctree_sitecustomize_on_pythonpath(){
   local sc="$GCTREE_DIR/sitecustomize.py"
@@ -200,6 +243,9 @@ python -m pip install -r "$GCTREE_DIR/requirements.txt"
 echo "${BLU}==> Installing ClonalTree service requirements${CLR}"
 [[ -f "$CLONAL_DIR/requirements.txt" ]] || die "Missing $CLONAL_DIR/requirements.txt"
 python -m pip install -r "$CLONAL_DIR/requirements.txt"
+
+echo "${BLU}==> Ensuring MUSCLE v3.x is available for ClonalTree${CLR}"
+ensure_muscle_v3
 
 # NEW: no copying into site-packages. Ensure patch is loaded via PYTHONPATH.
 echo "${BLU}==> Enabling ete3 render patch via PYTHONPATH (sitecustomize)${CLR}"
