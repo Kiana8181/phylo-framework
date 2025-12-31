@@ -1,0 +1,21 @@
+{
+  "requiresFile": true,
+  "maxFiles": 1,
+  "fileLabel": "AIRR / IMGT HighV-QUEST TSV",
+
+  "order": [
+    "run_name",
+    "abundance_threshold",
+    "clone_cdr3_similarity",
+    "top_clones",
+    "clonotypes_per_clone",
+    "use_refinement",
+    "tree_use_abundance",
+    "tree_revision"
+  ],
+
+  "placeholders": {
+    "run_name": "defaults to input file name",
+    "clonotypes_per_clone": "30, 200 or all"
+  }
+}

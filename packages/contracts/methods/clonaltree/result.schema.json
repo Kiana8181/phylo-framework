@@ -1,0 +1,112 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ClonalTree result schema",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "type": "boolean",
+      "description": "True when the ClonalTree pipeline finished without fatal errors."
+    },
+    "trees": {
+      "type": "array",
+      "description": "Newick trees produced for the selected clones/clonotype depths.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "figures": {
+      "description": "Optional rendered figures per tree (e.g., PNGs or SVGs).",
+      "anyOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": { "type": ["string", "null"] }
+          }
+        }
+      ]
+    },
+    "annotations": {
+      "description": "Per-tree tip annotations (aligned with trees).",
+      "type": "array",
+      "items": {
+        "anyOf": [
+          { "type": "null" },
+          {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        ]
+      }
+    },
+    "clones": {
+      "type": "object",
+      "description": "Lightweight clone summaries aligned with tree order where possible.",
+      "properties": {
+        "clone_id": { "type": "array", "items": { "type": "string" } },
+        "abundance": { "type": "array", "items": { "type": "number" } },
+        "seqs": { "type": "array", "items": { "type": "integer" } }
+      },
+      "additionalProperties": true
+    },
+    "stats": {
+      "type": "object",
+      "description": "Run-level metadata and counters.",
+      "properties": {
+        "method": { "type": "string" },
+        "clone_threshold": { "type": "number" },
+        "abundance_threshold": { "type": "integer" },
+        "top_clones": { "type": "integer" },
+        "clonotype_limits": {
+          "type": "array",
+          "items": { "type": ["integer", "string"] }
+        },
+        "use_refinement": { "type": "boolean" },
+        "use_abundance": { "type": "boolean" },
+        "revision": { "type": "boolean" },
+        "n_clones": { "type": "integer" },
+        "n_trees": { "type": "integer" },
+        "total_seqs": { "type": "integer" },
+        "input_basename": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "warnings": {
+      "type": "array",
+      "description": "Non-fatal warnings raised during the run.",
+      "items": { "type": "string" }
+    },
+    "logs": {
+      "type": "array",
+      "description": "Step-by-step command logs from the pipeline.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "step": { "type": "string" },
+          "ok": { "type": "boolean" },
+          "cmd": { "type": "string" },
+          "out": { "type": "string" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "artifact_zip_b64": {
+      "description": "Base64-encoded ZIP archive of run artifacts.",
+      "anyOf": [{ "type": "string" }, { "type": "null" }]
+    },
+    "artifact_name": {
+      "type": ["string", "null"],
+      "description": "Suggested filename for the artifact_zip_b64 payload."
+    },
+    "error": {
+      "type": ["string", "null"],
+      "description": "Error message when ok = false."
+    }
+  },
+  "required": ["ok"],
+  "additionalProperties": false
+}
