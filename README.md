@@ -203,6 +203,7 @@ CONTRACTS_DIR=packages/contracts
 METHOD_DOWSER_URL=http://localhost:8001
 METHOD_GCTREE_URL=http://localhost:8002
 METHOD_BREPPHYLO_URL=http://localhost:8003
+METHOD_CLONALTREE_URL=http://localhost:8004
 CORS_ORIGINS=http://localhost:3000
 ```
 
@@ -348,6 +349,54 @@ Open **http://localhost:8002** when it’s running.
 > - If you see `Parsed 0 from outfile but -1 expected!` or `No trees found in 'outfile'`, it usually means `dnapars` didn’t produce a valid `outfile` (bad input, wrong working dir, or `dnapars` not found in PATH). Verify `dnapars` is installed and accessible, and that inputs exist.
 > - If your service module isn’t `services.gctree.app:app`, replace it with your actual ASGI path (e.g., `services.gctree.main:app`).
 
+### 3.3) Start a method service (ClonalTree) — pick ONE option
+
+#### Option A — Docker (recommended; MUSCLE v3 baked in)
+
+Build the image **from the clonaltree folder**, then run it **from repo root**:
+
+```bash
+# build
+cd services/clonaltree
+docker build -t phylo-clonaltree:dev .
+
+# run (from REPO ROOT)
+cd ../..
+docker run --rm -p 8004:8004   -v "$(pwd)/packages/contracts:/contracts:ro"   -e CONTRACTS_DIR=/contracts   phylo-clonaltree:dev
+```
+
+**Windows PowerShell** (repo root):
+
+```powershell
+docker run --rm -p 8004:8004 `
+  -v ${PWD}/packages/contracts:/contracts:ro `
+  -e CONTRACTS_DIR=/contracts `
+  phylo-clonaltree:dev
+```
+
+This exposes ClonalTree at **http://localhost:8004** with contracts mounted read-only. The image installs MUSCLE v3 (required; v5 is not supported).
+
+#### Option B — Local Python (requires MUSCLE v3.x on PATH)
+
+From the **repo root**:
+
+```bash
+# 1) Install service deps
+pip install -r services/clonaltree/requirements.txt
+
+# 2) Install MUSCLE v3 (examples)
+# macOS:  brew install muscle
+# Ubuntu: sudo apt-get update && sudo apt-get install -y muscle
+# verify version is 3.x (v5 is incompatible)
+muscle -version
+
+# 3) Run the service
+export CONTRACTS_DIR="$(pwd)/packages/contracts"
+python -m uvicorn services.clonaltree.app:app --host 0.0.0.0 --port 8004
+```
+
+Keep this terminal open; it’s your method server. If `muscle -version` shows 5.x, install a 3.x build (Homebrew/apt usually ship 3.x; conda has `muscle=3.8`).
+
 ### 4) Start the API (FastAPI)
 
 In a **new terminal** (repo root):
@@ -378,6 +427,9 @@ Open **http://localhost:3000** and you should see the app. The UI will call the 
 - `CONTRACTS_DIR` — path to `packages/contracts` (API & methods use this)
 - `CORS_ORIGINS` — dev default includes `http://localhost:3000`
 - `METHOD_DOWSER_URL` — URL of Dowser service, e.g. `http://localhost:8001` in dev
+- `METHOD_GCTREE_URL` — URL of GCtree service, e.g. `http://localhost:8002`
+- `METHOD_BREPPHYLO_URL` — URL of BrepPhylo service, e.g. `http://localhost:8003`
+- `METHOD_CLONALTREE_URL` — URL of ClonalTree service, e.g. `http://localhost:8004`
 - `NEXT_PUBLIC_API_BASE_URL` — Web UI → API base URL (set in `apps/web/.env*`)
 - `RUNS_DIR_SERVICE` — optional; when API runs on the host but methods run in Docker, set to the in-container mount (e.g., `/runtime/runs`) so method services can read uploaded files.
 - `IGPHYML_BIN` / `IGPHYML_MOTIFS` — for BrepPhylo; in Docker images they default to `/usr/local/share/igphyml/src/igphyml` and `/usr/local/share/igphyml/src/motifs`.
