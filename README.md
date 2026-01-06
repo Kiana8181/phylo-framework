@@ -96,14 +96,14 @@ Pick:
 
 ## Ports
 
-| Service | URL                   | Port |
-| ------: | --------------------- | ---: |
-|     Web | http://localhost:3000 | 3000 |
-|     API | http://localhost:8000 | 8000 |
-|  Dowser | http://localhost:8001 | 8001 |
-| GCtree  | http://localhost:8002 | 8002 |
-|BrepPhylo| http://localhost:8003 | 8003 |
-|ClonalTree| http://localhost:8004 | 8004 |
+|    Service | URL                   | Port |
+| ---------: | --------------------- | ---: |
+|        Web | http://localhost:3000 | 3000 |
+|        API | http://localhost:8000 | 8000 |
+|     Dowser | http://localhost:8001 | 8001 |
+|     GCtree | http://localhost:8002 | 8002 |
+|  BrepPhylo | http://localhost:8003 | 8003 |
+| ClonalTree | http://localhost:8004 | 8004 |
 
 > Ensure these ports are **free** before running. The helper scripts will check and exit with a clear error if not.
 
@@ -349,7 +349,52 @@ Open **http://localhost:8002** when it’s running.
 > - If you see `Parsed 0 from outfile but -1 expected!` or `No trees found in 'outfile'`, it usually means `dnapars` didn’t produce a valid `outfile` (bad input, wrong working dir, or `dnapars` not found in PATH). Verify `dnapars` is installed and accessible, and that inputs exist.
 > - If your service module isn’t `services.gctree.app:app`, replace it with your actual ASGI path (e.g., `services.gctree.main:app`).
 
-### 3.3) Start a method service (ClonalTree) — pick ONE option
+### 3.3) Start a method service (BrepPhylo) — pick ONE option
+
+#### Option A — Docker (IgPhyML + dnapars baked in)
+
+Build the image **from the brepphylo folder**, then run it **from repo root**:
+
+```bash
+# build
+cd services/brepphylo
+docker build -t phylo-brepphylo:dev .
+
+# run (from REPO ROOT)
+cd ../..
+docker run --rm -p 8003:8003   -v "$(pwd)/packages/contracts:/contracts:ro"   -e CONTRACTS_DIR=/contracts   phylo-brepphylo:dev
+```
+
+**Windows PowerShell** (repo root):
+
+```powershell
+docker run --rm -p 8003:8003 `
+  -v ${PWD}/packages/contracts:/contracts:ro `
+  -e CONTRACTS_DIR=/contracts `
+  phylo-brepphylo:dev
+```
+
+This exposes BrepPhylo at **http://localhost:8003** with contracts mounted read-only.
+
+#### Option B — Local R (requires IgPhyML + BrepPhylo deps)
+
+Ensure you have **R 4.3+**, **IgPhyML** on PATH (e.g., `/usr/local/bin/igphyml` and motifs in `/usr/local/share/igphyml/src/motifs`), and the BrepPhylo stack installed:
+
+```bash
+R -q -e "install.packages(c('plumber','jsonlite','jsonvalidate','httr','ape','igraph','remotes'), repos='https://cloud.r-project.org')"
+R -q -e "install.packages('BiocManager', repos='https://cloud.r-project.org'); BiocManager::install(c('Biostrings','msa','GenomicRanges','GenomicAlignments'), ask = FALSE)"
+R -q -e "remotes::install_github('Fraternalilab/BrepPhylo', dependencies = TRUE)"
+```
+
+From the **repo root**:
+
+```bash
+Rscript -e 'setwd("services/brepphylo"); Sys.setenv(CONTRACTS_DIR="../../packages/contracts"); Sys.setenv(IGPHYML_BIN="/usr/local/bin/igphyml"); Sys.setenv(IGPHYML_MOTIFS="/usr/local/share/igphyml/src/motifs"); pr <- plumber::plumb("plumber.R"); pr$run(host="0.0.0.0", port=8003)'
+```
+
+Keep this terminal open; it’s your BrepPhylo server.
+
+### 3.4) Start a method service (ClonalTree) — pick ONE option
 
 #### Option A — Docker (recommended; MUSCLE v3 baked in)
 
