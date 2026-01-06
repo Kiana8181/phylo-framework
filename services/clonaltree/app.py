@@ -386,6 +386,8 @@ async def run_handler(request: Request):
 
         out_dir = tmp / "output"
         out_dir.mkdir(parents=True, exist_ok=True)
+        sorted_clusters_path = out_dir / "Sorted_clusters.p"
+        common_env = {"SORTED_CLUSTERS_PATH": str(sorted_clusters_path)}
 
         clone_thr_str = str(clone_thr)
         seq_prefix = out_dir / f"{run_name}_seq_Fo.txt"
@@ -413,6 +415,7 @@ async def run_handler(request: Request):
             cwd=BASE_CODES_DIR,
             step="format_input",
             logs=logs,
+            extra_env=common_env,
         )
         if not ok1 or not formatted_seq.exists():
             return err("formatting failed", logs=logs)
@@ -432,6 +435,7 @@ async def run_handler(request: Request):
             cwd=BASE_CODES_DIR,
             step="initial_clustering",
             logs=logs,
+            extra_env=common_env,
         )
         if not ok2 or not initial_cluster_raw.exists():
             return err("initial clustering failed", logs=logs)
@@ -449,6 +453,7 @@ async def run_handler(request: Request):
             cwd=BASE_CODES_DIR,
             step="format_initial_clusters",
             logs=logs,
+            extra_env=common_env,
         )
         if not ok3 or not initial_cluster_fmt.exists():
             return err("formatting initial clusters failed", logs=logs)
@@ -467,6 +472,7 @@ async def run_handler(request: Request):
                 cwd=BASE_CODES_DIR,
                 step="refinement",
                 logs=logs,
+                extra_env=common_env,
             )
             if not ok4 or not refined_raw.exists():
                 return err("refinement failed", logs=logs)
@@ -497,6 +503,7 @@ async def run_handler(request: Request):
             cwd=BASE_CODES_DIR,
             step="format_final_clusters",
             logs=logs,
+            extra_env=common_env,
         )
         if not ok5 or not final_cluster_fmt.exists():
             return err("formatting final clusters failed", logs=logs)
@@ -516,6 +523,7 @@ async def run_handler(request: Request):
             cwd=BASE_CODES_DIR,
             step="two_level_clonal_info",
             logs=logs,
+            extra_env=common_env,
         )
         if not ok6 or not repertoire_info.exists() or not final_seq_info.exists():
             return err("two-level clone/clonotype step failed", logs=logs)
@@ -543,6 +551,7 @@ async def run_handler(request: Request):
                 cwd=BASE_CODES_DIR,
                 step="select_clones",
                 logs=logs,
+                extra_env=common_env,
             )
             if not ok7:
                 return err("failed to prepare per-clone inputs", logs=logs)
@@ -571,6 +580,7 @@ async def run_handler(request: Request):
                     cwd=BASE_CODES_DIR,
                     step=f"alignment_clone{idx}_limit{limit_label}",
                     logs=logs,
+                    extra_env=common_env,
                 )
                 if not align_ok:
                     warnings.append(f"Alignment failed for clone {idx} ({limit_label}).")
@@ -598,6 +608,7 @@ async def run_handler(request: Request):
                     cwd=BASE_CODES_DIR,
                     step=f"tree_clone{idx}_limit{limit_label}",
                     logs=logs,
+                    extra_env=common_env,
                 )
                 if not tree_ok:
                     warnings.append(f"Tree construction failed for clone {idx} ({limit_label}).")

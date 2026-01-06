@@ -22,18 +22,40 @@ SOFTWARE.
 
 
 # this file contains some utilty function helpful for the  processing data
-# Mainly for reading fasta file, 
+# Mainly for reading fasta file,
 
+import os
 import pickle
+from pathlib import Path
 from concensus_machine import get_con_seq
+
+
+SORTED_CLUSTERS_FILENAME = "Sorted_clusters.p"
+SORTED_CLUSTERS_ENV = "SORTED_CLUSTERS_PATH"
+
+
+def _resolve_pkl_path(filename):
+    """
+    Allow redirecting the Sorted_clusters.p pickle via SORTED_CLUSTERS_PATH.
+    Other filenames are left unchanged.
+    """
+    if filename == SORTED_CLUSTERS_FILENAME:
+        env_path = os.environ.get(SORTED_CLUSTERS_ENV)
+        if env_path:
+            return Path(env_path)
+    return Path(filename)
 
 
 
 def save_pkl(object, filename):
-    pickle.dump(object,open(filename,'wb'))
+    path = _resolve_pkl_path(filename)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open('wb') as handle:
+        pickle.dump(object, handle)
 
 def load_pkl(filename):
-    return pickle.load(open(filename,'rb'))
+    path = _resolve_pkl_path(filename)
+    return pickle.load(path.open('rb'))
 
 def csv2fasta(S,outfile):
     with open(outfile,'w') as W:
@@ -179,4 +201,3 @@ def prepare_for_kld(clusters):
         if len(c)>1:
             final_cluster.append(c)
     return final_cluster
-
