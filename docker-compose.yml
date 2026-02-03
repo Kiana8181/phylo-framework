@@ -6,6 +6,7 @@ x-env-common: &env_common
   METHOD_DOWSER_URL: http://dowser:8001
   METHOD_GCTREE_URL: http://gctree:8002
   METHOD_BREPPHYLO_URL: http://brepphylo:8003
+  METHOD_CLONALTREE_URL: http://clonaltree:8004
   HTTP_CLIENT_TIMEOUT: "600"
   SPEC_TIMEOUT: "60"
   RUNS_DIR: /shared
@@ -54,7 +55,7 @@ services:
     environment:
       <<: *env_common
       RUNS_DIR: /runtime/runs
-    depends_on: [dowser, gctree, brepphylo]
+    depends_on: [dowser, gctree, brepphylo, clonaltree]
     ports: ["8000:8000"]
     volumes:
       - type: bind
@@ -76,7 +77,7 @@ services:
     environment:
       <<: *env_common
       RUNS_DIR: /runtime/runs
-    depends_on: [dowser, gctree, brepphylo]
+    depends_on: [dowser, gctree, brepphylo, clonaltree]
     ports: ["8000:8000"]
     volumes:
       - type: bind
@@ -157,4 +158,25 @@ services:
         target: /runtime/runs
         read_only: true
     expose: ["8003"]
+    profiles: ["dev","prod"]
+
+  clonaltree:
+    build:
+      context: ./services/clonaltree
+      dockerfile: Dockerfile
+    image: phylo-clonaltree:latest
+    environment:
+      CONTRACTS_DIR: /contracts
+      STRICT_CONTRACT_ROUTES: ${STRICT_CONTRACT_ROUTES:-true}
+      RUNS_DIR: /runtime/runs
+    volumes:
+      - type: bind
+        source: ./packages/contracts
+        target: /contracts
+        read_only: true
+      - type: bind
+        source: ./runtime/runs
+        target: /runtime/runs
+        read_only: true
+    expose: ["8004"]
     profiles: ["dev","prod"]
