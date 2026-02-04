@@ -10,8 +10,47 @@ x-env-common: &env_common
   HTTP_CLIENT_TIMEOUT: "600"
   SPEC_TIMEOUT: "60"
   RUNS_DIR: /shared
+  DATABASE_URL: postgresql+asyncpg://phylo:phylo@postgres:5432/phylo
+  REDIS_URL: redis://redis:6379/0
+  SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+  GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+  GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+  GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:8000/auth/google/callback}
+  RQ_WORKER_CONCURRENCY: ${RQ_WORKER_CONCURRENCY:-4}
+  RQ_QUEUE_NAME: ${RQ_QUEUE_NAME:-default}
 
 services:
+  # --- Database ---
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: phylo
+      POSTGRES_PASSWORD: phylo
+      POSTGRES_DB: phylo
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U phylo"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles: ["dev", "prod"]
+
+  # --- Redis (for task queue) ---
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles: ["dev", "prod"]
   # --- UI: DEV ---
   web:
     build:
@@ -55,7 +94,15 @@ services:
     environment:
       <<: *env_common
       RUNS_DIR: /runtime/runs
-    depends_on: [dowser, gctree, brepphylo, clonaltree]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      dowser:
+      gctree:
+      brepphylo:
+      clonaltree:
     ports: ["8000:8000"]
     volumes:
       - type: bind
@@ -77,7 +124,15 @@ services:
     environment:
       <<: *env_common
       RUNS_DIR: /runtime/runs
-    depends_on: [dowser, gctree, brepphylo, clonaltree]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      dowser:
+      gctree:
+      brepphylo:
+      clonaltree:
     ports: ["8000:8000"]
     volumes:
       - type: bind
@@ -180,3 +235,32 @@ services:
         read_only: true
     expose: ["8004"]
     profiles: ["dev","prod"]
+
+  # --- Worker (for RQ tasks) ---
+  worker:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    image: phylo-api:latest
+    environment:
+      <<: *env_common
+      RUNS_DIR: /runtime/runs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - type: bind
+        source: ./packages/contracts
+        target: /contracts
+        read_only: true
+      - type: bind
+        source: ./runtime/runs
+        target: /runtime/runs
+    command: python -m apps.api.worker
+    profiles: ["dev", "prod"]
+
+volumes:
+  postgres_data:
+  redis_data:

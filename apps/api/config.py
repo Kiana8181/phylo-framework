@@ -15,6 +15,22 @@ CONTRACTS_DIR = (Path(_env_contracts) if Path(_env_contracts).is_absolute()
 # CORS origins (comma-separated)
 CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",") if o.strip()]
 
+# Database
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://phylo:phylo@localhost:5432/phylo")
+
+# Redis
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+
+# Authentication
+SECRET_KEY = os.getenv("SECRET_KEY", "change-me-in-production")
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
+GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:8000/auth/google/callback")
+
+# Queue
+RQ_WORKER_CONCURRENCY = int(os.getenv("RQ_WORKER_CONCURRENCY", "4"))
+RQ_QUEUE_NAME = os.getenv("RQ_QUEUE_NAME", "default")
+
 # Service URLs are fully dynamic via env:
 # e.g. METHOD_DOWSER_URL=http://localhost:8001, METHOD_GCTREE_URL=..., etc.
 def method_service_url(method_id: str) -> str | None:

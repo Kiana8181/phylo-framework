@@ -3,6 +3,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
+from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -10,8 +11,20 @@ load_dotenv()
 from apps.api.config import CORS_ORIGINS
 from apps.api.routers import methods as methods_router
 from apps.api.routers import runs as runs_router
+from apps.api.auth.router import router as auth_router
+from apps.api.database import init_db
 
-app = FastAPI(title="Phylo Orchestrator")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for startup/shutdown events."""
+    # Startup
+    await init_db()
+    yield
+    # Shutdown (if needed)
+
+
+app = FastAPI(title="Phylo Orchestrator", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -48,5 +61,6 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     return err("Internal server error", status_code=500)
 
 # Routers
+app.include_router(auth_router)
 app.include_router(methods_router.router)
 app.include_router(runs_router.router)
