@@ -5,7 +5,7 @@
     "apps/*",
     "packages/*"
   ],
-    "dependencies": {
+  "dependencies": {
     "inquirer": "^9.3.7"
   },
   "scripts": {
@@ -16,6 +16,10 @@
     "phylo:run": "node ./select-mode.mjs",
     "phylo:dev:docker": "bash ./dev-with-docker.sh",
     "phylo:dev:r": "bash ./dev-with-local-r.sh",
-    "phylo:prod": "docker compose up -d --build"
+    "phylo:prod": "docker compose up -d --build",
+    "services:sync-env": "node scripts/method-services.mjs sync-env",
+    "services:list": "node scripts/method-services.mjs list",
+    "services:start": "node scripts/method-services.mjs start",
+    "services:stop": "node scripts/method-services.mjs stop"
   }
 }

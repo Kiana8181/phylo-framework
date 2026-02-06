@@ -107,11 +107,13 @@ export default function FormBuilder({
   onSubmit,
   defaults,
   footer,
+  disabled: formDisabled = false,
 }: {
   schema: JSONSchema;
   defaults?: Record<string, any>;
   onSubmit: (values: Record<string, any>) => void;
   footer?: ReactNode;
+  disabled?: boolean;
 }) {
   const zodSchema = useMemo(() => zodFromJsonSchema(schema), [schema]);
   const formDefaults = useMemo(
@@ -123,6 +125,8 @@ export default function FormBuilder({
     resolver: zodResolver(zodSchema),
     defaultValues: formDefaults,
   });
+
+  const disabled = formState.isSubmitting || formDisabled;
 
   const values = useWatch({ control });
   const props = schema.properties ?? {};
@@ -185,7 +189,7 @@ export default function FormBuilder({
                 <Switch
                   checked={Boolean(field.value)}
                   onCheckedChange={field.onChange}
-                  disabled={formState.isSubmitting}
+                  disabled={disabled}
                 />
               );
             }
@@ -202,7 +206,7 @@ export default function FormBuilder({
                   name={field.name}
                   ref={field.ref}
                   placeholder={placeholder}
-                  disabled={formState.isSubmitting}
+                  disabled={disabled}
                 />
               );
             }
@@ -211,7 +215,7 @@ export default function FormBuilder({
                 <Select
                   value={(field.value ?? undefined) as string | undefined}
                   onValueChange={field.onChange}
-                  disabled={formState.isSubmitting}
+                  disabled={disabled}
                 >
                   <SelectTrigger className="w-full">
                     <SelectValue placeholder="Select" />
@@ -234,7 +238,7 @@ export default function FormBuilder({
                 name={field.name}
                 ref={field.ref}
                 placeholder={placeholder}
-                disabled={formState.isSubmitting}
+                disabled={disabled}
               />
             );
           }}
@@ -284,7 +288,7 @@ export default function FormBuilder({
       ))}
       {footer}
       <div className="col-span-full flex justify-end">
-        <Button type="submit" disabled={formState.isSubmitting}>
+        <Button type="submit" disabled={disabled}>
           {formState.isSubmitting ? (
             <>
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />

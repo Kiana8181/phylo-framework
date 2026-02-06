@@ -5,9 +5,8 @@ from fastapi.responses import JSONResponse
 from apps.api.contracts.loader import (
     list_methods_from_contracts,
     load_spec_from_contracts,
-    get_param_schema,
 )
-from apps.api.clients.method_client import fetch_remote_spec
+from apps.api.config import CONTRACTS_DIR
 
 router = APIRouter()
 
@@ -16,25 +15,30 @@ def ok(data, message: str | None = None, status_code: int = 200) -> JSONResponse
 
 @router.get("/methods")
 async def list_methods():
+    """List all available methods from contracts."""
     return ok(list_methods_from_contracts())
 
 @router.get("/methods/{method_id}/spec")
 async def get_spec(method_id: str):
-    # Try remote spec first (if METHOD_<ID>_URL is set), then fill/override from contracts
-    remote = await fetch_remote_spec(method_id)  # may be None if no URL configured
-    local = load_spec_from_contracts(method_id)
-
-    if remote:
-        # If a local param.schema.json exists, prefer it (source of truth)
-        param_schema = get_param_schema(method_id)
-        merged = {**remote}
-        if param_schema:
-            merged["paramSchema"] = param_schema
-        # Ensure basic fields from local if remote misses them
-        for k in ("id", "name", "version", "accepts", "uiHints"):
-            if k not in merged and k in local:
-                merged[k] = local[k]
-        return ok(merged)
-
-    # No remote service—serve from contracts only
-    return ok(local)
+    """
+    Get method spec from contracts only (no remote service calls).
+    All spec information should be stored in packages/contracts/methods/{method_id}/
+    """
+    # Check if method exists in contracts
+    method_dir = CONTRACTS_DIR / "methods" / method_id
+    if not method_dir.exists() or not method_dir.is_dir():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Method '{method_id}' not found in contracts"
+        )
+    
+    # Load spec from contracts
+    spec = load_spec_from_contracts(method_id)
+    
+    if not spec:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Spec for method '{method_id}' could not be loaded"
+        )
+    
+    return ok(spec)

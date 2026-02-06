@@ -10,8 +10,31 @@ x-env-common: &env_common
   HTTP_CLIENT_TIMEOUT: "600"
   SPEC_TIMEOUT: "60"
   RUNS_DIR: /shared
+  POSTGRES_USER: ${POSTGRES_USER:-phylo_user}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-phylo_pass}
+  POSTGRES_DB: ${POSTGRES_DB:-phylo_db}
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-phylo_user}:${POSTGRES_PASSWORD:-phylo_pass}@postgres:5432/${POSTGRES_DB:-phylo_db}
 
 services:
+  # --- PostgreSQL Database ---
+  postgres:
+    image: postgres:15-alpine
+    container_name: phylo-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-phylo_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-phylo_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-phylo_db}
+    ports:
+      - "${POSTGRES_PORT:-5440}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-phylo_user} -d ${POSTGRES_DB:-phylo_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles: ["dev", "prod"]
+
   # --- UI: DEV ---
   web:
     build:
@@ -52,10 +75,22 @@ services:
       context: .
       dockerfile: apps/api/Dockerfile
     image: phylo-api:latest
+    env_file:
+      - apps/api/.env
     environment:
       <<: *env_common
       RUNS_DIR: /runtime/runs
-    depends_on: [dowser, gctree, brepphylo, clonaltree]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      dowser:
+        condition: service_started
+      gctree:
+        condition: service_started
+      brepphylo:
+        condition: service_started
+      clonaltree:
+        condition: service_started
     ports: ["8000:8000"]
     volumes:
       - type: bind
@@ -74,10 +109,22 @@ services:
       context: .
       dockerfile: apps/api/Dockerfile
     image: phylo-api:latest
+    env_file:
+      - apps/api/.env
     environment:
       <<: *env_common
       RUNS_DIR: /runtime/runs
-    depends_on: [dowser, gctree, brepphylo, clonaltree]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      dowser:
+        condition: service_started
+      gctree:
+        condition: service_started
+      brepphylo:
+        condition: service_started
+      clonaltree:
+        condition: service_started
     ports: ["8000:8000"]
     volumes:
       - type: bind
@@ -180,3 +227,6 @@ services:
         read_only: true
     expose: ["8004"]
     profiles: ["dev","prod"]
+
+volumes:
+  postgres_data:

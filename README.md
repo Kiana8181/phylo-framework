@@ -188,6 +188,32 @@ Everything in containers with internal networking.
 
 ---
 
+## Central control for method services
+
+Ports and URLs for method services (Dowser, GCtree, BrepPhylo, ClonalTree) are defined in one place and kept in sync with the API.
+
+**Config:** `config/method-services.json` — edit here to change ports or add services.
+
+| Command | Description |
+|--------|-------------|
+| `npm run services:sync-env` | Write `METHOD_*_URL` into `apps/api/.env` from config (run after changing ports) |
+| `npm run services:list` | List services and their URLs |
+| `npm run services:start` | Start **all** method services with Docker (build + run) |
+| `npm run services:start -- gctree dowser` | Start only the listed services |
+| `npm run services:stop` | Stop all method containers |
+| `npm run services:stop -- gctree` | Stop one |
+
+**Typical workflow (API + Web local, methods in Docker):**
+
+```bash
+npm run services:sync-env    # once, or after editing config
+npm run services:start -- gctree   # start only GCtree
+npm run dev:api              # in another terminal
+npm run dev:web              # in another terminal
+```
+
+---
+
 ## Manual Run (Developers)
 
 If you want to run everything **without** the helper scripts, follow this.
@@ -197,6 +223,14 @@ If you want to run everything **without** the helper scripts, follow this.
 Create and fill these files (adjust ports/paths if you changed them).
 
 **apps/api/.env**
+
+You can generate method URLs from the central config:
+
+```bash
+npm run services:sync-env
+```
+
+Or create manually:
 
 ```env
 CONTRACTS_DIR=packages/contracts
