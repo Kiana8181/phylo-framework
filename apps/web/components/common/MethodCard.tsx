@@ -12,8 +12,8 @@ export default function MethodCard({
 }) {
   return (
     <Card
-      className={`p-4 cursor-pointer border ${
-        active ? "ring-2 ring-blue-500" : ""
+      className={`p-4 cursor-pointer border transition-colors ${
+        active ? "ring-2 ring-primary border-primary/30" : ""
       }`}
       onClick={onClick}
     >

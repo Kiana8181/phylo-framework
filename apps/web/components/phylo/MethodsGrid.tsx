@@ -7,20 +7,22 @@ export default function MethodsGrid({
   methods,
   selectedId,
   onSelect,
+  disabled = false,
 }: {
   methods: MethodInfo[];
   selectedId: string | null;
   onSelect: (m: MethodInfo) => void;
+  disabled?: boolean;
 }) {
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
       {methods.map((m) => (
         <Card
           key={m.id}
-          className={`p-4 cursor-pointer border transition hover:shadow-sm ${
-            selectedId === m.id ? "ring-2 ring-blue-500" : ""
-          }`}
-          onClick={() => onSelect(m)}
+          className={`p-4 border transition hover:shadow-sm ${
+            selectedId === m.id ? "ring-2 ring-primary border-primary/30" : ""
+          } ${disabled ? "opacity-60 pointer-events-none" : "cursor-pointer"}`}
+          onClick={() => !disabled && onSelect(m)}
         >
           <div className="flex items-center justify-between">
             <div className="font-medium">{m.name}</div>

@@ -5,8 +5,20 @@ export const API_ROUTES = {
   methods: () => `/methods`,
   methodSpec: (methodId: string) => `/methods/${encodeURIComponent(methodId)}/spec`,
   createRun: (methodId: string) => `/runs?method=${encodeURIComponent(methodId)}`,
+  runsList: () => `/runs`,
+  runCurrent: () => `/runs/current`,
   runStatus: (runId: string) => `/runs/${encodeURIComponent(runId)}/status`,
   runResult: (runId: string) => `/runs/${encodeURIComponent(runId)}/result`,
+  filesList: () => `/files`,
+  filesDelete: (id: string) => `/files/${encodeURIComponent(id)}`,
+  authLogin: () => `/auth/login`,
+  authRegister: () => `/auth/register`,
+  authForgotPassword: () => `/auth/forgot-password`,
+  authResetPassword: () => `/auth/reset-password`,
+  authRefresh: () => `/auth/refresh`,
+  authMe: () => `/auth/me`,
+  authLogout: () => `/auth/logout`,
+  authGoogle: () => `/auth/google`,
 } as const;
 
 /**

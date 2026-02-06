@@ -10,8 +10,27 @@ load_dotenv()
 from apps.api.config import CORS_ORIGINS
 from apps.api.routers import methods as methods_router
 from apps.api.routers import runs as runs_router
+from apps.api.routers import files as files_router
+from apps.api.auth import auth_router
+from apps.api.database import init_db, close_db
 
 app = FastAPI(title="Phylo Orchestrator")
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize database on startup."""
+    # Note: Database tables should be created via Alembic migrations
+    # This is only for development/testing - in production use migrations
+    # Uncomment below only if you want to auto-create tables (not recommended)
+    # await init_db()
+    pass
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Close database connections on shutdown."""
+    await close_db()
 
 app.add_middleware(
     CORSMiddleware,
@@ -33,11 +52,14 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     detail = exc.detail
     if isinstance(detail, list):
         msg = detail[0].get("msg") if detail and isinstance(detail[0], dict) else str(detail)
+        data = None
     elif isinstance(detail, dict):
         msg = detail.get("message") or detail.get("detail") or str(detail)
+        data = detail  # e.g. 409 RUN_IN_PROGRESS returns run_id, status, etc.
     else:
         msg = str(detail)
-    return err(msg, status_code=exc.status_code)
+        data = None
+    return err(msg, status_code=exc.status_code, data=data)
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
@@ -48,5 +70,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     return err("Internal server error", status_code=500)
 
 # Routers
+app.include_router(auth_router)
 app.include_router(methods_router.router)
 app.include_router(runs_router.router)
+app.include_router(files_router.router)

@@ -11,6 +11,33 @@ export type MethodSpec = {
 
 export type CreateRunResponse = { run_id: string };
 
+export type RunSummary = {
+  id: string;
+  method_id: string;
+  status: string;
+  progress?: number;
+  message?: string | null;
+  created_at: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+};
+
+export type FileSummary = {
+  id: string;
+  original_filename: string;
+  file_size: number;
+  mime_type?: string | null;
+  uploaded_at: string | null;
+  run_id: string | null;
+  storage_url?: string | null;
+};
+
+export type FilesListResponse = {
+  files: FileSummary[];
+  total_bytes_used: number;
+  quota_bytes: number;
+};
+
 export type RunStatus = {
   status: "PENDING" | "RUNNING" | "DONE" | "ERROR";
   progress?: number;
