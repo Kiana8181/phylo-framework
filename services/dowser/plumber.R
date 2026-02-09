@@ -16,7 +16,7 @@ library(ape)
 library(jsonvalidate)
 library(Biostrings)
 
-# Raise PCRE limits (helps multipart parser with long headers)
+# Raise PCRE limits for robust regex parsing on large inputs.
 options(pcre.limit.match     = 1e8)
 options(pcre.limit.recursion = 2e6)
 Sys.setenv(PCRE2_MATCH_LIMIT="100000000")
@@ -335,7 +335,7 @@ detect_stops_and_frame <- function(seq_vec) {
   list(stop=stop_bad, frame_bad=frame_bad)
 }
 
-# Small helper: parse vectors from JSON/multipart (array OR "a,b c;d")
+# Small helper: parse vectors from JSON (array OR "a,b c;d")
 parse_vec <- function(x) {
   if (is.null(x)) return(character(0))
   if (is.list(x)) x <- unlist(x, use.names = FALSE)
@@ -407,47 +407,42 @@ run_handler_impl <- function(req, res) {
     db <- NULL
     p  <- NULL
 
-    # ---- Accept big files via JSON { file_path, params } ----
-    if (grepl("application/json", ct, fixed = TRUE)) {
-      body_raw <- req$postBody
-      if (is.raw(body_raw)) body_raw <- rawToChar(body_raw)
-      body <- jsonlite::fromJSON(body_raw, simplifyVector = FALSE)
-      file_path <- body$file_path %||% NULL
-      p <- parse_params(jsonlite::toJSON(body$params %||% list()))
-      if (is.null(file_path) || !file.exists(file_path)) {
-        res$status <- 400; return(list(ok=FALSE, error="file_path is required and must exist on the server"))
-      }
-      db <- read_airr_from_path(file_path)
-
-    } else {
-      # ---- Fallback: multipart (for small files only) ----
-      mp <- tryCatch(mime::parse_multipart(req), error = function(e) e)
-      if (inherits(mp, "error")) {
-        res$status <- 413
-        return(list(
-          ok = FALSE,
-          error = paste0("Failed to parse multipart (too large?). ",
-                         "Prefer JSON {\"file_path\": \"/path/to/file\", \"params\": {...}}. ",
-                         mp$message)
-        ))
-      }
-
-      raw_params <- mp$params %||% mp$config %||% "{}"
-      if (is.list(raw_params) && !is.null(raw_params$value)) raw_params <- raw_params$value
-      if (length(raw_params) > 1) raw_params <- raw_params[[1]]
-      p <- parse_params(raw_params)
-
-      f <- NULL
-      if (!is.null(mp$file) && is.list(mp$file) && !is.null(mp$file$datapath)) f <- mp$file
-      if (is.null(f)) {
-        idx <- which(vapply(mp, function(x) is.list(x) && !is.null(x$datapath), logical(1)))
-        if (length(idx)) f <- mp[[idx[1]]]
-      }
-      if (is.null(f) || is.null(f$datapath) || !nzchar(f$datapath)) {
-        res$status <- 400; return(list(ok=FALSE, error="file is required (AIRR TSV/CSV/RDS/RDA)"))
-      }
-      db <- read_airr_from_path(f$datapath)
+    # ---- JSON only: { file_path, params } ----
+    if (!grepl("application/json", ct, fixed = TRUE)) {
+      res$status <- 415
+      return(list(
+        ok = FALSE,
+        error = "Unsupported content type. Use application/json with {\"file_path\": \"/path/to/file\", \"params\": {...}}."
+      ))
     }
+
+    body_raw <- req$postBody
+    if (is.raw(body_raw)) body_raw <- rawToChar(body_raw)
+    body <- tryCatch(
+      jsonlite::fromJSON(body_raw, simplifyVector = FALSE),
+      error = function(e) e
+    )
+    if (inherits(body, "error") || !is.list(body)) {
+      res$status <- 400
+      return(list(ok = FALSE, error = "Invalid JSON body. Expected an object with file_path and optional params."))
+    }
+
+    file_path <- body$file_path %||% NULL
+    if (is.null(file_path) || !nzchar(file_path)) {
+      res$status <- 400
+      return(list(ok = FALSE, error = "file_path is required and must exist on the server"))
+    }
+    if (!file.exists(file_path) || isTRUE(file.info(file_path)$isdir)) {
+      res$status <- 400
+      return(list(ok = FALSE, error = "file_path is required and must exist on the server"))
+    }
+    if (file.access(file_path, 4) != 0) {
+      res$status <- 400
+      return(list(ok = FALSE, error = "file_path exists but is not readable on the server"))
+    }
+
+    p <- parse_params(jsonlite::toJSON(body$params %||% list()))
+    db <- read_airr_from_path(file_path)
 
     # ---- Sanity & cleaning ----
     logf("[dowser] rows=%d cols=%d", nrow(db), ncol(db))
