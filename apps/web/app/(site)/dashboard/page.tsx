@@ -11,10 +11,10 @@ import { useRunResult, useRunStatus } from "@/features/runs/hooks";
 import { cleanNewick } from "@/lib/newick";
 import type { MethodInfo } from "@phylo/contracts";
 import { useSearchParams, useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 
-export default function DashboardPage() {
+function DashboardPageContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const { data: methods } = useMethods();
@@ -84,7 +84,7 @@ export default function DashboardPage() {
   const resultEnabled = status?.status === "DONE" && !!runId;
   const { data: result } = useRunResult(runId ?? undefined, resultEnabled);
 
-  const runInProgress = !!runId && status !== "DONE" && status !== "ERROR";
+  const runInProgress = !!runId && status?.status !== "DONE" && status?.status !== "ERROR";
 
   const cloneRows = useMemo(
     () =>
@@ -252,5 +252,19 @@ export default function DashboardPage() {
         </section>
       )}
     </main>
+  );
+}
+
+export default function DashboardPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="mx-auto max-w-6xl w-full p-4 sm:p-6">
+          <p className="text-muted-foreground">Loading dashboard...</p>
+        </main>
+      }
+    >
+      <DashboardPageContent />
+    </Suspense>
   );
 }
