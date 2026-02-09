@@ -20,10 +20,6 @@ COPY . /srv
 # Ensure package-style imports (apps.api) work
 ENV PYTHONPATH=/srv
 
-# Default runtime env (overridden in compose)
-ENV CONTRACTS_DIR=packages/contracts \
-    CORS_ORIGINS=http://localhost:3000
-
 EXPOSE 8000
 ENTRYPOINT ["/usr/bin/tini","--"]
 CMD ["uvicorn","apps.api.main:app","--host","0.0.0.0","--port","8000"]
