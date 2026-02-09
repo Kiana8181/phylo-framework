@@ -1,7 +1,9 @@
 # apps/web/Dockerfile
 
 # --- Build stage ---
-FROM node:20-alpine AS build
+# Use Debian (glibc) instead of Alpine (musl) because Next/SWC can crash
+# with SIGBUS during production builds on Alpine in some environments.
+FROM node:20-bookworm-slim AS build
 WORKDIR /srv
 
 # Copy manifests first for caching
@@ -28,6 +30,8 @@ COPY . .
 # If you already set `output: 'standalone'` in next.config.js, this ENV is not needed.
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NEXT_OUTPUT=standalone
+ARG NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}
 
 # Build contracts first (adjust workspace name if different)
 RUN npm -w @phylo/contracts run build
@@ -36,7 +40,7 @@ RUN npm -w @phylo/contracts run build
 RUN npm -w web run build
 
 # --- Runtime stage (no npm install here) ---
-FROM node:20-alpine AS runtime
+FROM node:20-bookworm-slim AS runtime
 WORKDIR /srv
 ENV NODE_ENV=production
 EXPOSE 3000
@@ -50,9 +54,6 @@ COPY --from=build /srv/apps/web/public /srv/apps/web/public
 
 # Contracts JSON/types if your server needs them at runtime; keep in sync with API/Dowser
 COPY --from=build /srv/packages/contracts /srv/packages/contracts
-
-# Where the UI calls the API (inside compose network)
-ENV NEXT_PUBLIC_API_BASE_URL=http://api:8000
 
 # Next standalone produces server.js at /srv/apps/web/server.js
 CMD ["node", "apps/web/server.js"]

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { Suspense, useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
@@ -13,7 +13,7 @@ import { notify } from "@/lib/notify";
 
 type Mode = "login" | "signup";
 
-export default function AuthPage() {
+function AuthPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { login, register, isAuthenticated, isLoading } = useAuth();
@@ -201,5 +201,19 @@ export default function AuthPage() {
         </CardContent>
       </Card>
     </main>
+  );
+}
+
+export default function AuthPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="flex min-h-[calc(100vh-3.5rem)] items-center justify-center p-4">
+          <p className="text-muted-foreground">Loading...</p>
+        </main>
+      }
+    >
+      <AuthPageContent />
+    </Suspense>
   );
 }
