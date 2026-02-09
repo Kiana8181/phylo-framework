@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ENV_FILE="$ROOT/.env"
 PLUMBER_DIR="$ROOT/services/dowser"
 GCTREE_DIR="$ROOT/services/gctree"
 BREP_DIR="$ROOT/services/brepphylo"
@@ -10,14 +11,16 @@ CLONAL_DIR="$ROOT/services/clonaltree"
 RED=$'\033[31m'; GRN=$'\033[32m'; YLW=$'\033[33m'; BLU=$'\033[34m'; CLR=$'\033[0m'
 die(){ echo "${RED}ERROR:${CLR} $*" >&2; exit 1; }
 need_cmd(){ command -v "$1" >/dev/null 2>&1 || die "Missing '$1'. Please install it."; }
-warn_missing(){ command -v "$1" >/dev/null 2>&1 || echo "${YLW}WARN:${CLR} '$1' not found on PATH."; }
 npm_major(){ local v; v=$(npm -v 2>/dev/null || echo "0"); echo "${v%%.*}"; }
 
 port_busy(){
   local p="$1"
-  if command -v lsof >/dev/null 2>&1; then lsof -Pi :"$p" -sTCP:LISTEN -t >/dev/null
-  elif command -v ss >/dev/null 2>&1; then ss -ltn "sport = :$p" | tail -n +2 | grep -q .
-  else netstat -tuln 2>/dev/null | grep -q ":$p "
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -Pi :"$p" -sTCP:LISTEN -t >/dev/null
+  elif command -v ss >/dev/null 2>&1; then
+    ss -ltn "sport = :$p" | tail -n +2 | grep -q .
+  else
+    netstat -tuln 2>/dev/null | grep -q ":$p "
   fi
 }
 
@@ -27,7 +30,9 @@ wait_http(){
     if curl -fsS "http://127.0.0.1:${port}/spec" >/dev/null || \
        curl -fsS "http://localhost:${port}/spec" >/dev/null || \
        curl -fsS "http://127.0.0.1:${port}/__docs__/" >/dev/null || \
-       curl -fsS "http://localhost:${port}/__docs__/" >/dev/null; then
+       curl -fsS "http://localhost:${port}/__docs__/" >/dev/null || \
+       curl -fsS "http://127.0.0.1:${port}/docs" >/dev/null || \
+       curl -fsS "http://localhost:${port}/docs" >/dev/null; then
       return 0
     fi
     sleep 1
@@ -35,31 +40,41 @@ wait_http(){
   return 1
 }
 
-find_env_file(){
-  local dir="$1"
-  for fname in ".env.local" ".env.development.local" ".env.development" ".env"; do
-    [[ -f "$dir/$fname" ]] && { echo "$dir/$fname"; return 0; }
+wait_postgres(){
+  local i
+  for i in {1..90}; do
+    if [[ "$(docker inspect -f '{{.State.Health.Status}}' phylo-postgres 2>/dev/null || true)" == "healthy" ]]; then
+      return 0
+    fi
+    sleep 1
   done
   return 1
 }
 
-require_envs(){
-  API_ENV="$(find_env_file "$ROOT/apps/api")" || die "API env not found. Create apps/api/.env (or .env.local)."
-  WEB_ENV="$(find_env_file "$ROOT/apps/web")" || die "Web env not found. Create apps/web/.env (or .env.local)."
-  echo "${BLU}==> Loading API env: ${API_ENV}${CLR}"
-  set -a; source "$API_ENV"; set +a
+load_root_env(){
+  [[ -f "$ENV_FILE" ]] || die "Root .env not found at $ENV_FILE. Run: node scripts/method-services.mjs sync-env"
+  while IFS= read -r -d '' kv; do
+    export "$kv"
+  done < <(python3 - "$ENV_FILE" <<'PY'
+import re
+import sys
 
-  local cfg="${CONTRACTS_DIR:-packages/contracts}"
-  [[ -d "$ROOT/$cfg" || -d "$cfg" ]] || die "CONTRACTS_DIR not found (got '$cfg'). Put a valid path in ${API_ENV}."
-
-  [[ -n "${METHOD_DOWSER_URL:-}" ]]     || die "METHOD_DOWSER_URL is not set in ${API_ENV}"
-  [[ -n "${METHOD_GCTREE_URL:-}" ]]     || die "METHOD_GCTREE_URL is not set in ${API_ENV} (e.g., http://localhost:8002)"
-  [[ -n "${METHOD_BREPPHYLO_URL:-}" ]]  || die "METHOD_BREPPHYLO_URL is not set in ${API_ENV} (e.g., http://localhost:8003)"
-  [[ -n "${METHOD_CLONALTREE_URL:-}" ]] || die "METHOD_CLONALTREE_URL is not set in ${API_ENV} (e.g., http://localhost:8004)"
-
-  if ! grep -qE '^NEXT_PUBLIC_API_BASE_URL=' "$WEB_ENV"; then
-    die "NEXT_PUBLIC_API_BASE_URL is missing in ${WEB_ENV}"
-  fi
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as f:
+    for raw in f:
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, val = line.split("=", 1)
+        key = key.strip()
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
+            continue
+        val = val.strip()
+        if len(val) >= 2 and ((val[0] == val[-1] == '"') or (val[0] == val[-1] == "'")):
+            val = val[1:-1]
+        print(f"{key}={val}", end="\0")
+PY
+)
 }
 
 resolve_contracts_abs(){
@@ -70,13 +85,22 @@ resolve_contracts_abs(){
   else
     abs="$ROOT/$cfg"
   fi
-  abs="$(python3 - <<PY 2>/dev/null || true
+  abs="$(python3 - <<PY
 import os
 print(os.path.normpath(os.path.abspath("$abs")))
 PY
 )"
   [[ -d "$abs" ]] || die "Resolved contracts dir does not exist: $abs"
   echo "$abs"
+}
+
+resolve_storage_abs(){
+  local raw="${STORAGE_LOCAL_PATH:-runtime/storage}"
+  if [[ "$raw" = /* ]] || [[ "$raw" =~ ^[A-Za-z]:[\\/].* ]]; then
+    echo "$raw"
+  else
+    realpath "$ROOT/$raw"
+  fi
 }
 
 relpath_from_dir(){
@@ -87,6 +111,11 @@ print(os.path.relpath("$target", "$base"))
 PY
 }
 
+method_port(){
+  local method_id="$1"
+  node -e 'const fs=require("fs"); const p=require("path"); const root=process.argv[1]; const id=process.argv[2]; const cfg=JSON.parse(fs.readFileSync(p.join(root,"config","method-services.json"),"utf8")); const s=(cfg.services||[]).find((x)=>String(x.id).toLowerCase()===String(id).toLowerCase()); if(!s){process.exit(2);} console.log(String(s.port));' "$ROOT" "$method_id"
+}
+
 ensure_node_deps_and_build_contracts(){
   local NPM_MAJ; NPM_MAJ=$(npm_major)
   echo "${BLU}==> npm version: $(npm -v 2>/dev/null || echo unknown)${CLR}"
@@ -94,7 +123,7 @@ ensure_node_deps_and_build_contracts(){
     if grep -q '"@phylo/contracts"[[:space:]]*:[[:space:]]*"workspace:\*"' "$ROOT/apps/web/package.json" 2>/dev/null; then
       die "Your npm ($NPM_MAJ.x) does not support \"workspace:*\".
 Either upgrade npm (npm i -g npm@latest) or set:
-  apps/web/package.json → \"@phylo/contracts\": \"file:../../packages/contracts\""
+  apps/web/package.json -> \"@phylo/contracts\": \"file:../../packages/contracts\""
     fi
     echo "${YLW}npm < 7 detected. Using plain 'npm i'.${CLR}"
     (cd "$ROOT" && npm i)
@@ -111,9 +140,9 @@ Either upgrade npm (npm i -g npm@latest) or set:
 muscle_major(){
   local raw major
   raw=$(muscle -version 2>&1 | head -n 2 || true)
-  major=$(echo "$raw" | sed -n 's/.*[Vv]ersion[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p')
+  major=$(echo "$raw" | sed -n 's/.*[Vv]ersion[[:space:]]*\([0-9][0-9]*\).*/\1/p')
   if [[ -z "$major" ]]; then
-    major=$(echo "$raw" | sed -n 's/.*[Vv]\\([0-9][0-9]*\\).*/\\1/p')
+    major=$(echo "$raw" | sed -n 's/.*[Vv]\([0-9][0-9]*\).*/\1/p')
   fi
   echo "${major:-}:::${raw:-}"
 }
@@ -147,59 +176,64 @@ ensure_muscle_v3(){
   else
     echo "${YLW}WARN:${CLR} MUSCLE not found on PATH; installing v3.8.31"
   fi
-
   install_muscle3
 }
 
-# ---- NEW: ensure sitecustomize patch is loaded via PYTHONPATH (no copying) ----
 ensure_gctree_sitecustomize_on_pythonpath(){
   local sc="$GCTREE_DIR/sitecustomize.py"
   if [[ ! -f "$sc" ]]; then
     echo "${YLW}WARN:${CLR} No sitecustomize.py found at $sc. ete3 render patch will not be applied."
     return 0
   fi
-
-  # Prepend services/gctree so Python auto-imports sitecustomize.py from there.
-  # This affects: uvicorn, gctree CLI, and any python spawned from this shell.
   export PYTHONPATH="$GCTREE_DIR${PYTHONPATH:+:$PYTHONPATH}"
-
-  # Optional: prove it is active (non-fatal; helpful for debugging)
-  python - <<'PY' || true
-import sys
-print("PYTHONPATH[0] =", sys.path[0])
-try:
-    import sitecustomize  # noqa: F401
-    print("OK: sitecustomize imported from:", getattr(sitecustomize, "__file__", "<unknown>"))
-except Exception as e:
-    print("WARN: sitecustomize import failed:", e)
-PY
 }
 
 echo "${BLU}==> Checking prerequisites${CLR}"
-need_cmd Rscript; need_cmd node; need_cmd npm; need_cmd python3; need_cmd curl
+need_cmd Rscript; need_cmd node; need_cmd npm; need_cmd python3; need_cmd curl; need_cmd docker
 
-for p in 3000 8000 8001 8002 8003 8004; do
-  port_busy "$p" && die "Port $p is not free."
+cd "$ROOT"
+
+echo "${BLU}==> Syncing method-service env from config${CLR}"
+node "$ROOT/scripts/method-services.mjs" sync-env >/dev/null
+load_root_env
+
+DOWSER_PORT="$(method_port dowser)" || die "dowser service not found in config/method-services.json"
+GCTREE_PORT="$(method_port gctree)" || die "gctree service not found in config/method-services.json"
+BREPPHYLO_PORT="$(method_port brepphylo)" || die "brepphylo service not found in config/method-services.json"
+CLONALTREE_PORT="$(method_port clonaltree)" || die "clonaltree service not found in config/method-services.json"
+API_PORT="${API_PORT:-8000}"
+WEB_PORT="${WEB_PORT:-3000}"
+PG_PORT="${POSTGRES_PORT:-5440}"
+
+for p in "$WEB_PORT" "$API_PORT" "$PG_PORT" "$DOWSER_PORT" "$GCTREE_PORT" "$BREPPHYLO_PORT" "$CLONALTREE_PORT"; do
+  if port_busy "$p"; then
+    if [[ "$p" == "$PG_PORT" ]] && docker ps --format '{{.Names}}' | grep -qx "phylo-postgres"; then
+      echo "${YLW}WARN:${CLR} PostgreSQL port ${PG_PORT} is already in use by phylo-postgres; reusing it."
+    else
+      die "Port $p is not free."
+    fi
+  fi
 done
 
-require_envs
-
-BREP_ENV="$(find_env_file "$BREP_DIR")" || die "BrepPhylo env not found. Create services/brepphylo/.env (or .env.local)."
-echo "${BLU}==> Loading BrepPhylo env: ${BREP_ENV}${CLR}"
-set -a; source "$BREP_ENV"; set +a
-if [[ -z "${IGPHYML_BIN:-}" ]]; then
-  echo "${YLW}WARN:${CLR} IGPHYML_BIN not set in ${BREP_ENV}; defaulting to /usr/local/bin/igphyml"
-  export IGPHYML_BIN="/usr/local/bin/igphyml"
-fi
-if [[ -z "${IGPHYML_MOTIFS:-}" ]]; then
-  echo "${YLW}WARN:${CLR} IGPHYML_MOTIFS not set in ${BREP_ENV}; defaulting to /usr/local/share/igphyml/src/motifs"
-  export IGPHYML_MOTIFS="/usr/local/share/igphyml/src/motifs"
-  export IGPHYML_PATH="$IGPHYML_MOTIFS"
-fi
-
 ABS_CONTRACTS="$(resolve_contracts_abs)"
+ABS_STORAGE="$(resolve_storage_abs)"
+mkdir -p "$ABS_STORAGE"
+
 R_CONTRACTS_REL="$(relpath_from_dir "$ABS_CONTRACTS" "$PLUMBER_DIR")"
 BREP_CONTRACTS_REL="$(relpath_from_dir "$ABS_CONTRACTS" "$BREP_DIR")"
+
+cleanup(){
+  echo
+  echo "${YLW}Shutting down...${CLR}"
+  kill ${R_PID:-} ${API_PID:-} ${GCTREE_PID:-} ${CLONAL_PID:-} ${BREP_PID:-} 2>/dev/null || true
+  docker compose --profile dev stop postgres >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+echo "${BLU}==> Starting PostgreSQL (Docker Compose, profile=dev)${CLR}"
+docker compose --profile dev up -d postgres
+wait_postgres || die "PostgreSQL did not become healthy"
+echo "${GRN}PostgreSQL is healthy.${CLR}"
 
 echo "${BLU}==> Checking required R packages${CLR}"
 set +e
@@ -215,109 +249,85 @@ echo "${GRN}All required R packages are present.${CLR}"
 
 [[ -f "$ABS_CONTRACTS/methods/dowser/result.schema.json" ]] || \
   die "Expected schema not found at: $ABS_CONTRACTS/methods/dowser/result.schema.json"
-[[ -f "$ABS_CONTRACTS/methods/gctree/param.schema.json" ]] || \
-  echo "${YLW}WARN:${CLR} gctree schemas not found under contracts; continuing."
 
-echo "${BLU}==> Starting Dowser (R/plumber) on :8001${CLR}"
-Rscript --vanilla -e "setwd('$PLUMBER_DIR'); Sys.setenv(CONTRACTS_DIR='${R_CONTRACTS_REL}', STRICT_CONTRACT_ROUTES='true'); pr <- plumber::plumb('plumber.R'); pr\$run(host='0.0.0.0', port=8001)" \
+# Local API talks to DB via host-mapped postgres port
+export POSTGRES_HOST="127.0.0.1"
+export POSTGRES_PORT="$PG_PORT"
+export DATABASE_URL="postgresql+asyncpg://${POSTGRES_USER:-phylo_user}:${POSTGRES_PASSWORD:-phylo_pass}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB:-phylo_db}"
+
+# Local method services read host files directly.
+export METHOD_SERVICE_FILE_PREFIX="$ABS_STORAGE"
+export NEXT_PUBLIC_API_BASE_URL="${NEXT_PUBLIC_API_BASE_URL:-http://localhost:${API_PORT}}"
+
+echo "${BLU}==> Starting Dowser (R/plumber) on :${DOWSER_PORT}${CLR}"
+Rscript --vanilla -e "setwd('$PLUMBER_DIR'); Sys.setenv(CONTRACTS_DIR='${R_CONTRACTS_REL}', STRICT_CONTRACT_ROUTES='${STRICT_CONTRACT_ROUTES:-true}'); pr <- plumber::plumb('plumber.R'); pr\$run(host='0.0.0.0', port=${DOWSER_PORT})" \
   >/tmp/dowser.log 2>&1 &
 R_PID=$!
+wait_http "$DOWSER_PORT" || { echo "${YLW}Last 200 Dowser logs:${CLR}"; tail -n 200 /tmp/dowser.log || true; die "Dowser failed readiness check"; }
 
-trap 'echo; echo "${YLW}Shutting down...${CLR}"; kill $R_PID $API_PID ${GCTREE_PID:-} ${CLONAL_PID:-} ${BREP_PID:-} 2>/dev/null || true' EXIT
-
-wait_http 8001 || { echo "${YLW}Last 200 R logs:${CLR}"; tail -n 200 /tmp/dowser.log || true; die "Dowser failed readiness check"; }
-echo "${GRN}Dowser is up on http://localhost:8001${CLR}"
-
-echo "${BLU}==> Setting up Python venv for API & GCtree${CLR}"
+echo "${BLU}==> Setting up Python venv for API + local Python methods${CLR}"
 [[ -d "$ROOT/.venv" ]] || python3 -m venv "$ROOT/.venv" || die "Failed to create venv"
 # shellcheck disable=SC1091
 source "$ROOT/.venv/bin/activate"
 python -m pip install -U pip >/dev/null
 python -m pip install -r "$ROOT/apps/api/requirements.txt"
-
-# --- GCtree micro (no Docker) ---
-echo "${BLU}==> Installing GCtree service requirements${CLR}"
-[[ -f "$GCTREE_DIR/requirements.txt" ]] || die "Missing $GCTREE_DIR/requirements.txt"
 python -m pip install -r "$GCTREE_DIR/requirements.txt"
-
-echo "${BLU}==> Installing ClonalTree service requirements${CLR}"
-[[ -f "$CLONAL_DIR/requirements.txt" ]] || die "Missing $CLONAL_DIR/requirements.txt"
 python -m pip install -r "$CLONAL_DIR/requirements.txt"
 
 echo "${BLU}==> Ensuring MUSCLE v3.x is available for ClonalTree${CLR}"
 ensure_muscle_v3
 
-# NEW: no copying into site-packages. Ensure patch is loaded via PYTHONPATH.
-echo "${BLU}==> Enabling ete3 render patch via PYTHONPATH (sitecustomize)${CLR}"
+echo "${BLU}==> Enabling GCtree sitecustomize patch via PYTHONPATH${CLR}"
 ensure_gctree_sitecustomize_on_pythonpath
 
-echo "${BLU}==> Checking GCtree CLIs on PATH (from the venv)${CLR}"
+echo "${BLU}==> Checking GCtree CLIs on PATH${CLR}"
 need_cmd gctree
 need_cmd deduplicate
 need_cmd mkconfig
-
-# DNAPARS is system-provided; warn if absent. GCtree can still run parts without it.
 if ! command -v dnapars >/dev/null 2>&1 && ! command -v phylip >/dev/null 2>&1; then
   echo "${YLW}WARN:${CLR} Neither 'dnapars' nor 'phylip' wrapper found on PATH."
-  echo "      Install via one of:"
-  echo "        • Ubuntu/Debian: sudo apt-get install phylip"
-  echo "        • Conda (recommended): conda install -c bioconda phylip"
 fi
+
+echo "${BLU}==> Running database migrations${CLR}"
+(cd "$ROOT" && alembic upgrade head)
 
 echo "${BLU}==> Ensuring Node deps and building @phylo/contracts${CLR}"
 ensure_node_deps_and_build_contracts
 
-echo "${BLU}==> Starting API on :8000${CLR}"
-uvicorn apps.api.main:app --host 0.0.0.0 --port 8000 &
+echo "${BLU}==> Starting API on :${API_PORT}${CLR}"
+uvicorn apps.api.main:app --host 0.0.0.0 --port "$API_PORT" >/tmp/api.log 2>&1 &
 API_PID=$!
+wait_http "$API_PORT" || { echo "${YLW}Last 200 API logs:${CLR}"; tail -n 200 /tmp/api.log || true; die "API failed readiness check"; }
 
-# brief API readiness check
-for i in {1..60}; do
-  curl -fsS "http://127.0.0.1:8000/docs" >/dev/null && break || true
-  curl -fsS "http://localhost:8000/docs" >/dev/null && break || true
-  sleep 1
-done
-
-# --- Start GCtree FastAPI service on :8002 (no Docker) ---
-echo "${BLU}==> Starting GCtree (FastAPI) on :8002${CLR}"
+echo "${BLU}==> Starting GCtree (FastAPI) on :${GCTREE_PORT}${CLR}"
 (
   cd "$GCTREE_DIR"
-  # CONTRACTS_DIR must be absolute for the Python micro
   export CONTRACTS_DIR="$ABS_CONTRACTS"
-  export STRICT_CONTRACT_ROUTES="true"
-  # headless hints (also set inside the service, but harmless here)
+  export STRICT_CONTRACT_ROUTES="${STRICT_CONTRACT_ROUTES:-true}"
   export QT_QPA_PLATFORM="offscreen"
   export MPLBACKEND="agg"
-  uvicorn app:app --host 0.0.0.0 --port 8002
+  uvicorn app:app --host 0.0.0.0 --port "$GCTREE_PORT"
 ) >/tmp/gctree.log 2>&1 &
 GCTREE_PID=$!
+wait_http "$GCTREE_PORT" || { echo "${YLW}Last 200 GCtree logs:${CLR}"; tail -n 200 /tmp/gctree.log || true; die "GCtree failed readiness check"; }
 
-wait_http 8002 || { echo "${YLW}Last 200 GCtree logs:${CLR}"; tail -n 200 /tmp/gctree.log || true; die "GCtree failed readiness check"; }
-echo "${GRN}GCtree is up on http://localhost:8002${CLR}"
-
-# --- ClonalTree micro (FastAPI) ---
-echo "${BLU}==> Starting ClonalTree (FastAPI) on :8004${CLR}"
+echo "${BLU}==> Starting ClonalTree (FastAPI) on :${CLONALTREE_PORT}${CLR}"
 (
   cd "$CLONAL_DIR"
   export CONTRACTS_DIR="$ABS_CONTRACTS"
-  export STRICT_CONTRACT_ROUTES="true"
+  export STRICT_CONTRACT_ROUTES="${STRICT_CONTRACT_ROUTES:-true}"
   export QT_QPA_PLATFORM="offscreen"
   export MPLBACKEND="agg"
-  uvicorn app:app --host 0.0.0.0 --port 8004
+  uvicorn app:app --host 0.0.0.0 --port "$CLONALTREE_PORT"
 ) >/tmp/clonaltree.log 2>&1 &
 CLONAL_PID=$!
+wait_http "$CLONALTREE_PORT" || { echo "${YLW}Last 200 ClonalTree logs:${CLR}"; tail -n 200 /tmp/clonaltree.log || true; die "ClonalTree failed readiness check"; }
 
-wait_http 8004 || { echo "${YLW}Last 200 ClonalTree logs:${CLR}"; tail -n 200 /tmp/clonaltree.log || true; die "ClonalTree failed readiness check"; }
-echo "${GRN}ClonalTree is up on http://localhost:8004${CLR}"
-
-# --- BrepPhylo micro (R/plumber) ---
-echo "${BLU}==> Starting BrepPhylo (R/plumber) on :8003${CLR}"
-Rscript --vanilla -e "setwd('$BREP_DIR'); Sys.setenv(CONTRACTS_DIR='${BREP_CONTRACTS_REL}', STRICT_CONTRACT_ROUTES='true'); pr <- plumber::plumb('plumber.R'); pr\$run(host='0.0.0.0', port=8003)" \
+echo "${BLU}==> Starting BrepPhylo (R/plumber) on :${BREPPHYLO_PORT}${CLR}"
+Rscript --vanilla -e "setwd('$BREP_DIR'); Sys.setenv(CONTRACTS_DIR='${BREP_CONTRACTS_REL}', STRICT_CONTRACT_ROUTES='${STRICT_CONTRACT_ROUTES:-true}', IGPHYML_BIN='${IGPHYML_BIN:-/usr/local/bin/igphyml}', IGPHYML_MOTIFS='${IGPHYML_MOTIFS:-/usr/local/share/igphyml/src/motifs}', IGPHYML_PATH='${IGPHYML_PATH:-/usr/local/share/igphyml/src/motifs}'); pr <- plumber::plumb('plumber.R'); pr\$run(host='0.0.0.0', port=${BREPPHYLO_PORT})" \
   >/tmp/brepphylo.log 2>&1 &
 BREP_PID=$!
+wait_http "$BREPPHYLO_PORT" || { echo "${YLW}Last 200 BrepPhylo logs:${CLR}"; tail -n 200 /tmp/brepphylo.log || true; die "BrepPhylo failed readiness check"; }
 
-wait_http 8003 || { echo "${YLW}Last 200 BrepPhylo logs:${CLR}"; tail -n 200 /tmp/brepphylo.log || true; die "BrepPhylo failed readiness check"; }
-echo "${GRN}BrepPhylo is up on http://localhost:8003${CLR}"
-
-echo "${BLU}==> Starting Next.js dev on :3000${CLR}"
-(cd "$ROOT/apps/web" && npm run dev)
+echo "${BLU}==> Starting Next.js dev on :${WEB_PORT}${CLR}"
+(cd "$ROOT/apps/web" && npm run dev -- -p "$WEB_PORT")
