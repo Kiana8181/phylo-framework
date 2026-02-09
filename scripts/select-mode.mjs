@@ -31,5 +31,6 @@ if (mode === "dev-docker") {
 } else if (mode === "dev-r") {
   await run(path.join(ROOT, "scripts/dev-with-local-r.sh"), []);
 } else {
+  await run("node", [path.join(ROOT, "scripts/method-services.mjs"), "sync-env"]);
   await run("docker", ["compose","--profile" ,"prod", "up", "-d", "--build"]);
 }
