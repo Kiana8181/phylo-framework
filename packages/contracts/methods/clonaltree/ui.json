@@ -1,6 +1,10 @@
 {
   "requiresFile": true,
   "maxFiles": 1,
+  "uploadGuidance": [
+    "ClonalTree accepts TSV. You can also upload CSV; conversion is applied when possible.",
+    "If you want to compare across methods, upload a format accepted by all desired methods."
+  ],
   "fileLabel": "AIRR / IMGT HighV-QUEST TSV",
 
   "order": [

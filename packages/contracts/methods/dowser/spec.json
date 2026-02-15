@@ -1,5 +1,5 @@
 {
   "name": "Dowser",
   "version": "dynamic",
-  "accepts": ["text/csv", "text/tab-separated-values", "application/x-rds", "application/x-rda"]
+  "accepts": ["text/csv", "text/tab-separated-values", "application/x-rda", "application/x-rds"]
 }

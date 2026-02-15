@@ -1,6 +1,10 @@
 {
   "requiresFile": true,
   "maxFiles": 1,
+  "uploadGuidance": [
+    "BrepPhylo accepts TSV and CSV.",
+    "If you want to compare across methods, upload a format accepted by all desired methods."
+  ],
   "fileLabel": "AIRR / rearrangement table (CSV or TSV)",
 
   "order": [
