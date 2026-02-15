@@ -324,7 +324,7 @@ CLONAL_PID=$!
 wait_http "$CLONALTREE_PORT" || { echo "${YLW}Last 200 ClonalTree logs:${CLR}"; tail -n 200 /tmp/clonaltree.log || true; die "ClonalTree failed readiness check"; }
 
 echo "${BLU}==> Starting BrepPhylo (R/plumber) on :${BREPPHYLO_PORT}${CLR}"
-Rscript --vanilla -e "setwd('$BREP_DIR'); Sys.setenv(CONTRACTS_DIR='${BREP_CONTRACTS_REL}', STRICT_CONTRACT_ROUTES='${STRICT_CONTRACT_ROUTES:-true}', IGPHYML_BIN='${IGPHYML_BIN:-/usr/local/bin/igphyml}', IGPHYML_MOTIFS='${IGPHYML_MOTIFS:-/usr/local/share/igphyml/src/motifs}', IGPHYML_PATH='${IGPHYML_PATH:-/usr/local/share/igphyml/src/motifs}'); pr <- plumber::plumb('plumber.R'); pr\$run(host='0.0.0.0', port=${BREPPHYLO_PORT})" \
+Rscript --vanilla -e "setwd('$BREP_DIR'); Sys.setenv(CONTRACTS_DIR='${BREP_CONTRACTS_REL}', STRICT_CONTRACT_ROUTES='${STRICT_CONTRACT_ROUTES:-true}', IGPHYML_BIN='${IGPHYML_BIN:-/usr/local/share/igphyml/src/igphyml}', IGPHYML_MOTIFS='${IGPHYML_MOTIFS:-/usr/local/share/igphyml/src/motifs}', IGPHYML_PATH='${IGPHYML_PATH:-/usr/local/share/igphyml/src/motifs}'); pr <- plumber::plumb('plumber.R'); pr\$run(host='0.0.0.0', port=${BREPPHYLO_PORT})" \
   >/tmp/brepphylo.log 2>&1 &
 BREP_PID=$!
 wait_http "$BREPPHYLO_PORT" || { echo "${YLW}Last 200 BrepPhylo logs:${CLR}"; tail -n 200 /tmp/brepphylo.log || true; die "BrepPhylo failed readiness check"; }
