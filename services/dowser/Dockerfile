@@ -2,7 +2,7 @@ FROM immcantation/suite:4.6.0
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CONTRACTS_DIR=/contracts
-ENV IGPHYML_BIN=/usr/local/bin/igphyml
+ENV IGPHYML_BIN=/usr/local/share/igphyml/src/igphyml
 ENV IGPHYML_MOTIFS=/usr/local/share/igphyml/src/motifs
 ENV IGPHYML_PATH=/usr/local/share/igphyml/src/motifs
 

@@ -3,7 +3,7 @@ FROM immcantation/suite:4.6.0
 ENV DEBIAN_FRONTEND=noninteractive \
     CONTRACTS_DIR=/contracts \
     DNAPARS_PATH=/usr/local/bin/dnapars \
-    IGPHYML_BIN=/usr/local/bin/igphyml \
+    IGPHYML_BIN=/usr/local/share/igphyml/src/igphyml \
     IGPHYML_MOTIFS=/usr/local/share/igphyml/src/motifs \
     IGPHYML_PATH=/usr/local/share/igphyml/src/motifs \
     STRICT_CONTRACT_ROUTES=true
