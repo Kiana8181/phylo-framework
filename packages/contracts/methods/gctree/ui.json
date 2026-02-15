@@ -1,6 +1,10 @@
 {
   "requiresFile": true,
   "maxFiles": 1,
+  "uploadGuidance": [
+    "GCtree accepts aligned FASTA/FA. You can also upload TSV/CSV; conversion is applied when possible.",
+    "If you want to compare across methods, upload a format accepted by all desired methods."
+  ],
   "order": [
     "root",
     "frame",

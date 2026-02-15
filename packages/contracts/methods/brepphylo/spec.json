@@ -3,8 +3,6 @@
   "version": "dynamic",
   "accepts": [
     "text/csv",
-    "text/tab-separated-values",
-    "text/plain",
-    "application/octet-stream"
+    "text/tab-separated-values"
   ]
 }
