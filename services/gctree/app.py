@@ -501,7 +501,18 @@ def render_colored_phylogeny_from_pickle(
             }
         )
         return None
-
+    
+def normalize_fasta(path: Path) -> Path:
+    """Replace '.' with '-' in the FASTA file."""
+    try:
+        fasta_content = path.read_text(errors="ignore")
+        normalized_content = fasta_content.replace('.', '-')
+        # Only write back if there were changes
+        if normalized_content != fasta_content:
+            path.write_text(normalized_content, encoding="utf-8")
+        return path
+    except Exception as e:
+        return None
 
 # ---------- Handlers ----------
 @app.get(ROUTES["spec"])
@@ -581,6 +592,11 @@ async def run_handler(request: Request):
                 # fallback copy
                 path_in.write_bytes(src.read_bytes())
 
+            # Normalize the FASTA file (replace '.' with '-')
+            normalized_fasta = normalize_fasta(path_in)
+            if normalized_fasta is None:
+                return err("Failed to normalize FASTA file (dots to dashes).", 400)
+
             ext = detect_ext(fname, None)
 
         else:
@@ -605,6 +621,11 @@ async def run_handler(request: Request):
             path_in = tmp / fname
             path_in.write_bytes(raw)
             ext = detect_ext(fname, getattr(upload, "content_type", None))
+
+            # Normalize the FASTA file (replace '.' with '-')
+            normalized_fasta = normalize_fasta(path_in)
+            if normalized_fasta is None:
+                return err("Failed to normalize FASTA file (dots to dashes).", 400)
 
         # -------- parse params --------
         root = p.get("root") or "GL"
