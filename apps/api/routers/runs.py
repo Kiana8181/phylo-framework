@@ -38,13 +38,32 @@ storage = get_storage()
 
 METHOD_SERVICE_FILE_PREFIX = "METHOD_SERVICE_FILE_PREFIX"
 HOST_RUNTIME_SHARED_ROOT = "HOST_RUNTIME_SHARED_ROOT"
+STORAGE_LOCAL_PATH = "STORAGE_LOCAL_PATH"
+DEFAULT_CONTAINER_RUNTIME_ROOT = Path("/runtime/storage")
 
 
-def _runtime_shared_root_host() -> Path:
-    raw = (os.getenv(HOST_RUNTIME_SHARED_ROOT) or str(ROOT_DIR / "runtime/storage")).strip()
+def _storage_local_root_host() -> Path:
+    raw = (os.getenv(STORAGE_LOCAL_PATH) or "runtime/storage").strip()
     root = Path(raw)
     if not root.is_absolute():
         root = ROOT_DIR / root
+    return root.resolve()
+
+
+def _runtime_shared_root_host() -> Path:
+    raw = (os.getenv(HOST_RUNTIME_SHARED_ROOT) or "").strip()
+    if not raw:
+        return _storage_local_root_host()
+
+    root = Path(raw)
+    if not root.is_absolute():
+        root = ROOT_DIR / root
+        return root.resolve()
+
+    # Guard against a common local-dev misconfiguration where a container-only
+    # mount path is copied into host config.
+    if root == DEFAULT_CONTAINER_RUNTIME_ROOT or DEFAULT_CONTAINER_RUNTIME_ROOT in root.parents:
+        return _storage_local_root_host()
     return root.resolve()
 
 
