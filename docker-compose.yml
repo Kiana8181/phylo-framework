@@ -2,7 +2,9 @@ x-api-common-env: &api_common_env
   CONTRACTS_DIR: /contracts
   CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
   STRICT_CONTRACT_ROUTES: ${STRICT_CONTRACT_ROUTES:-true}
-  METHOD_SERVICE_FILE_PREFIX: /runtime/storage
+  HOST_RUNTIME_SHARED_ROOT: ${HOST_RUNTIME_SHARED_ROOT:-/runtime/storage}
+  STORAGE_LOCAL_PATH: ${HOST_RUNTIME_SHARED_ROOT:-/runtime/storage}
+  METHOD_SERVICE_FILE_PREFIX: ${METHOD_SERVICE_FILE_PREFIX:-/runtime/storage}
   POSTGRES_HOST: postgres
   POSTGRES_PORT: "5432"
   DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-phylo_user}:${POSTGRES_PASSWORD:-phylo_pass}@postgres:5432/${POSTGRES_DB:-phylo_db}
@@ -14,8 +16,8 @@ x-api-common-env: &api_common_env
 x-method-common-env: &method_common_env
   CONTRACTS_DIR: /contracts
   STRICT_CONTRACT_ROUTES: ${STRICT_CONTRACT_ROUTES:-true}
-  RUNS_DIR: /runtime/storage
-  METHOD_SERVICE_FILE_PREFIX: /runtime/storage
+  RUNS_DIR: ${METHOD_SERVICE_FILE_PREFIX:-/runtime/storage}
+  METHOD_SERVICE_FILE_PREFIX: ${METHOD_SERVICE_FILE_PREFIX:-/runtime/storage}
 
 services:
   postgres:

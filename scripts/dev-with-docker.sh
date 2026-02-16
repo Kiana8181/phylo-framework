@@ -165,6 +165,7 @@ export DATABASE_URL="postgresql+asyncpg://${POSTGRES_USER:-phylo_user}:${POSTGRE
 
 # API writes to host storage; method containers read same files at this in-container prefix
 export METHOD_SERVICE_FILE_PREFIX="${METHOD_SERVICE_FILE_PREFIX:-/runtime/storage}"
+export HOST_RUNTIME_SHARED_ROOT="$HOST_STORAGE_DIR"
 
 # Ensure web dev server always gets API base URL from the single root env
 export NEXT_PUBLIC_API_BASE_URL="${NEXT_PUBLIC_API_BASE_URL:-http://localhost:${API_PORT}}"

@@ -117,6 +117,7 @@ function updateEnvFileWithGeneratedVars(generatedVars) {
     ["STRICT_CONTRACT_ROUTES", "true"],
     ["STORAGE_LOCAL_PATH", "runtime/storage"],
     ["STORAGE_LOCAL_URL", "/storage"],
+    ["HOST_RUNTIME_SHARED_ROOT", "/runtime/storage"],
     ["METHOD_SERVICE_FILE_PREFIX", "/runtime/storage"],
     ["POSTGRES_USER", "phylo_user"],
     ["POSTGRES_PASSWORD", "phylo_pass"],

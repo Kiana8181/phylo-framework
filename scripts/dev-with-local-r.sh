@@ -257,10 +257,11 @@ export DATABASE_URL="postgresql+asyncpg://${POSTGRES_USER:-phylo_user}:${POSTGRE
 
 # Local method services read host files directly.
 export METHOD_SERVICE_FILE_PREFIX="$ABS_STORAGE"
+export HOST_RUNTIME_SHARED_ROOT="$ABS_STORAGE"
 export NEXT_PUBLIC_API_BASE_URL="${NEXT_PUBLIC_API_BASE_URL:-http://localhost:${API_PORT}}"
 
 echo "${BLU}==> Starting Dowser (R/plumber) on :${DOWSER_PORT}${CLR}"
-Rscript --vanilla -e "setwd('$PLUMBER_DIR'); Sys.setenv(CONTRACTS_DIR='${R_CONTRACTS_REL}', STRICT_CONTRACT_ROUTES='${STRICT_CONTRACT_ROUTES:-true}'); pr <- plumber::plumb('plumber.R'); pr\$run(host='0.0.0.0', port=${DOWSER_PORT})" \
+Rscript --vanilla -e "setwd('$PLUMBER_DIR'); Sys.setenv(CONTRACTS_DIR='${R_CONTRACTS_REL}', STRICT_CONTRACT_ROUTES='${STRICT_CONTRACT_ROUTES:-true}', IGPHYML_BIN='${IGPHYML_BIN:-/usr/local/share/igphyml/src/igphyml}', IGPHYML_MOTIFS='${IGPHYML_MOTIFS:-/usr/local/share/igphyml/src/motifs}', IGPHYML_PATH='${IGPHYML_PATH:-/usr/local/share/igphyml/src/motifs}'); pr <- plumber::plumb('plumber.R'); pr\$run(host='0.0.0.0', port=${DOWSER_PORT})" \
   >/tmp/dowser.log 2>&1 &
 R_PID=$!
 wait_http "$DOWSER_PORT" || { echo "${YLW}Last 200 Dowser logs:${CLR}"; tail -n 200 /tmp/dowser.log || true; die "Dowser failed readiness check"; }
