@@ -6,6 +6,7 @@ import io
 import json
 import os
 import pickle
+import re
 import shutil
 import subprocess
 import tempfile
@@ -299,15 +300,77 @@ def collect_figures(outdir: Path) -> Dict[str, List[str]]:
 
     return figs
 
+
+def parse_abundances_csv(path: Path) -> Dict[str, float]:
+    """
+    Parse GCtree abundances.csv into {node_label: abundance}.
+    Works with either CSV or TSV-style separators.
+    """
+    out: Dict[str, float] = {}
+    if not path.exists():
+        return out
+    try:
+        rows = path.read_text(errors="ignore").splitlines()
+    except Exception:
+        return out
+    for raw in rows:
+        line = raw.strip()
+        if not line:
+            continue
+        parts = [p for p in re.split(r"[\t,]+", line) if p != ""]
+        if len(parts) < 2:
+            continue
+        label = parts[0].strip()
+        if not label:
+            continue
+        try:
+            value = float(parts[1])
+        except Exception:
+            continue
+        if value < 0:
+            continue
+        out[label] = value
+    return out
+
+
+def parse_idmap(path: Path) -> Dict[str, str]:
+    """
+    Parse idmap.txt into {dedup_label: original_sequence_id}.
+    This is best-effort because idmap format varies by GCtree version.
+    """
+    out: Dict[str, str] = {}
+    if not path.exists():
+        return out
+    try:
+        rows = path.read_text(errors="ignore").splitlines()
+    except Exception:
+        return out
+    for raw in rows:
+        line = raw.strip()
+        if not line:
+            continue
+        parts = [p for p in re.split(r"[\t, ]+", line) if p]
+        if len(parts) < 2:
+            continue
+        key = parts[0].strip()
+        val = parts[1].strip()
+        if key and val:
+            out[key] = val
+    return out
+
 def early_fail(msg: str, logs: List[dict], tmp: Path) -> JSONResponse:
     artifacts_zip = zip_artifacts(tmp)
     figures = collect_figures(tmp)
+    node_abundances = parse_abundances_csv(tmp / "abundances.csv")
+    label_to_sequence_id = parse_idmap(tmp / "idmap.txt")
     payload = {
         "ok": False,
         "trees": [],
         "figures": figures or None,
         "annotations": [],
         "clones": {"clone_id": [], "seqs": []},
+        "node_abundances": node_abundances or None,
+        "label_to_sequence_id": label_to_sequence_id or None,
         "stats": {},
         "logs": logs,
         "artifact_zip_b64": base64.b64encode(artifacts_zip).decode("ascii"),
@@ -954,12 +1017,16 @@ async def run_handler(request: Request):
             stats[
                 "note"
             ] = "GCtree infer failed (render/numeric). Returned DNAPARS outtree trees (unranked)."
+        node_abundances = parse_abundances_csv(abund_csv)
+        label_to_sequence_id = parse_idmap(idmap_txt)
 
         payload: Dict[str, Any] = {
             "ok": bool(ok_pipeline),
             "trees": trees,
             "figures": figures or None,
             "annotations": [],
+            "node_abundances": node_abundances or None,
+            "label_to_sequence_id": label_to_sequence_id or None,
             "clones": {"clone_id": [], "seqs": []},  # schema compatibility with other methods
             "stats": stats,
             "logs": logs,

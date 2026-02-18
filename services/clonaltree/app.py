@@ -327,6 +327,38 @@ def cleanup_alignment_sidecars(out_dir: Path, run_name: str, clone_idx: str, lim
                 pass
 
 
+def parse_fasta_abundance(path: Path) -> Dict[str, float]:
+    """Parse FASTA headers in the form '>sequence_id@count' into abundance mapping."""
+    out: Dict[str, float] = {}
+    if not path.exists():
+        return out
+    try:
+        lines = path.read_text(errors="ignore").splitlines()
+    except Exception:
+        return out
+    for line in lines:
+        if not line.startswith(">"):
+            continue
+        header = line[1:].strip()
+        if not header:
+            continue
+        token = header.split()[0]
+        if "@" in token:
+            seq_id, raw_count = token.split("@", 1)
+            seq_id = seq_id.strip()
+            try:
+                count = float(raw_count)
+            except Exception:
+                count = 1.0
+        else:
+            seq_id = token.strip()
+            count = 1.0
+        if not seq_id:
+            continue
+        out[seq_id] = max(1.0, out.get(seq_id, 0.0) + max(1.0, count))
+    return out
+
+
 # ---------- handlers ----------
 @app.get(ROUTES["spec"])
 def spec_handler():
@@ -557,6 +589,7 @@ async def run_handler(request: Request):
                 return err("failed to prepare per-clone inputs", logs=logs)
 
         # Step 8: alignment + tree per clone/limit
+        node_abundances_by_tree: Dict[str, Dict[str, float]] = {}
         for idx in range(1, selected_clones + 1):
             clone_seq_info = out_dir / f"{run_name}_{idx}_seq_info.txt"
             if not clone_seq_info.exists():
@@ -612,13 +645,20 @@ async def run_handler(request: Request):
                 )
                 if not tree_ok:
                     warnings.append(f"Tree construction failed for clone {idx} ({limit_label}).")
+                else:
+                    seq_source = out_dir / f"{run_name}_{idx}_{limit_label}_selected_seq.fasta"
+                    abund_map = parse_fasta_abundance(seq_source)
+                    if abund_map:
+                        node_abundances_by_tree[tree_out.name] = abund_map
                 cleanup_alignment_sidecars(out_dir, run_name, str(idx), limit_label)
 
         tree_paths = collect_tree_paths(out_dir, run_name)
         trees = []
+        node_abundances: List[Dict[str, float]] = []
         for p in tree_paths:
             try:
                 trees.append(p.read_text().strip())
+                node_abundances.append(node_abundances_by_tree.get(p.name, {}))
             except Exception:
                 continue
 
@@ -651,6 +691,7 @@ async def run_handler(request: Request):
                 "trees": trees,
                 "annotations": [],
                 "figures": None,
+                "node_abundances": node_abundances,
                 "clones": clones,
                 "stats": stats,
                 "warnings": warnings,
