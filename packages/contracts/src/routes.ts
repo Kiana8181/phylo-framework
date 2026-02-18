@@ -9,6 +9,9 @@ export const API_ROUTES = {
   runCurrent: () => `/runs/current`,
   runStatus: (runId: string) => `/runs/${encodeURIComponent(runId)}/status`,
   runResult: (runId: string) => `/runs/${encodeURIComponent(runId)}/result`,
+  runTrees: (runId: string) => `/runs/${encodeURIComponent(runId)}/trees`,
+  runTree: (runId: string, treeId: string) =>
+    `/runs/${encodeURIComponent(runId)}/trees/${encodeURIComponent(treeId)}`,
   filesList: () => `/files`,
   filesDelete: (id: string) => `/files/${encodeURIComponent(id)}`,
   authLogin: () => `/auth/login`,

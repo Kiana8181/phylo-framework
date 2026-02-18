@@ -4,7 +4,7 @@ from typing import Optional, List
 from uuid import UUID
 from datetime import datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import case, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.database.models import Run, RunStatus, ACTIVE_RUN_STATUSES
@@ -110,18 +110,70 @@ class RunRepository(BaseRepository[Run]):
 
         return await self.update(run_id, **update_data)
 
+    async def transition_to_running_once(
+        self,
+        run_id: UUID,
+        message: Optional[str] = None,
+    ) -> bool:
+        """Atomically claim a run for execution.
+
+        Returns True only for the first worker that moves a run from
+        PENDING/QUEUED -> RUNNING. Concurrent workers for the same run_id
+        will observe zero updated rows and must exit.
+        """
+        update_data = {
+            "status": RunStatus.RUNNING,
+            "started_at": datetime.utcnow(),
+            "progress": case(
+                (Run.progress < 5, 5),
+                else_=Run.progress,
+            ),
+        }
+        if message is not None:
+            update_data["message"] = message
+
+        stmt = (
+            update(Run)
+            .where(Run.id == run_id, Run.status.in_((RunStatus.PENDING, RunStatus.QUEUED)))
+            .values(**update_data)
+            .returning(Run.id)
+        )
+        claimed = (await self.session.execute(stmt)).scalar_one_or_none()
+        return claimed is not None
+
     async def update_progress(
         self,
         run_id: UUID,
         progress: int,
         message: Optional[str] = None,
     ) -> Optional[Run]:
-        """Update run progress."""
-        update_data = {"progress": max(0, min(100, progress))}
-        if message is not None:
-            update_data["message"] = message
+        """Update run progress without allowing regressions.
 
-        return await self.update(run_id, **update_data)
+        Progress updates are applied only to active runs and never decrease.
+        """
+        bounded_progress = max(0, min(100, progress))
+        values: dict[str, object] = {
+            "progress": case(
+                (Run.progress < bounded_progress, bounded_progress),
+                else_=Run.progress,
+            ),
+        }
+        if message is not None:
+            # Keep the previous message when progress would not advance.
+            values["message"] = case(
+                (Run.progress < bounded_progress, message),
+                else_=Run.message,
+            )
+
+        stmt = (
+            update(Run)
+            .where(Run.id == run_id)
+            .where(Run.status.in_(ACTIVE_RUN_STATUSES))
+            .values(**values)
+            .returning(Run)
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
 
     async def set_result(
         self,
