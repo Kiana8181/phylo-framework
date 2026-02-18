@@ -180,13 +180,28 @@ function DashboardPageContent() {
           {Array.isArray((result as any)?.warnings) &&
             (result as any).warnings.length > 0 && (
               <div className="rounded border p-3 bg-yellow-50 text-yellow-900 dark:bg-yellow-950/30 dark:text-yellow-200 text-sm space-y-1">
-                {(result as any).warnings.map((w: string, i: number) => (
-                  <div key={i}>• {w}</div>
-                ))}
+                {(result as any).warnings.map((w: any, i: number) => {
+                  if (typeof w === "string") {
+                    return <div key={i}>• {w}</div>;
+                  }
+                  const code = String(w?.code ?? "").trim();
+                  const msg = String(w?.message ?? "").trim();
+                  const treeId = String(w?.treeId ?? "").trim();
+                  const prefix = code ? `[${code}] ` : "";
+                  const suffix = treeId ? ` (tree: ${treeId})` : "";
+                  return (
+                    <div key={i}>
+                      • {prefix}
+                      {msg || "Warning"}
+                      {suffix}
+                    </div>
+                  );
+                })}
               </div>
             )}
 
           <TreesCarousel
+            runId={runId}
             trees={result.trees ?? []}
             figures={result.figures}
             annotations={result.annotations}
@@ -201,9 +216,11 @@ function DashboardPageContent() {
               Show Newick text
             </summary>
             <div className="mt-2 space-y-2">
-              {(result.trees ?? []).map((nwk: string, i: number) => (
+              {(result.trees ?? []).map((tree: any, i: number) => (
                 <pre key={i} className="whitespace-pre-wrap text-xs">
-                  {nwk}
+                  {typeof tree === "string"
+                    ? tree
+                    : tree?.original_newick || tree?.newick || ""}
                 </pre>
               ))}
             </div>
