@@ -16,7 +16,7 @@ if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
 from apps.api.database.base import Base
-from apps.api.database.models import User, Run, File, JobQueue  # noqa: F401
+from apps.api.database.models import User, Run, File, JobQueue, RunTree  # noqa: F401
 from apps.api.config import DATABASE_URL
 
 # this is the Alembic Config object, which provides

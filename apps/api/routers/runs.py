@@ -24,11 +24,13 @@ from apps.api.config import (
     method_service_url,
 )
 from apps.api.database import get_db
-from apps.api.database.models import RunStatus, StorageType, User
+from apps.api.database.models import ACTIVE_RUN_STATUSES, Run, RunStatus, StorageType, User
 from apps.api.preprocess.method_capabilities import extension_from_path, is_native_accept
 from apps.api.preprocess.prepare_input import PreprocessError, prepare_input_for_method
 from apps.api.repositories.file_repository import FileRepository
 from apps.api.repositories.run_repository import RunRepository
+from apps.api.repositories.run_tree_repository import RunTreeRepository
+from apps.api.services.tree_contract import assemble_unified_tree_result
 from apps.api.storage import get_storage
 
 router = APIRouter(prefix="/runs", tags=["runs"])
@@ -173,27 +175,58 @@ def _public_status(run, include_run_id: bool = False) -> dict:
     return out
 
 
+async def _load_run_with_access(
+    run_id: str,
+    *,
+    current_user: Optional[User],
+    run_repo: RunRepository,
+) -> Run:
+    try:
+        run_uuid = UUID(run_id)
+    except ValueError:
+        raise HTTPException(400, "Invalid run ID format")
+
+    run = await run_repo.get_by_id(run_uuid)
+    if not run:
+        raise HTTPException(404, "Run not found")
+
+    if current_user and not current_user.is_admin and run.user_id != current_user.id:
+        raise HTTPException(403, "Access denied")
+    return run
+
+
 async def _progress_updater(
     run_id: UUID,
     stop_event: asyncio.Event,
 ):
     """Gradually increase progress while waiting for method service response."""
     from apps.api.database.base import AsyncSessionLocal
-    
-    progress = 5
+
     max_progress = 90  # Don't go to 100% until we get the response
     increment = 3  # Increase by 3% each time
     interval = 3  # Update every 3 seconds
-    
-    while not stop_event.is_set() and progress < max_progress:
+
+    while not stop_event.is_set():
         await asyncio.sleep(interval)
         if stop_event.is_set():
             break
-        progress = min(progress + increment, max_progress)
         try:
             async with AsyncSessionLocal() as db:
                 run_repo = RunRepository(db)
-                await run_repo.update_progress(run_id, progress, "Processing...")
+                run = await run_repo.get_by_id(run_id)
+                if run is None:
+                    break
+                if run.status not in ACTIVE_RUN_STATUSES:
+                    break
+
+                current_progress = int(run.progress or 0)
+                if current_progress >= max_progress:
+                    break
+
+                next_progress = min(current_progress + increment, max_progress)
+                updated = await run_repo.update_progress(run_id, next_progress, "Processing...")
+                if updated is None:
+                    break
                 await db.commit()
         except Exception:
             # If run was deleted or error occurred, stop updating
@@ -225,16 +258,15 @@ async def _execute_method_async(
             await db.commit()
             return
         
-        # Mark as QUEUED (in queue, worker has picked it up)
-        await run_repo.update_status(run_id, RunStatus.QUEUED, "In queue")
-        await db.commit()
-        
         routes = get_service_routes(method_id) or {"run": "/run"}
         url = f"{base.rstrip('/')}{routes.get('run', '/run')}"
         
-        # Update status to RUNNING when actually calling the method
-        await run_repo.update_status(run_id, RunStatus.RUNNING, f"Submitting to {method_id}")
-        await run_repo.update_progress(run_id, 5, f"Submitting to {method_id}")
+        # Atomically claim this run execution once. If another worker already
+        # claimed RUNNING, exit to avoid concurrent writes for the same run_id.
+        claimed = await run_repo.transition_to_running_once(run_id, f"Submitting to {method_id}")
+        if not claimed:
+            await db.rollback()
+            return
         await db.commit()
 
         # Stage files to the shared runtime mount whenever needed so method-services
@@ -423,10 +455,12 @@ async def _execute_method_async(
                         return
 
                     result = response.json()
+                    unified_result, tree_rows = assemble_unified_tree_result(method_id, result)
 
-                    # Save result to database with 100% progress
-                    await run_repo.set_result(run_id, result, RunStatus.DONE)
-                    await run_repo.update_progress(run_id, 100, "Complete")
+                    # Save unified result and per-tree payloads.
+                    await run_repo.set_result(run_id, unified_result, RunStatus.DONE)
+                    tree_repo = RunTreeRepository(db)
+                    await tree_repo.replace_for_run(run_id, tree_rows)
                     await db.commit()
 
             except httpx.ConnectError as e:
@@ -622,6 +656,7 @@ async def create_run(
             
             # Update run status
             await run_repo.update_progress(run.id, 5, f"File uploaded: {file.filename}")
+            await db.commit()
             
         except Exception as e:
             await run_repo.set_error(run.id, f"Failed to upload file: {e}")
@@ -662,22 +697,9 @@ async def run_status(
     db: AsyncSession = Depends(get_db),
 ):
     """Get run status."""
-    try:
-        run_uuid = UUID(run_id)
-    except ValueError:
-        raise HTTPException(400, "Invalid run ID format")
-    
     run_repo = RunRepository(db)
-    run = await run_repo.get_by_id(run_uuid)
-    
-    if not run:
-        raise HTTPException(404, "Run not found")
-    
-    # Check authorization (user can only see their own runs, unless admin)
-    if current_user:
-        if not current_user.is_admin and run.user_id != current_user.id:
-            raise HTTPException(403, "Access denied")
-    
+    run = await _load_run_with_access(run_id, current_user=current_user, run_repo=run_repo)
+
     return _public_status(run)
 
 
@@ -688,23 +710,46 @@ async def run_result(
     db: AsyncSession = Depends(get_db),
 ):
     """Get run result."""
-    try:
-        run_uuid = UUID(run_id)
-    except ValueError:
-        raise HTTPException(400, "Invalid run ID format")
-    
     run_repo = RunRepository(db)
-    run = await run_repo.get_by_id(run_uuid)
-    
-    if not run:
-        raise HTTPException(404, "Run not found")
-    
-    # Check authorization
-    if current_user:
-        if not current_user.is_admin and run.user_id != current_user.id:
-            raise HTTPException(403, "Access denied")
-    
+    run = await _load_run_with_access(run_id, current_user=current_user, run_repo=run_repo)
+
     if run.status != RunStatus.DONE:
         raise HTTPException(409, "Run not finished")
-    
+
     return run.result or {"ok": False}
+
+
+@router.get("/{run_id}/trees")
+async def list_run_trees(
+    run_id: str,
+    current_user: Optional[User] = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """List lightweight tree metadata for a completed run."""
+    run_repo = RunRepository(db)
+    run = await _load_run_with_access(run_id, current_user=current_user, run_repo=run_repo)
+    if run.status != RunStatus.DONE:
+        raise HTTPException(409, "Run not finished")
+
+    tree_repo = RunTreeRepository(db)
+    return {"trees": await tree_repo.list_for_run(run.id)}
+
+
+@router.get("/{run_id}/trees/{tree_id}")
+async def get_run_tree_payload(
+    run_id: str,
+    tree_id: str,
+    current_user: Optional[User] = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Load full per-tree payload for a completed run."""
+    run_repo = RunRepository(db)
+    run = await _load_run_with_access(run_id, current_user=current_user, run_repo=run_repo)
+    if run.status != RunStatus.DONE:
+        raise HTTPException(409, "Run not finished")
+
+    tree_repo = RunTreeRepository(db)
+    payload = await tree_repo.get_tree_payload(run.id, tree_id)
+    if payload is None:
+        raise HTTPException(404, "Tree not found")
+    return payload

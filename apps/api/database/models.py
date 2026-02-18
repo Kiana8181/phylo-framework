@@ -133,6 +133,7 @@ class Run(Base):
     user = relationship("User", back_populates="runs")
     files = relationship("File", back_populates="run", cascade="all, delete-orphan")
     jobs = relationship("JobQueue", back_populates="run", cascade="all, delete-orphan")
+    trees = relationship("RunTree", back_populates="run", cascade="all, delete-orphan")
 
     __table_args__ = (
         CheckConstraint("progress >= 0 AND progress <= 100", name="ck_runs_progress"),
@@ -184,6 +185,41 @@ class File(Base):
     __table_args__ = (
         Index("idx_files_run_id", "run_id"),
         Index("idx_files_user_id", "user_id"),
+    )
+
+
+class RunTree(Base):
+    """Per-tree visualization payload persisted separately from the run JSON result."""
+
+    __tablename__ = "run_trees"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    tree_index = Column(Integer, nullable=False)
+    tree_id = Column(String(120), nullable=False)
+    newick = Column(Text, nullable=False)
+    original_newick = Column(Text, nullable=True)
+    service_image = Column(JSONB, nullable=True)
+    node_attributes = Column(JSONB, nullable=True)
+    lineage_plot = Column(JSONB, nullable=True)
+    label_to_sequence_id = Column(JSONB, nullable=True)
+    created_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    run = relationship("Run", back_populates="trees")
+
+    __table_args__ = (
+        UniqueConstraint("run_id", "tree_index", name="uq_run_trees_run_tree_index"),
+        UniqueConstraint("run_id", "tree_id", name="uq_run_trees_run_tree_id"),
+        Index("idx_run_trees_run_tree_index", "run_id", "tree_index"),
+        Index("idx_run_trees_run_tree_id", "run_id", "tree_id"),
     )
 
 
