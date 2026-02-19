@@ -12,7 +12,7 @@ import subprocess
 import tempfile
 import zipfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import FastAPI, File, Form, Request, UploadFile  
 
@@ -61,6 +61,16 @@ DEFAULT_ENV = {
     "LC_ALL": "C",
     "LANG": "C",
 }
+
+RENDER_ERROR_PYQT_QTSVG = "ModuleNotFoundError: No module named 'PyQt5.QtSvg'"
+RENDER_ERROR_ETE3_NODESTYLE = "AttributeError: module 'ete3' has no attribute 'NodeStyle'"
+
+TREE_IMAGE_RE = re.compile(
+    r"^.+\.inference\.(?P<rank>\d+)\.(?P<ext>svg|png|pdf)$", re.IGNORECASE
+)
+INFERENCE_AUX_IMAGE_RE = re.compile(
+    r"^.+\.inference\.\d+\..+\.(svg|png|pdf)$", re.IGNORECASE
+)
 
 # ---------- FastAPI ----------
 app = FastAPI(title="GCtree microservice (bridge mode)")
@@ -147,10 +157,39 @@ def run_to_file(
     Run a command (capturing stdout) and write that stdout to `outfile`.
     Append step logs. Return True on success (exit code 0).
     """
-    step = run_capture(cmd, cwd=cwd, extra_env=extra_env, use_shell=use_shell)
-    logs.append({**step, "step": step_name})
+    env = _env(extra_env)
+    if use_shell:
+        proc = subprocess.Popen(
+            " ".join(cmd),
+            cwd=str(cwd),
+            env=env,
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    else:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(cwd),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    stdout, stderr = proc.communicate()
+    combined = (stdout or "") + (("\n[stderr]\n" + stderr) if stderr else "")
+    logs.append(
+        {
+            "step": step_name,
+            "cmd": " ".join(cmd),
+            "ok": proc.returncode == 0,
+            "out": combined,
+        }
+    )
     try:
-        outfile.write_text(step["out"] or "", encoding="utf-8")
+        # Persist command data output only; keep stderr in logs.
+        outfile.write_text(stdout or "", encoding="utf-8")
     except Exception as e:
         logs.append(
             {
@@ -160,7 +199,28 @@ def run_to_file(
             }
         )
         return False
-    return bool(step["ok"])
+    return proc.returncode == 0
+
+
+def parse_phylip_header(text: str) -> Optional[tuple[int, int, str]]:
+    """
+    Return (Ntax, Nchar, raw_header_line) from PHYLIP text.
+    Tolerates leading blank/log lines and optional trailing header tokens.
+    """
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        m = re.match(r"^(\d+)\s+(\d+)(?:\s+.*)?$", line)
+        if not m:
+            continue
+        try:
+            ntax = int(m.group(1))
+            nchar = int(m.group(2))
+            return ntax, nchar, raw
+        except Exception:
+            continue
+    return None
 
 
 def detect_ext(filename: str, content_type: str | None) -> str:
@@ -259,6 +319,24 @@ def zip_artifacts(outdir: Path) -> bytes:
     return buf.getvalue()
 
 
+def _tree_rank_from_figure_name(name: str) -> Optional[int]:
+    m = TREE_IMAGE_RE.match(name)
+    if not m:
+        return None
+    try:
+        return int(m.group("rank"))
+    except Exception:
+        return None
+
+
+def _is_render_dependency_failure(log_output: str) -> bool:
+    txt = str(log_output or "")
+    return (
+        RENDER_ERROR_PYQT_QTSVG in txt
+        or RENDER_ERROR_ETE3_NODESTYLE in txt
+    )
+
+
 def collect_figures(outdir: Path) -> Dict[str, List[str]]:
     """
     Read any *image* files produced by GCtree and group them into categories.
@@ -266,6 +344,7 @@ def collect_figures(outdir: Path) -> Dict[str, List[str]]:
     Supports SVG/PNG/PDF.
     """
     figs: Dict[str, List[str]] = {}
+    phylogeny_ranked: List[Tuple[int, str]] = []
     mime_by_ext = {
         "svg": "image/svg+xml",
         "png": "image/png",
@@ -285,18 +364,28 @@ def collect_figures(outdir: Path) -> Dict[str, List[str]]:
             continue
 
         name = p.name
+        name_lower = name.lower()
+        tree_rank = _tree_rank_from_figure_name(name)
+        if tree_rank is not None:
+            mime = mime_by_ext[ext]
+            phylogeny_ranked.append((tree_rank, f"data:{mime};base64,{b64}"))
+            continue
+
         # categorize by filename pattern, independent of extension
-        if "abundance_rank" in name:
+        if "abundance_rank" in name_lower:
             key = "abundance_rank"
-        elif ".tree_stats." in name or "tree_stats" in name or "pairplot" in name:
+        elif ".tree_stats." in name_lower or "tree_stats" in name_lower or "pairplot" in name_lower:
             key = "tree_stats"
-        elif ".inference." in name:
-            key = "phylogeny"
+        elif INFERENCE_AUX_IMAGE_RE.match(name):
+            key = "method_charts"
         else:
-            key = "other"
+            key = "other_outputs"
 
         mime = mime_by_ext[ext]
         figs.setdefault(key, []).append(f"data:{mime};base64,{b64}")
+
+    if phylogeny_ranked:
+        figs["phylogeny"] = [data for _, data in sorted(phylogeny_ranked, key=lambda x: x[0])]
 
     return figs
 
@@ -376,7 +465,7 @@ def early_fail(msg: str, logs: List[dict], tmp: Path) -> JSONResponse:
         "artifact_zip_b64": base64.b64encode(artifacts_zip).decode("ascii"),
         "artifact_name": "gctree_run_artifacts.zip",
         "error": msg,
-        "render": "phylogeny" if figures else None,
+        "render": "phylogeny" if (figures and figures.get("phylogeny")) else None,
         "tree_model": "phylogeny",
     }
     return JSONResponse(status_code=400, content=payload)
@@ -815,26 +904,24 @@ async def run_handler(request: Request):
                     return early_fail("mkconfig failed — see logs", logs, tmp)
 
                 # Preflight: parse PHYLIP header "<Ntax> <Nchar>"
-                try:
-                    hdr = (
-                        dedup_phylip.read_text(errors="ignore")
-                        .splitlines()[0]
-                        .split()
-                    )
-                    ntax, nchar = int(hdr[0]), int(hdr[1])
+                dedup_text = dedup_phylip.read_text(errors="ignore")
+                parsed_hdr = parse_phylip_header(dedup_text)
+                if parsed_hdr is not None:
+                    ntax, nchar, raw_hdr = parsed_hdr
                     logs.append(
                         {
                             "step": "phylip_header",
                             "ok": True,
-                            "out": f"Ntax={ntax} Nchar={nchar}",
+                            "out": f"Ntax={ntax} Nchar={nchar}; header={raw_hdr!r}",
                         }
                     )
-                except Exception:
+                else:
+                    preview = "\n".join(dedup_text.splitlines()[:10])
                     logs.append(
                         {
                             "step": "phylip_header",
                             "ok": False,
-                            "out": "Could not parse header",
+                            "out": "Could not parse header. First lines:\n" + preview,
                         }
                     )
                     return early_fail(
@@ -919,6 +1006,19 @@ async def run_handler(request: Request):
                     step = run_capture(infer_cmd, cwd=tmp)
                     logs.append({**step, "step": "gctree_infer"})
                     ok_pipeline = step["ok"]
+                    render_dependency_failure = _is_render_dependency_failure(step.get("out", ""))
+                    if render_dependency_failure:
+                        logs.append(
+                            {
+                                "step": "gctree_infer_render_fallback",
+                                "ok": bool(fallback_trees),
+                                "out": (
+                                    "Detected GCtree render dependency failure while inferring trees. "
+                                    f"Signature(s): {RENDER_ERROR_PYQT_QTSVG} ; {RENDER_ERROR_ETE3_NODESTYLE}. "
+                                    f"Continuing with available Newick trees (count={len(fallback_trees)})."
+                                ),
+                            }
+                        )
 
                     # Fallback if GCtree render/ETE or numeric fails: return DNAPARS outtree trees
                     if not ok_pipeline:
@@ -967,6 +1067,18 @@ async def run_handler(request: Request):
                     step = run_capture(infer_cmd, cwd=tmp)
                     logs.append({**step, "step": "gctree_infer"})
                     ok_pipeline = step["ok"]
+                    if not ok_pipeline and _is_render_dependency_failure(step.get("out", "")):
+                        logs.append(
+                            {
+                                "step": "gctree_infer_render_fallback",
+                                "ok": False,
+                                "out": (
+                                    "Detected GCtree render dependency failure. "
+                                    f"Signature(s): {RENDER_ERROR_PYQT_QTSVG} ; {RENDER_ERROR_ETE3_NODESTYLE}. "
+                                    "Inference artifacts may still contain Newick outputs."
+                                ),
+                            }
+                        )
                     # If it fails, we cannot use DNAPARS fallback here (no outfile).
                 else:
                     ok_pipeline = True
@@ -982,13 +1094,16 @@ async def run_handler(request: Request):
         trees = collect_newicks(tmp, top_n)
         if not trees and fallback_trees:
             trees = fallback_trees
+        if trees:
+            # Rendering is optional. If we recovered Newick trees, keep the run successful.
+            ok_pipeline = True
 
         # base figures from on-disk images
         figures = collect_figures(tmp)
 
         # optional extra colored phylogeny via gctree Python API
         colored_data_url = None
-        if do_infer and "phylogeny" in figures or do_infer:
+        if do_infer:
             colored_data_url = render_colored_phylogeny_from_pickle(
                 tmp=tmp,
                 outbase=outbase,
@@ -1032,7 +1147,7 @@ async def run_handler(request: Request):
             "logs": logs,
             "artifact_zip_b64": base64.b64encode(artifacts_zip).decode("ascii"),
             "artifact_name": "gctree_run_artifacts.zip",
-            "render": "phylogeny" if figures else None,
+            "render": "phylogeny" if (figures and figures.get("phylogeny")) else None,
             "tree_model": "phylogeny",
         }
 

@@ -225,7 +225,7 @@ def _index_nodes(root: ParsedNode) -> tuple[dict[str, ParsedNode], list[ParsedNo
     return by_label, nodes
 
 
-def _extract_service_image(raw_result: dict[str, Any], idx: int) -> dict[str, str] | None:
+def _extract_service_image(method_id: str, raw_result: dict[str, Any], idx: int) -> dict[str, str] | None:
     viz = raw_result.get("visualizations")
     if isinstance(viz, dict):
         service_image = viz.get("service_image")
@@ -239,7 +239,12 @@ def _extract_service_image(raw_result: dict[str, Any], idx: int) -> dict[str, st
     if not isinstance(figures, dict):
         return None
 
-    candidate_keys = ["phylogeny"] + [k for k in figures.keys() if k != "phylogeny"]
+    method = (method_id or "").strip().lower()
+    if method == "gctree":
+        # GCtree can emit non-tree charts; never treat those as per-tree service images.
+        candidate_keys = ["phylogeny"]
+    else:
+        candidate_keys = ["phylogeny"] + [k for k in figures.keys() if k != "phylogeny"]
     for key in candidate_keys:
         arr = figures.get(key)
         if not isinstance(arr, list) or idx >= len(arr):
@@ -519,7 +524,7 @@ def assemble_unified_tree_result(
                 "has_lineage_plot": False,
                 "has_service_image": False,
             }
-            service_image = _extract_service_image(raw_result, idx)
+            service_image = _extract_service_image(method_id, raw_result, idx)
             tree_obj["has_service_image"] = bool(service_image)
             trees_out.append(tree_obj)
             rows_for_db.append(
@@ -536,7 +541,7 @@ def assemble_unified_tree_result(
             )
             continue
 
-        service_image = _extract_service_image(raw_result, idx)
+        service_image = _extract_service_image(method_id, raw_result, idx)
         node_attributes, label_to_sequence_id = _build_node_attributes(
             method_id=method_id,
             root=parsed,

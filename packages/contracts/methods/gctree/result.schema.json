@@ -27,6 +27,14 @@
         "tree_stats": {
           "type": "array",
           "items": { "type": "string" }
+        },
+        "method_charts": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "other_outputs": {
+          "type": "array",
+          "items": { "type": "string" }
         }
       },
       "additionalProperties": {
