@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef } from "react";
 import { parseNewick, NewickNode } from "@/lib/newick";
 
 type Anno = { label: string } & Record<string, any>;
@@ -123,6 +123,23 @@ function buildTipTitle(
   return lines.join("\n");
 }
 
+function isBlackColor(value: string): boolean {
+  const c = value.trim().toLowerCase();
+  if (!c) return false;
+  if (c === "black" || c === "#000" || c === "#000000" || c === "#000000ff") return true;
+
+  const rgb = c.match(/^rgba?\(([^)]+)\)$/);
+  if (rgb) {
+    const parts = rgb[1].split(",").map((v) => Number(v.trim()));
+    if (parts.length >= 3) {
+      const [r, g, b] = parts;
+      return r === 0 && g === 0 && b === 0;
+    }
+  }
+
+  return false;
+}
+
 export default function TreeSVG({
   newick,
   width = 900,
@@ -130,7 +147,7 @@ export default function TreeSVG({
   filename = "tree",
   fontSize = 12,
   strokeWidth = 1,
-  showLabels: showLabelsProp = false,
+  showLabels = false,
   annotations,
   colorMap,
   colorBy,
@@ -138,7 +155,6 @@ export default function TreeSVG({
   displayIdField,
 }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
-  const [showLabels, setShowLabels] = useState<boolean>(showLabelsProp);
 
   const coloringEnabled = !!colorBy;
   const colorField = colorBy || null;
@@ -344,12 +360,14 @@ export default function TreeSVG({
           {layout.leafNodes.map((n, i) => {
             const label = n.name ?? "";
             const anno = annoByLabel[label];
+            const defaultLeafFill = "var(--foreground)";
 
-            let fill = "#000000";
+            let fill = defaultLeafFill;
             if (coloringEnabled && colorField) {
               const call = (anno?.[colorField] as string) || "";
               if (call && call !== "Germline" && call !== unknown) {
-                fill = colors[call] ?? "#000000";
+                const resolved = colors[call] ?? defaultLeafFill;
+                fill = isBlackColor(resolved) ? defaultLeafFill : resolved;
               }
             }
 
@@ -403,16 +421,6 @@ export default function TreeSVG({
         </button>
         <button onClick={downloadNewick} className="rounded border px-3 py-1 text-sm">
           Download Newick
-        </button>
-
-        <button
-          onClick={() => setShowLabels((v) => !v)}
-          className="ml-auto rounded border px-3 py-1 text-sm"
-          aria-pressed={showLabels}
-          aria-label="Toggle labels"
-          title="Toggle tip labels"
-        >
-          {showLabels ? "Hide labels" : "Show labels"}
         </button>
       </div>
     </div>
