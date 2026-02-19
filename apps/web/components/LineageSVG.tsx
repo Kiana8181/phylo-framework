@@ -1,150 +1,552 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { LineagePlot, LineagePlotNode, TreeNodeAttrs } from "@phylo/contracts";
 
-type NodeAttrs = Record<string, any>;
+type NodeAttrs = TreeNodeAttrs;
 
-type LineageNode = {
+type RenderNode = {
   id: string;
   label: string;
+  isLeaf: boolean;
   x: number;
   y: number;
-  isLeaf: boolean;
-  parentId?: string;
-  abundance?: number;
+  radius: number;
+  color: string;
+  title: string;
+  displayLabel: string;
 };
 
-type LineageEdge = {
-  source: string;
-  target: string;
+type RenderEdge = {
+  key: string;
+  d: string;
 };
 
-type LineagePlot = {
-  format: "lineage-plot-v1";
-  nodes: LineageNode[];
-  edges: LineageEdge[];
-  meta?: {
-    rootId?: string;
-    germlineLabel?: string;
-    width?: number;
-    height?: number;
-  };
+type LayoutWarning = {
+  code: string;
+  message: string;
+  details?: Record<string, unknown>;
 };
 
-function toNumber(v: unknown, fallback = 1): number {
-  const n = typeof v === "number" ? v : Number(v);
+type LayoutResult = {
+  nodes: RenderNode[];
+  edges: RenderEdge[];
+  warnings: LayoutWarning[];
+  svgWidth: number;
+  svgHeight: number;
+  labelX: number;
+  connectorX: number;
+  maxLabelChars: number;
+};
+
+const PAD = 24;
+const MIN_CONTENT_WIDTH = 920;
+const MIN_CONTENT_HEIGHT = 300;
+const VIEWPORT_MAX_HEIGHT = 820;
+const MIN_RADIUS = 3;
+const MAX_RADIUS = 24;
+const LABEL_FONT_SIZE = 11;
+const LABEL_PAD = 10;
+const LABEL_CONNECTOR_GAP = 4;
+const MIN_LABEL_AREA = 40;
+const MAX_LABEL_AREA = 120;
+const LABEL_CHAR_WIDTH = 6.8;
+
+const ABUNDANCE_PALETTE = [
+  "#440154",
+  "#482878",
+  "#3E4A89",
+  "#31688E",
+  "#26828E",
+  "#1F9E89",
+  "#35B779",
+  "#6CCE59",
+  "#B4DD2C",
+  "#FDE725",
+] as const;
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function toAbundance(value: unknown, fallback = 1): number {
+  const n = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(n) || n <= 0) return fallback;
   return n;
 }
 
-function clamp(v: number, lo: number, hi: number): number {
-  return Math.max(lo, Math.min(hi, v));
+function logNorm(value: number, min: number, max: number): number {
+  const lo = Math.log1p(Math.max(0, min));
+  const hi = Math.log1p(Math.max(0, max));
+  const v = Math.log1p(Math.max(0, value));
+  const span = hi - lo;
+  if (span <= 0) return 0;
+  return clamp((v - lo) / span, 0, 1);
 }
 
-function nodeRadius(node: LineageNode, attrs?: NodeAttrs): number {
-  const a = toNumber(node.abundance ?? attrs?.abundance, 1);
-  return clamp(3 + Math.sqrt(a), 3, 16);
+function radiusForAbundance(value: number, min: number, max: number): number {
+  const t = logNorm(value, min, max);
+  return clamp(4 + t * 18, MIN_RADIUS, MAX_RADIUS);
 }
 
-function buildTitle(node: LineageNode, attrs?: NodeAttrs, displayIdField?: string | null): string {
+function colorForAbundance(value: number, min: number, max: number): string {
+  const t = logNorm(value, min, max);
+  const idx = Math.round(t * (ABUNDANCE_PALETTE.length - 1));
+  return ABUNDANCE_PALETTE[clamp(idx, 0, ABUNDANCE_PALETTE.length - 1)];
+}
+
+function resolveNodeAttrs(
+  node: LineagePlotNode,
+  nodeAttributes?: Record<string, NodeAttrs>,
+): NodeAttrs | undefined {
+  return nodeAttributes?.[node.label] ?? nodeAttributes?.[node.id];
+}
+
+function resolveDisplayLabel(
+  node: LineagePlotNode,
+  attrs: NodeAttrs | undefined,
+  displayIdField?: string | null,
+): string {
+  if (displayIdField) {
+    const selected = String(attrs?.[displayIdField] ?? "").trim();
+    if (selected) return selected;
+  }
+  const seq = String(attrs?.sequence_id ?? "").trim();
+  if (seq) return seq;
+  const label = String(node.label ?? "").trim();
+  if (label) return label;
+  return node.id;
+}
+
+function buildTitle(
+  node: LineagePlotNode,
+  attrs: NodeAttrs | undefined,
+  displayIdField?: string | null,
+): string {
   if (typeof attrs?.tooltip === "string" && attrs.tooltip.trim()) {
     return attrs.tooltip.trim();
   }
+
   const lines: string[] = [];
-  const display =
-    (displayIdField && String(attrs?.[displayIdField] ?? "").trim()) || node.label || node.id;
+  const display = resolveDisplayLabel(node, attrs, displayIdField);
   lines.push(display);
 
   const seq = String(attrs?.sequence_id ?? "").trim();
   if (seq && seq !== display) lines.push(`sequence_id: ${seq}`);
 
-  const abundance = toNumber(node.abundance ?? attrs?.abundance, 1);
+  const abundance = toAbundance(node.abundance ?? attrs?.abundance, 1);
   lines.push(`abundance: ${abundance}`);
 
   if (attrs && typeof attrs === "object") {
-    const extraKeys = Object.keys(attrs)
-      .filter((k) => !["tooltip", "sequence_id", "abundance", displayIdField ?? ""].includes(k))
+    const ignored = new Set<string>(["tooltip", "sequence_id", "abundance"]);
+    if (displayIdField) ignored.add(displayIdField);
+
+    const keys = Object.keys(attrs)
+      .filter((key) => !ignored.has(key))
       .sort((a, b) => a.localeCompare(b, "en"));
-    for (const k of extraKeys) {
-      const v = String(attrs[k] ?? "").trim();
-      if (!v) continue;
-      lines.push(`${k}: ${v}`);
+
+    for (const key of keys) {
+      const value = String(attrs[key] ?? "").trim();
+      if (!value) continue;
+      lines.push(`${key}: ${value}`);
     }
   }
 
   return lines.join("\n");
 }
 
+function truncateLabel(label: string, maxChars: number): string {
+  if (maxChars <= 1) return "…";
+  if (label.length <= maxChars) return label;
+  return `${label.slice(0, maxChars - 1).trimEnd()}…`;
+}
+
+function buildLayout(
+  lineagePlot: LineagePlot,
+  nodeAttributes: Record<string, NodeAttrs> | undefined,
+  displayIdField: string | null | undefined,
+  showLabels: boolean,
+): LayoutResult {
+  const warnings: LayoutWarning[] = [];
+  let invalidNodeCount = 0;
+  let duplicateNodeCount = 0;
+  let missingEdgeNodeCount = 0;
+  const cleanNodes = (lineagePlot.nodes ?? []).filter((node) => {
+    const valid = isFiniteNumber(node.x) && isFiniteNumber(node.y);
+    if (!valid) invalidNodeCount += 1;
+    return valid;
+  });
+
+  const byId = new Map<string, LineagePlotNode>();
+  for (const node of cleanNodes) {
+    if (byId.has(node.id)) {
+      duplicateNodeCount += 1;
+      continue;
+    }
+    byId.set(node.id, node);
+  }
+
+  const edges = (lineagePlot.edges ?? []).filter((edge) => {
+    const valid = byId.has(edge.source) && byId.has(edge.target);
+    if (!valid) missingEdgeNodeCount += 1;
+    return valid;
+  });
+
+  if (invalidNodeCount > 0) {
+    warnings.push({
+      code: "invalid-node-coordinates",
+      message: "Dropped lineage nodes with missing/invalid coordinates.",
+      details: { droppedNodes: invalidNodeCount },
+    });
+  }
+  if (duplicateNodeCount > 0) {
+    warnings.push({
+      code: "duplicate-node-id",
+      message: "Duplicate lineage node IDs detected; only the first duplicate was rendered.",
+      details: { droppedNodes: duplicateNodeCount },
+    });
+  }
+  if (missingEdgeNodeCount > 0) {
+    warnings.push({
+      code: "missing-edge-node",
+      message: "Dropped lineage edges that reference missing nodes.",
+      details: { droppedEdges: missingEdgeNodeCount },
+    });
+  }
+
+  if (byId.size === 0) {
+    return {
+      nodes: [],
+      edges: [],
+      warnings: [
+        ...warnings,
+        {
+          code: "empty-lineage",
+          message: "Lineage plot has no renderable nodes.",
+        },
+      ],
+      svgWidth: MIN_CONTENT_WIDTH,
+      svgHeight: MIN_CONTENT_HEIGHT,
+      labelX: 0,
+      connectorX: 0,
+      maxLabelChars: 1,
+    };
+  }
+
+  const coords = new Map<string, { x: number; y: number }>();
+  for (const node of byId.values()) {
+    coords.set(node.id, { x: node.x, y: node.y });
+  }
+
+  const xs = Array.from(coords.values()).map((point) => point.x);
+  const ys = Array.from(coords.values()).map((point) => point.y);
+  const rawWidth = Math.max(1, Math.max(...xs) - Math.min(...xs));
+  const rawHeight = Math.max(1, Math.max(...ys) - Math.min(...ys));
+
+  const readableScale = Math.max(1, 960 / rawWidth, 520 / rawHeight);
+  if (readableScale > 1) {
+    for (const [id, point] of coords) {
+      coords.set(id, { x: point.x * readableScale, y: point.y * readableScale });
+    }
+  }
+
+  const abundances = Array.from(byId.values()).map((node) => {
+    const attrs = resolveNodeAttrs(node, nodeAttributes);
+    return toAbundance(node.abundance ?? attrs?.abundance, 1);
+  });
+  const minAbundance = Math.min(...abundances);
+  const maxAbundance = Math.max(...abundances);
+
+  const preliminaryNodes = Array.from(byId.values()).map((node) => {
+    const point = coords.get(node.id)!;
+    const attrs = resolveNodeAttrs(node, nodeAttributes);
+    const abundance = toAbundance(node.abundance ?? attrs?.abundance, 1);
+    const radius = radiusForAbundance(abundance, minAbundance, maxAbundance);
+    const displayLabel = resolveDisplayLabel(node, attrs, displayIdField);
+    return {
+      id: node.id,
+      label: node.label,
+      isLeaf: node.isLeaf,
+      x: point.x,
+      y: point.y,
+      radius,
+      color: colorForAbundance(abundance, minAbundance, maxAbundance),
+      title: buildTitle(node, attrs, displayIdField),
+      displayLabel,
+    };
+  });
+
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+
+  for (const node of preliminaryNodes) {
+    minX = Math.min(minX, node.x - node.radius);
+    minY = Math.min(minY, node.y - node.radius);
+    maxX = Math.max(maxX, node.x + node.radius);
+    maxY = Math.max(maxY, node.y + node.radius);
+  }
+
+  const leafLabels = preliminaryNodes.filter((node) => node.isLeaf).map((node) => node.displayLabel);
+  const maxChars = leafLabels.length ? Math.max(...leafLabels.map((label) => label.length)) : 0;
+  const labelWidth = clamp(maxChars * LABEL_CHAR_WIDTH, MIN_LABEL_AREA, MAX_LABEL_AREA);
+  const maxLabelChars = Math.max(1, Math.floor(labelWidth / LABEL_CHAR_WIDTH));
+  const labelAreaWidth = showLabels ? LABEL_PAD + labelWidth : 0;
+  if (showLabels) maxX += labelAreaWidth;
+
+  const offsetX = PAD - minX;
+  const offsetY = PAD - minY;
+
+  const nodes = preliminaryNodes.map((node) => ({
+    ...node,
+    x: node.x + offsetX,
+    y: node.y + offsetY,
+  }));
+
+  const plotRightX = nodes.reduce(
+    (acc, node) => Math.max(acc, node.x + node.radius),
+    Number.NEGATIVE_INFINITY,
+  );
+  const labelX = showLabels ? plotRightX + LABEL_PAD : 0;
+  const connectorX = showLabels ? Math.round(labelX) - LABEL_CONNECTOR_GAP : 0;
+
+  const renderEdges: RenderEdge[] = edges.map((edge, idx) => {
+    const source = coords.get(edge.source);
+    const target = coords.get(edge.target);
+    if (!source || !target) {
+      return { key: `${edge.source}-${edge.target}-${idx}`, d: "" };
+    }
+
+    const sx = source.x + offsetX;
+    const sy = source.y + offsetY;
+    const tx = target.x + offsetX;
+    const ty = target.y + offsetY;
+
+    return {
+      key: `${edge.source}-${edge.target}-${idx}`,
+      d: `M ${sx} ${sy} L ${sx} ${ty} L ${tx} ${ty}`,
+    };
+  });
+
+  const contentWidth = Math.max(MIN_CONTENT_WIDTH, maxX - minX + PAD * 2);
+  const contentHeight = Math.max(MIN_CONTENT_HEIGHT, maxY - minY + PAD * 2);
+
+  return {
+    nodes,
+    edges: renderEdges.filter((edge) => edge.d),
+    warnings,
+    svgWidth: Math.ceil(contentWidth),
+    svgHeight: Math.ceil(contentHeight),
+    labelX: Math.round(labelX),
+    connectorX,
+    maxLabelChars,
+  };
+}
+
 export default function LineageSVG({
   lineagePlot,
   nodeAttributes,
   displayIdField,
+  showLabels = true,
+  filename = "tree",
+  newickText,
 }: {
   lineagePlot: LineagePlot;
   nodeAttributes?: Record<string, NodeAttrs>;
   displayIdField?: string | null;
+  showLabels?: boolean;
+  filename?: string;
+  newickText?: string | null;
 }) {
-  const byId = useMemo(() => {
-    const m: Record<string, LineageNode> = {};
-    for (const n of lineagePlot.nodes ?? []) m[n.id] = n;
-    return m;
-  }, [lineagePlot.nodes]);
+  const svgRef = useRef<SVGSVGElement>(null);
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
 
-  const view = useMemo(() => {
-    const nodes = lineagePlot.nodes ?? [];
-    if (!nodes.length) return { minX: 0, minY: 0, width: 900, height: 520 };
+  const layout = useMemo(
+    () => buildLayout(lineagePlot, nodeAttributes, displayIdField, showLabels),
+    [displayIdField, lineagePlot, nodeAttributes, showLabels],
+  );
 
-    const xs = nodes.map((n) => n.x);
-    const ys = nodes.map((n) => n.y);
-    const minX = Math.min(...xs) - 30;
-    const maxX = Math.max(...xs) + 30;
-    const minY = Math.min(...ys) - 30;
-    const maxY = Math.max(...ys) + 30;
-    const width = Math.max(600, maxX - minX);
-    const height = Math.max(320, maxY - minY);
-    return { minX, minY, width, height };
-  }, [lineagePlot.nodes]);
+  useEffect(() => {
+    if (!layout.warnings.length) return;
+    for (const warning of layout.warnings) {
+      console.warn("[LineageSVG]", {
+        code: warning.code,
+        message: warning.message,
+        details: warning.details,
+      });
+    }
+  }, [layout.warnings]);
+
+  function downloadSVG(): void {
+    const svg = svgRef.current;
+    if (!svg) return;
+
+    const serializer = new XMLSerializer();
+    const src = serializer.serializeToString(svg);
+    const blob = new Blob([src], { type: "image/svg+xml;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${filename}-lineage.svg`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function downloadPNG(): void {
+    const svg = svgRef.current;
+    if (!svg) return;
+
+    const serializer = new XMLSerializer();
+    const src = serializer.serializeToString(svg);
+    const img = new Image();
+
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = layout.svgWidth;
+      canvas.height = layout.svgHeight;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.fillStyle = "white";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0);
+      const png = canvas.toDataURL("image/png");
+      const a = document.createElement("a");
+      a.href = png;
+      a.download = `${filename}-lineage.png`;
+      a.click();
+    };
+
+    img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(src)}`;
+  }
+
+  function downloadNewick(): void {
+    const txt = String(newickText ?? lineagePlot.meta?.normalizedNewick ?? "").trim();
+    if (!txt) return;
+
+    const normalized = txt.endsWith(";") ? txt : `${txt};`;
+    const blob = new Blob([normalized], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${filename}.nwk`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  if (!layout.nodes.length) {
+    return (
+      <div className="space-y-2">
+        <div className="rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+          Unable to render lineage plot: no valid coordinates were provided.
+        </div>
+        {!!layout.warnings.length && (
+          <div className="rounded border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800">
+            {layout.warnings[0]?.message}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
-    <div className="w-full overflow-auto">
-      <svg
-        width="100%"
-        height={Math.round(Math.max(320, lineagePlot.meta?.height ?? view.height))}
-        viewBox={`${view.minX} ${view.minY} ${view.width} ${view.height}`}
-        className="rounded border bg-background text-foreground"
-        role="img"
-      >
-        <g stroke="currentColor" strokeWidth={1.2} opacity={0.65}>
-          {(lineagePlot.edges ?? []).map((e, i) => {
-            const a = byId[e.source];
-            const b = byId[e.target];
-            if (!a || !b) return null;
-            return <line key={`${e.source}-${e.target}-${i}`} x1={a.x} y1={a.y} x2={b.x} y2={b.y} />;
-          })}
-        </g>
+    <div className="space-y-3">
+      {!!layout.warnings.length && (
+        <div className="rounded border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
+          {layout.warnings[0]?.message}
+        </div>
+      )}
 
-        <g>
-          {(lineagePlot.nodes ?? []).map((n) => {
-            const attrs = nodeAttributes?.[n.label] ?? nodeAttributes?.[n.id];
-            const r = nodeRadius(n, attrs);
-            const title = buildTitle(n, attrs, displayIdField || null);
-            const fill = n.isLeaf ? "#0f766e" : "#334155";
-            const display =
-              (displayIdField && String(attrs?.[displayIdField] ?? "").trim()) || n.label || n.id;
-            return (
-              <g key={n.id}>
-                <circle cx={n.x} cy={n.y} r={r} fill={fill}>
-                  <title>{title}</title>
-                </circle>
-                <text x={n.x + r + 5} y={n.y} dominantBaseline="middle" fontSize={11}>
-                  {display}
-                  <title>{title}</title>
-                </text>
-              </g>
-            );
-          })}
-        </g>
-      </svg>
+      <div className="w-full overflow-auto rounded border" style={{ maxHeight: VIEWPORT_MAX_HEIGHT }}>
+        <svg
+          ref={svgRef}
+          width={layout.svgWidth}
+          height={layout.svgHeight}
+          className="block bg-background text-foreground"
+          role="img"
+        >
+          <g
+            stroke="currentColor"
+            strokeWidth={1.2}
+            fill="none"
+            opacity={0.8}
+            vectorEffect="non-scaling-stroke"
+          >
+            {layout.edges.map((edge) => (
+              <path key={edge.key} d={edge.d} />
+            ))}
+          </g>
+
+          <g>
+            {layout.nodes.map((node) => {
+              const hovered = hoveredNodeId === node.id;
+              return (
+                <g
+                  key={node.id}
+                  onMouseEnter={() => setHoveredNodeId(node.id)}
+                  onMouseLeave={() => setHoveredNodeId(null)}
+                >
+                  <circle
+                    cx={node.x}
+                    cy={node.y}
+                    r={node.radius}
+                    fill={node.color}
+                    stroke={hovered ? "#0f172a" : "#111827"}
+                    strokeWidth={hovered ? 2.6 : 1.1}
+                    opacity={hovered ? 1 : 0.95}
+                  >
+                    <title>{node.title}</title>
+                  </circle>
+                  {showLabels && node.isLeaf && (
+                    <g>
+                      <line
+                        x1={node.x}
+                        y1={node.y}
+                        x2={layout.connectorX}
+                        y2={node.y}
+                        stroke="currentColor"
+                        strokeWidth={0.5}
+                        opacity={0.4}
+                        vectorEffect="non-scaling-stroke"
+                      />
+                      <text
+                        x={layout.labelX}
+                        y={node.y}
+                        dominantBaseline="middle"
+                        fontSize={LABEL_FONT_SIZE}
+                        fill="currentColor"
+                      >
+                        {truncateLabel(node.displayLabel, layout.maxLabelChars)}
+                        <title>{node.title}</title>
+                      </text>
+                    </g>
+                  )}
+                </g>
+              );
+            })}
+          </g>
+        </svg>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        <button onClick={downloadPNG} className="rounded border px-3 py-1 text-sm">
+          Download PNG
+        </button>
+        <button onClick={downloadSVG} className="rounded border px-3 py-1 text-sm">
+          Download SVG
+        </button>
+        <button
+          onClick={downloadNewick}
+          disabled={!String(newickText ?? lineagePlot.meta?.normalizedNewick ?? "").trim()}
+          className="rounded border px-3 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          Download Newick
+        </button>
+      </div>
     </div>
   );
 }

@@ -14,6 +14,7 @@ import type {
   TreeServiceImage,
 } from "@phylo/contracts";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 
 type TreesCarouselProps = {
   runId?: string | null;
@@ -95,6 +96,7 @@ export default function TreesCarousel({
   const total = trees?.length ?? 0;
   const [idx, setIdx] = useState(0);
   const [activeTab, setActiveTab] = useState<"method" | "phylogeny" | "lineage">("phylogeny");
+  const [showLabels, setShowLabels] = useState(true);
   const [displayIdField, setDisplayIdField] = useState<string>("sequence_id");
   const [treeCache, setTreeCache] = useState<Record<string, RunTreePayload>>({});
   const [loadingTreeId, setLoadingTreeId] = useState<string | null>(null);
@@ -200,6 +202,9 @@ export default function TreesCarousel({
   }, [annotations, cleanNewick, figures?.phylogeny, loadingTreeId, treeCache, treeLoadErrors, trees]);
 
   const current = viewTrees[idx];
+  const isRenderableTreeTab = activeTab === "phylogeny" || activeTab === "lineage";
+  const lineageDownloadName = current?.id || `tree-${idx + 1}`;
+  const lineageNewick = current?.lineagePlot?.meta?.normalizedNewick ?? current?.phylogenyNewick ?? "";
 
   const tabs = useMemo(() => {
     if (!current) return [] as Array<"method" | "phylogeny" | "lineage">;
@@ -304,21 +309,30 @@ export default function TreesCarousel({
                 </button>
               ))}
 
-              {displayFields.length > 0 && (
-                <div className="ml-auto flex items-center gap-2">
-                  <span className="text-xs text-muted-foreground">Display ID</span>
-                  <Select value={displayIdField} onValueChange={setDisplayIdField}>
-                    <SelectTrigger className="w-[180px]">
-                      <SelectValue placeholder="Display field" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {displayFields.map((f) => (
-                        <SelectItem key={f} value={f}>
-                          {f}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+              {isRenderableTreeTab && (
+                <div className="ml-auto flex items-center gap-4">
+                  <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <span>Show labels</span>
+                    <Switch checked={showLabels} onCheckedChange={setShowLabels} aria-label="Show labels" />
+                  </label>
+
+                  {displayFields.length > 0 && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground">Display ID</span>
+                      <Select value={displayIdField} onValueChange={setDisplayIdField}>
+                        <SelectTrigger className="w-[180px]">
+                          <SelectValue placeholder="Display field" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {displayFields.map((f) => (
+                            <SelectItem key={f} value={f}>
+                              {f}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -347,7 +361,7 @@ export default function TreesCarousel({
             <TreeSVG
               newick={current.phylogenyNewick}
               annotations={phyloAnnotations}
-              showLabels
+              showLabels={showLabels}
               colorBy={colorBy}
               unknownValue={unknownValue}
               displayIdField={displayIdField || undefined}
@@ -359,6 +373,9 @@ export default function TreesCarousel({
               lineagePlot={current.lineagePlot}
               nodeAttributes={current.nodeAttributes}
               displayIdField={displayIdField || undefined}
+              showLabels={showLabels}
+              filename={lineageDownloadName}
+              newickText={lineageNewick}
             />
           )}
           {activeTab === "lineage" && !current?.lineagePlot && current?.isLoading && (

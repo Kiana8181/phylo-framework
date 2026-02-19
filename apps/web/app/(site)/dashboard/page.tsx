@@ -10,9 +10,23 @@ import { RunsApi } from "@/features/runs/api";
 import { useRunResult, useRunStatus } from "@/features/runs/hooks";
 import { cleanNewick } from "@/lib/newick";
 import type { MethodInfo } from "@phylo/contracts";
+import Image from "next/image";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
+
+function _figureToDataUrl(raw: unknown): string | null {
+  const txt = String(raw ?? "").trim();
+  if (!txt) return null;
+  if (/^data:/i.test(txt)) return txt;
+  return `data:image/png;base64,${txt}`;
+}
+
+function _labelFromFigureKey(key: string): string {
+  const x = key.replace(/[_\-]+/g, " ").trim();
+  if (!x) return "Other Outputs";
+  return x.replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 function DashboardPageContent() {
   const searchParams = useSearchParams();
@@ -99,6 +113,22 @@ function DashboardPageContent() {
     ? undefined
     : result?.stats?.tip_color_by;
   const svgUnknown = result?.stats?.unknown_value ?? "unknown";
+  const methodFigureSections = useMemo(() => {
+    const figs = (result as any)?.figures;
+    if (!figs || typeof figs !== "object") return [] as Array<{ key: string; items: string[] }>;
+
+    const out: Array<{ key: string; items: string[] }> = [];
+    for (const [key, value] of Object.entries(figs)) {
+      if (key === "phylogeny") continue;
+      if (!Array.isArray(value)) continue;
+      const items = value
+        .map(_figureToDataUrl)
+        .filter((src): src is string => Boolean(src));
+      if (!items.length) continue;
+      out.push({ key, items });
+    }
+    return out;
+  }, [result]);
 
   return (
     <main className="mx-auto max-w-6xl w-full p-4 sm:p-6 space-y-6 sm:space-y-8">
@@ -209,6 +239,41 @@ function DashboardPageContent() {
             colorBy={svgColorBy}
             unknownValue={svgUnknown}
           />
+
+          {methodFigureSections.length > 0 && (
+            <section className="space-y-3">
+              <h3 className="text-lg font-medium">Method Charts</h3>
+              {methodFigureSections.map((section) => (
+                <details key={section.key} className="rounded border p-3 bg-card/50">
+                  <summary className="cursor-pointer text-sm font-medium">
+                    {_labelFromFigureKey(section.key)}
+                  </summary>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    {section.items.map((src, i) =>
+                      src.startsWith("data:application/pdf") ? (
+                        <object
+                          key={`${section.key}-${i}`}
+                          data={src}
+                          type="application/pdf"
+                          className="w-full h-80 rounded border bg-white"
+                        />
+                      ) : (
+                        <Image
+                          key={`${section.key}-${i}`}
+                          src={src}
+                          alt={`${section.key}-${i + 1}`}
+                          width={1200}
+                          height={800}
+                          unoptimized
+                          className="w-full rounded border bg-white"
+                        />
+                      )
+                    )}
+                  </div>
+                </details>
+              ))}
+            </section>
+          )}
 
           {/* Raw Newick (optional) */}
           <details className="rounded border p-3 bg-card/50 overflow-x-scroll">
