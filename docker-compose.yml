@@ -148,6 +148,7 @@ services:
     profiles: ["prod"]
 
   dowser:
+    platform: ${IMMCANTATION_PLATFORM:-linux/amd64}
     build:
       context: ./services/dowser
       dockerfile: Dockerfile
@@ -197,6 +198,7 @@ services:
     profiles: ["dev", "prod"]
 
   brepphylo:
+    platform: ${IMMCANTATION_PLATFORM:-linux/amd64}
     build:
       context: ./services/brepphylo
       dockerfile: Dockerfile
