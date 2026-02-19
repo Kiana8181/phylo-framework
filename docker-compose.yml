@@ -1,27 +1,59 @@
-# docker-compose.yml  (only showing the service blocks)
-
-x-env-common: &env_common
+x-api-common-env: &api_common_env
   CONTRACTS_DIR: /contracts
   CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
-  METHOD_DOWSER_URL: http://dowser:8001
-  METHOD_GCTREE_URL: http://gctree:8002
-  METHOD_BREPPHYLO_URL: http://brepphylo:8003
-  METHOD_CLONALTREE_URL: http://clonaltree:8004
-  HTTP_CLIENT_TIMEOUT: "600"
-  SPEC_TIMEOUT: "60"
-  RUNS_DIR: /shared
+  STRICT_CONTRACT_ROUTES: ${STRICT_CONTRACT_ROUTES:-true}
+  HOST_RUNTIME_SHARED_ROOT: ${HOST_RUNTIME_SHARED_ROOT:-/runtime/storage}
+  STORAGE_LOCAL_PATH: ${HOST_RUNTIME_SHARED_ROOT:-/runtime/storage}
+  METHOD_SERVICE_FILE_PREFIX: ${METHOD_SERVICE_FILE_PREFIX:-/runtime/storage}
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-phylo_user}:${POSTGRES_PASSWORD:-phylo_pass}@postgres:5432/${POSTGRES_DB:-phylo_db}
+  METHOD_DOWSER_URL: ${METHOD_DOWSER_URL_DOCKER:-http://dowser:8001}
+  METHOD_GCTREE_URL: ${METHOD_GCTREE_URL_DOCKER:-http://gctree:8002}
+  METHOD_BREPPHYLO_URL: ${METHOD_BREPPHYLO_URL_DOCKER:-http://brepphylo:8003}
+  METHOD_CLONALTREE_URL: ${METHOD_CLONALTREE_URL_DOCKER:-http://clonaltree:8004}
+
+x-method-common-env: &method_common_env
+  CONTRACTS_DIR: /contracts
+  STRICT_CONTRACT_ROUTES: ${STRICT_CONTRACT_ROUTES:-true}
+  RUNS_DIR: ${METHOD_SERVICE_FILE_PREFIX:-/runtime/storage}
+  METHOD_SERVICE_FILE_PREFIX: ${METHOD_SERVICE_FILE_PREFIX:-/runtime/storage}
 
 services:
-  # --- UI: DEV ---
+  postgres:
+    image: postgres:15-alpine
+    container_name: phylo-postgres
+    env_file:
+      - ./.env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-phylo_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-phylo_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-phylo_db}
+    ports:
+      - "${POSTGRES_PORT:-5440}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-phylo_user} -d ${POSTGRES_DB:-phylo_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles: ["dev", "prod"]
+
   web:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
     image: phylo-web:latest
+    env_file:
+      - ./.env
     environment:
-      NEXT_PUBLIC_API_BASE_URL: http://api:8000
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
     depends_on: [api]
-    ports: ["3000:3000"]
+    ports:
+      - "${WEB_PORT:-3000}:3000"
     volumes:
       - type: bind
         source: .
@@ -30,153 +62,191 @@ services:
         source: ./packages/contracts
         target: /contracts
         read_only: true
-    command: npm -w web run dev -- -p 3000
+    command: sh -lc "npm -w web run dev -- -p ${WEB_PORT:-3000}"
     profiles: ["dev"]
 
-  # --- UI: PROD ---
   web-prod:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
     image: phylo-web:latest
+    env_file:
+      - ./.env
     environment:
-      NEXT_PUBLIC_API_BASE_URL: http://api:8000
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
     depends_on: [api-prod]
-    ports: ["3000:3000"]
+    ports:
+      - "${WEB_PORT:-3000}:3000"
     profiles: ["prod"]
-    # no volumes; image is self-contained
 
-  # --- API: DEV ---
   api:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
     image: phylo-api:latest
+    env_file:
+      - ./.env
     environment:
-      <<: *env_common
-      RUNS_DIR: /runtime/runs
-    depends_on: [dowser, gctree, brepphylo, clonaltree]
-    ports: ["8000:8000"]
+      <<: *api_common_env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      dowser:
+        condition: service_started
+      gctree:
+        condition: service_started
+      brepphylo:
+        condition: service_started
+      clonaltree:
+        condition: service_started
+    ports:
+      - "${API_PORT:-8000}:8000"
     volumes:
       - type: bind
         source: ./packages/contracts
         target: /contracts
         read_only: true
       - type: bind
-        source: ./runtime/runs
-        target: /runtime/runs
+        source: ${STORAGE_LOCAL_PATH:-runtime/storage}
+        target: /runtime/storage
     command: uvicorn apps.api.main:app --host 0.0.0.0 --port 8000 --reload
     profiles: ["dev"]
 
-  # --- API: PROD ---
   api-prod:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
     image: phylo-api:latest
+    env_file:
+      - ./.env
     environment:
-      <<: *env_common
-      RUNS_DIR: /runtime/runs
-    depends_on: [dowser, gctree, brepphylo, clonaltree]
-    ports: ["8000:8000"]
+      <<: *api_common_env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      dowser:
+        condition: service_started
+      gctree:
+        condition: service_started
+      brepphylo:
+        condition: service_started
+      clonaltree:
+        condition: service_started
+    ports:
+      - "${API_PORT:-8000}:8000"
     volumes:
       - type: bind
         source: ./packages/contracts
         target: /contracts
         read_only: true
       - type: bind
-        source: ./runtime/runs
-        target: /runtime/runs
+        source: ${STORAGE_LOCAL_PATH:-runtime/storage}
+        target: /runtime/storage
     command: uvicorn apps.api.main:app --host 0.0.0.0 --port 8000
     profiles: ["prod"]
 
   dowser:
+    platform: ${IMMCANTATION_PLATFORM:-linux/amd64}
     build:
       context: ./services/dowser
       dockerfile: Dockerfile
     image: phylo-dowser:latest
+    env_file:
+      - ./.env
     environment:
-      CONTRACTS_DIR: /contracts
-      STRICT_CONTRACT_ROUTES: ${STRICT_CONTRACT_ROUTES:-true}
-      RUNS_DIR: /runtime/runs
-      IGPHYML_BIN: /usr/local/share/igphyml/src/igphyml
-      IGPHYML_MOTIFS: /usr/local/share/igphyml/src/motifs
-      IGPHYML_PATH: /usr/local/share/igphyml/src/motifs
+      <<: *method_common_env
+      IGPHYML_BIN: ${IGPHYML_BIN:-/usr/local/share/igphyml/src/igphyml}
+      IGPHYML_MOTIFS: ${IGPHYML_MOTIFS:-/usr/local/share/igphyml/src/motifs}
+      IGPHYML_PATH: ${IGPHYML_PATH:-/usr/local/share/igphyml/src/motifs}
     volumes:
       - type: bind
         source: ./packages/contracts
         target: /contracts
         read_only: true
       - type: bind
-        source: ./runtime/runs
-        target: /runtime/runs
+        source: ${STORAGE_LOCAL_PATH:-runtime/storage}
+        target: /runtime/storage
         read_only: true
-    expose: ["8001"]
-    profiles: ["dev","prod"]
+    expose:
+      - "${METHOD_DOWSER_CONTAINER_PORT:-8001}"
+    command: ["R", "-q", "-e", "port <- as.integer(Sys.getenv('METHOD_DOWSER_CONTAINER_PORT', '8001')); pr <- plumber::plumb('/srv/plumber.R'); pr$$run(host='0.0.0.0', port=port)"]
+    profiles: ["dev", "prod"]
 
   gctree:
     build:
       context: ./services/gctree
       dockerfile: Dockerfile
     image: phylo-gctree:latest
+    env_file:
+      - ./.env
     environment:
-      CONTRACTS_DIR: /contracts
-      STRICT_CONTRACT_ROUTES: ${STRICT_CONTRACT_ROUTES:-true}
-      RUNS_DIR: /runtime/runs
+      <<: *method_common_env
     volumes:
       - type: bind
         source: ./packages/contracts
         target: /contracts
         read_only: true
       - type: bind
-        source: ./runtime/runs
-        target: /runtime/runs
+        source: ${STORAGE_LOCAL_PATH:-runtime/storage}
+        target: /runtime/storage
         read_only: true
-    expose: ["8002"]
-    profiles: ["dev","prod"]
+    expose:
+      - "${METHOD_GCTREE_CONTAINER_PORT:-8002}"
+    command: sh -lc "uvicorn app:app --host 0.0.0.0 --port ${METHOD_GCTREE_CONTAINER_PORT:-8002}"
+    profiles: ["dev", "prod"]
 
   brepphylo:
+    platform: ${IMMCANTATION_PLATFORM:-linux/amd64}
     build:
       context: ./services/brepphylo
       dockerfile: Dockerfile
     image: phylo-brepphylo:latest
+    env_file:
+      - ./.env
     environment:
-      CONTRACTS_DIR: /contracts
-      STRICT_CONTRACT_ROUTES: ${STRICT_CONTRACT_ROUTES:-true}
-      RUNS_DIR: /runtime/runs
-      DNAPARS_PATH: /usr/local/bin/dnapars
-      IGPHYML_BIN: /usr/local/share/igphyml/src/igphyml
-      IGPHYML_MOTIFS: /usr/local/share/igphyml/src/motifs
-      IGPHYML_PATH: /usr/local/share/igphyml/src/motifs
+      <<: *method_common_env
+      DNAPARS_PATH: ${DNAPARS_PATH:-/usr/local/bin/dnapars}
+      IGPHYML_BIN: ${IGPHYML_BIN:-/usr/local/share/igphyml/src/igphyml}
+      IGPHYML_MOTIFS: ${IGPHYML_MOTIFS:-/usr/local/share/igphyml/src/motifs}
+      IGPHYML_PATH: ${IGPHYML_PATH:-/usr/local/share/igphyml/src/motifs}
     volumes:
       - type: bind
         source: ./packages/contracts
         target: /contracts
         read_only: true
       - type: bind
-        source: ./runtime/runs
-        target: /runtime/runs
+        source: ${STORAGE_LOCAL_PATH:-runtime/storage}
+        target: /runtime/storage
         read_only: true
-    expose: ["8003"]
-    profiles: ["dev","prod"]
+    expose:
+      - "${METHOD_BREPPHYLO_CONTAINER_PORT:-8003}"
+    command: ["R", "-q", "-e", "port <- as.integer(Sys.getenv('METHOD_BREPPHYLO_CONTAINER_PORT', '8003')); pr <- plumber::plumb('/srv/plumber.R'); pr$$run(host='0.0.0.0', port=port)"]
+    profiles: ["dev", "prod"]
 
   clonaltree:
     build:
       context: ./services/clonaltree
       dockerfile: Dockerfile
     image: phylo-clonaltree:latest
+    env_file:
+      - ./.env
     environment:
-      CONTRACTS_DIR: /contracts
-      STRICT_CONTRACT_ROUTES: ${STRICT_CONTRACT_ROUTES:-true}
-      RUNS_DIR: /runtime/runs
+      <<: *method_common_env
     volumes:
       - type: bind
         source: ./packages/contracts
         target: /contracts
         read_only: true
       - type: bind
-        source: ./runtime/runs
-        target: /runtime/runs
+        source: ${STORAGE_LOCAL_PATH:-runtime/storage}
+        target: /runtime/storage
         read_only: true
-    expose: ["8004"]
-    profiles: ["dev","prod"]
+    expose:
+      - "${METHOD_CLONALTREE_CONTAINER_PORT:-8004}"
+    command: sh -lc "uvicorn app:app --host 0.0.0.0 --port ${METHOD_CLONALTREE_CONTAINER_PORT:-8004}"
+    profiles: ["dev", "prod"]
+
+volumes:
+  postgres_data:

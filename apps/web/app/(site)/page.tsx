@@ -1,178 +1,99 @@
-"use client";
-
-import MethodsGrid from "@/components/phylo/MethodsGrid";
-import ResultsSummary from "@/components/phylo/ResultsSummary";
-import RunParameters from "@/components/phylo/RunParameters";
-import RunProgress from "@/components/phylo/RunProgress";
-import TreesCarousel from "@/components/phylo/TreesCarousel";
-import { useMethods, useMethodSpec } from "@/features/methods/hooks";
-import { useRunResult, useRunStatus } from "@/features/runs/hooks";
-import { cleanNewick } from "@/lib/newick";
-import type { MethodInfo } from "@phylo/contracts";
-import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { Button } from "@/components/ui/button";
+import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  GitBranch,
+  Upload,
+  BarChart3,
+  FolderTree,
+  Zap,
+  Shield,
+  ArrowRight,
+} from "lucide-react";
 
 export default function Home() {
-  const { data: methods } = useMethods();
-  const [selected, setSelected] = useState<MethodInfo | null>(null);
-  const { data: spec } = useMethodSpec(selected?.id);
-
-  const [files, setFiles] = useState<File[]>([]);
-  const [runId, setRunId] = useState<string | null>(null);
-
-  const { data: status } = useRunStatus(runId ?? undefined);
-  const resultEnabled = status?.status === "DONE" && !!runId;
-  const { data: result } = useRunResult(runId ?? undefined, resultEnabled);
-
-  const cloneRows = useMemo(
-    () =>
-      result?.clones?.clone_id?.map((id: string, i: number) => ({
-        id,
-        seqs: result?.clones?.seqs?.[i],
-      })) ?? [],
-    [result]
-  );
-
-  useEffect(() => {
-    if (status?.status === "ERROR") setRunId(null);
-  }, [status]);
-
-  const svgColorBy: string | undefined = result?.stats?.tip_states_capped
-    ? undefined
-    : result?.stats?.tip_color_by;
-  const svgUnknown = result?.stats?.unknown_value ?? "unknown";
-
   return (
-    <main className="mx-auto max-w-6xl p-6 space-y-8">
-      <header className="flex items-end justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-semibold tracking-tight">
-            Phylo Runner
-          </h1>
-          <p className="text-muted-foreground text-sm mt-1">
-            Select a method, set parameters, upload your data, and generate
-            trees.
-          </p>
+    <main className="flex flex-col min-h-[calc(100vh-3.5rem)]">
+      {/* Hero */}
+      <section className="flex flex-col items-center justify-center py-16 sm:py-24 px-4 sm:px-6">
+        <div className="w-full max-w-2xl mx-auto text-center space-y-6 sm:space-y-8">
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-primary/10 text-primary mb-2">
+            <GitBranch className="w-8 h-8" />
+          </div>
+          <div className="space-y-3 sm:space-y-4">
+            <h1 className="text-3xl font-bold tracking-tight sm:text-4xl md:text-5xl">
+              Phylo Runner
+            </h1>
+            <p className="text-base text-muted-foreground sm:text-lg max-w-xl mx-auto">
+              Run phylogeny methods on your data. Select a method, set parameters,
+              upload your files, and generate trees — all in one place.
+            </p>
+          </div>
+          <Link href="/dashboard">
+            <Button size="lg" className="text-base px-6 sm:px-8 gap-2">
+              Go to Dashboard
+              <ArrowRight className="w-4 h-4" />
+            </Button>
+          </Link>
         </div>
-      </header>
-
-      {/* Methods */}
-      <section className="space-y-3">
-        <h2 className="text-lg font-medium">Methods</h2>
-        <MethodsGrid
-          methods={methods ?? []}
-          selectedId={selected?.id ?? null}
-          onSelect={(m) => {
-            setSelected(m);
-            setRunId(null);
-          }}
-        />
       </section>
 
-      {/* Parameters & File Upload */}
-      {spec && (
-        <RunParameters
-          spec={spec}
-          files={files}
-          onFiles={setFiles}
-          onSubmitDone={(id) => setRunId(id)}
-        />
-      )}
-
-      {/* Progress */}
-      {runId && (
-        <RunProgress
-          runId={runId}
-          status={status?.status}
-          progress={status?.progress ?? 0}
-          message={status?.message}
-        />
-      )}
-
-      {/* Results */}
-      {result && (
-        <section className="space-y-6">
-          <ResultsSummary
-            stats={result?.stats}
-            cloneRows={cloneRows}
-            artifact_zip_b64={result?.artifact_zip_b64}
-            artifact_name={result?.artifact_name || ""}
-          />
-
-          {/* backend warnings */}
-          {Array.isArray((result as any)?.warnings) &&
-            (result as any).warnings.length > 0 && (
-              <div className="rounded border p-3 bg-yellow-50 text-yellow-900 text-sm space-y-1">
-                {(result as any).warnings.map((w: string, i: number) => (
-                  <div key={i}>• {w}</div>
-                ))}
+      {/* Features grid */}
+      <section className="w-full max-w-4xl mx-auto px-4 pb-12 sm:pb-20 grid gap-4 grid-cols-1 sm:grid-cols-2">
+        <Card className="border-border/80 hover:border-primary/30 transition-colors">
+          <CardHeader className="space-y-2">
+            <div className="flex items-center gap-2">
+              <div className="p-2 rounded-lg bg-primary/10 text-primary">
+                <BarChart3 className="w-5 h-5" />
               </div>
-            )}
-
-          <TreesCarousel
-            trees={result.trees ?? []}
-            figures={result.figures}
-            annotations={result.annotations}
-            cleanNewick={cleanNewick}
-            colorBy={svgColorBy}
-            unknownValue={svgUnknown}
-          />
-
-          {/* Raw Newick (optional) */}
-          <details className="rounded border p-3 bg-card/50 overflow-x-scroll">
-            <summary className="cursor-pointer text-sm font-medium">
-              Show Newick text
-            </summary>
-            <div className="mt-2 space-y-2">
-              {(result.trees ?? []).map((nwk: string, i: number) => (
-                <pre key={i} className="whitespace-pre-wrap text-xs">
-                  {nwk}
-                </pre>
-              ))}
+              <CardTitle className="text-lg">Phylogeny methods</CardTitle>
             </div>
-          </details>
-
-          {/* Backend Logs (optional) */}
-          {Array.isArray(result.logs) && result.logs.length > 0 && (
-            <details className="rounded border p-3 bg-card/50">
-              <summary className="cursor-pointer text-sm font-medium">
-                Show model logs
-              </summary>
-              <div className="mt-2 max-h-64 overflow-y-auto space-y-3 text-xs font-mono">
-                {result.logs.map((L, i) => (
-                  <div
-                    key={i}
-                    className="border-b last:border-0 pb-2 last:pb-0"
-                  >
-                    <div className="flex justify-between gap-2 text-[11px]">
-                      <span className="font-semibold">
-                        {L.step || `Step ${i + 1}`}
-                      </span>
-                      {typeof L.ok === "boolean" && (
-                        <span
-                          className={L.ok ? "text-emerald-500" : "text-red-500"}
-                        >
-                          {L.ok ? "OK" : "FAIL"}
-                        </span>
-                      )}
-                    </div>
-
-                    {L.cmd && (
-                      <div className="mt-1 text-[11px] text-muted-foreground">
-                        <span className="font-semibold">cmd: </span>
-                        <code className="break-all">{L.cmd}</code>
-                      </div>
-                    )}
-
-                    {L.out && (
-                      <pre className="mt-1 whitespace-pre-wrap">{L.out}</pre>
-                    )}
-                  </div>
-                ))}
+            <CardDescription>
+              Dowser, GCtree, BrepPhylo, ClonalTree and more — with configurable parameters.
+            </CardDescription>
+          </CardHeader>
+        </Card>
+        <Card className="border-border/80 hover:border-primary/30 transition-colors">
+          <CardHeader className="space-y-2">
+            <div className="flex items-center gap-2">
+              <div className="p-2 rounded-lg bg-primary/10 text-primary">
+                <Upload className="w-5 h-5" />
               </div>
-            </details>
-          )}
-        </section>
-      )}
+              <CardTitle className="text-lg">Upload and run</CardTitle>
+            </div>
+            <CardDescription>
+              Upload input files, set parameters, and get trees and results in one place.
+            </CardDescription>
+          </CardHeader>
+        </Card>
+        <Card className="border-border/80 hover:border-primary/30 transition-colors sm:col-span-2">
+          <CardHeader className="space-y-2">
+            <div className="flex items-center gap-2">
+              <div className="p-2 rounded-lg bg-primary/10 text-primary">
+                <FolderTree className="w-5 h-5" />
+              </div>
+              <CardTitle className="text-lg">Trees and artifacts</CardTitle>
+            </div>
+            <CardDescription>
+              View interactive trees, download Newick files, and export result artifacts in one click.
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      </section>
+
+      {/* Bottom strip */}
+      <section className="border-t bg-muted/30 py-8 px-4">
+        <div className="max-w-4xl mx-auto flex flex-wrap items-center justify-center gap-6 sm:gap-10 text-sm text-muted-foreground">
+          <span className="flex items-center gap-2">
+            <Zap className="w-4 h-4 text-primary" />
+            One-click runs
+          </span>
+          <span className="flex items-center gap-2">
+            <Shield className="w-4 h-4 text-primary" />
+            Your data stays yours
+          </span>
+        </div>
+      </section>
     </main>
   );
 }

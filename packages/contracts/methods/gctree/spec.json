@@ -1,5 +1,5 @@
 {
   "name": "GCtree",
   "version": "dynamic",
-  "accepts": ["text/fasta", "text/x-fasta", "application/octet-stream"]
+  "accepts": ["text/fasta", "text/x-fasta", "text/csv", "text/tab-separated-values"]
 }
