@@ -43,6 +43,31 @@
         ]
       }
     },
+    "node_abundances": {
+      "description": "Per-tree node abundance mapping keyed by node label.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": { "type": "number" }
+      }
+    },
+    "label_to_sequence_id": {
+      "description": "Optional per-tree mapping from tree label to source sequence identifier.",
+      "anyOf": [
+        { "type": "null" },
+        {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      ]
+    },
     "clones": {
       "type": "object",
       "description": "Lightweight clone summaries aligned with tree order where possible.",

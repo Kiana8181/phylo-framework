@@ -1,0 +1,77 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Unified Run Result",
+  "type": "object",
+  "required": ["ok", "trees"],
+  "properties": {
+    "ok": {
+      "type": "boolean"
+    },
+    "trees": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "newick", "has_lineage_plot", "has_service_image"],
+        "properties": {
+          "id": { "type": "string" },
+          "newick": {
+            "type": "string",
+            "pattern": ";\\s*$"
+          },
+          "original_newick": { "type": "string" },
+          "has_lineage_plot": { "type": "boolean" },
+          "has_service_image": { "type": "boolean" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "clones": {},
+    "stats": {},
+    "annotations": {
+      "type": "array",
+      "items": {
+        "type": ["array", "null"],
+        "items": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "figures": {
+      "type": ["object", "null"],
+      "additionalProperties": true
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "anyOf": [
+          { "type": "string" },
+          {
+            "type": "object",
+            "required": ["code", "message"],
+            "properties": {
+              "code": { "type": "string" },
+              "message": { "type": "string" },
+              "treeId": { "type": "string" },
+              "details": {}
+            },
+            "additionalProperties": true
+          }
+        ]
+      }
+    },
+    "render": { "type": ["string", "null"] },
+    "logs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "artifact_zip_b64": {},
+    "artifact_name": {
+      "type": ["string", "null"]
+    }
+  },
+  "additionalProperties": true
+}

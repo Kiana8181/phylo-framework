@@ -1,6 +1,6 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { RunsApi } from "./api";
-import type { RunStatus, RunResult, CreateRunResponse } from "@phylo/contracts";
+import type { RunStatus, RunResult, CreateRunResponse, RunSummary } from "@phylo/contracts";
 import { notify } from "@/lib/notify";
 import { useEffect, useRef } from "react";
 
@@ -10,12 +10,18 @@ type CreateRunVars = {
   onProgress?: (p: number) => void;
 };
 
+function truncateForToast(msg: string, max = 100): string {
+  if (!msg || msg.length <= max) return msg;
+  return msg.slice(0, max).trim() + "…";
+}
+
 export function useCreateRun() {
   return useMutation<CreateRunResponse, any, CreateRunVars>({
     mutationFn: ({ methodId, formData, onProgress }) =>
       RunsApi.create(methodId, formData, { onProgress }),
     onSuccess: () => notify.success("Run created"),
-    onError: (e: any) => notify.error("Failed to create run", e?.message),
+    onError: (e: any) =>
+      notify.error("Failed to create run", truncateForToast(e?.message ?? "Unknown error")),
   });
 }
 
@@ -31,9 +37,19 @@ export function useRunStatus(runId?: string) {
     queryKey: ["runStatus", runId],
     queryFn: () => RunsApi.status(runId!),
     enabled: !!runId,
-    refetchInterval: (ctx) => {
-      const s = ctx.state.data?.status;
+    refetchInterval: (query) => {
+      const { state } = query;
+      if (state.status === "error" && state.error) {
+        const status = (state.error as any)?.response?.status;
+        if (status === 403 || status === 404) return false;
+      }
+      const s = state.data?.status;
       return s === "DONE" || s === "ERROR" ? false : 1200;
+    },
+    retry: (failureCount, error: any) => {
+      const status = error?.response?.status;
+      if (status === 403 || status === 404) return false;
+      return failureCount < 2;
     },
   });
 
@@ -45,9 +61,13 @@ export function useRunStatus(runId?: string) {
     const toastId = runId ? `run-${runId}-${s}` : undefined;
 
     if (s === "ERROR") {
-      notify.error("Run failed", q.data?.message || "Unknown error", {
-        id: toastId,
-      });
+      const rawMsg = q.data?.message || "Unknown error";
+      const shortMsg = rawMsg.length > 120 ? rawMsg.slice(0, 120).trim() + "…" : rawMsg;
+      notify.error(
+        "Run failed",
+        rawMsg.length > 120 ? "See run card below for full error details." : shortMsg,
+        { id: toastId }
+      );
     } else if (s === "DONE") {
       notify.success("Run finished", undefined, { id: toastId });
     }
@@ -62,5 +82,12 @@ export function useRunResult(runId?: string, enabled = false) {
     queryKey: ["runResult", runId],
     queryFn: () => RunsApi.result(runId!),
     enabled,
+  });
+}
+
+export function useRunsList(opts?: { skip?: number; limit?: number }) {
+  return useQuery<RunSummary[]>({
+    queryKey: ["runsList", opts?.skip ?? 0, opts?.limit ?? 100],
+    queryFn: () => RunsApi.list(opts),
   });
 }
