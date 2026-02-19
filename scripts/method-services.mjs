@@ -19,6 +19,11 @@ const ROOT = path.resolve(SCRIPT_DIR, "..");
 const CONFIG_PATH = path.join(ROOT, "config", "method-services.json");
 const ROOT_ENV_PATH = path.join(ROOT, ".env");
 const LEGACY_API_ENV_PATH = path.join(ROOT, "apps", "api", ".env");
+const DOCKER_BUILD_RETRIES = Math.max(1, Number(process.env.PHYLO_DOCKER_BUILD_RETRIES || "3"));
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function loadConfig() {
   const raw = fs.readFileSync(CONFIG_PATH, "utf8");
@@ -206,11 +211,38 @@ function containerName(id) {
   return `phylo-method-${id}`;
 }
 
+function servicePlatform(service) {
+  const raw = typeof service.platform === "string" ? service.platform.trim() : "";
+  return raw || null;
+}
+
 async function dockerBuild(service) {
   const servicePath = service.path || `services/${service.id}`;
   const absPath = resolveFromRoot(servicePath, `services/${service.id}`);
   const image = service.dockerImage || `phylo-${service.id}:dev`;
-  await spawnWithPromise("docker", ["build", "-t", image, "."], { cwd: absPath });
+  const platform = servicePlatform(service);
+  const buildArgs = ["build"];
+  if (platform) buildArgs.push("--platform", platform);
+  buildArgs.push("-t", image, ".");
+  let lastError;
+  for (let attempt = 1; attempt <= DOCKER_BUILD_RETRIES; attempt += 1) {
+    try {
+      await spawnWithPromise("docker", buildArgs, { cwd: absPath });
+      return;
+    } catch (err) {
+      lastError = err;
+      if (attempt >= DOCKER_BUILD_RETRIES) break;
+      const delayMs = attempt * 3000;
+      console.warn(
+        `WARN: docker build failed for ${service.id} (attempt ${attempt}/${DOCKER_BUILD_RETRIES}): ${err.message}`,
+      );
+      console.warn(`Retrying in ${Math.ceil(delayMs / 1000)}s...`);
+      await sleep(delayMs);
+    }
+  }
+  throw new Error(
+    `docker build failed for ${service.id} after ${DOCKER_BUILD_RETRIES} attempts: ${lastError?.message || "unknown error"}`,
+  );
 }
 
 async function removeIfExists(name) {
@@ -226,6 +258,7 @@ async function dockerRun(service, envMap) {
   const storagePath = resolveFromRoot(envMap.get("STORAGE_LOCAL_PATH"), "runtime/storage");
   const containerStoragePath = (envMap.get("METHOD_SERVICE_FILE_PREFIX") || "/runtime/storage").trim();
   const containerMount = containerStoragePath.startsWith("/") ? containerStoragePath : "/runtime/storage";
+  const platform = servicePlatform(service);
 
   fs.mkdirSync(storagePath, { recursive: true });
 
@@ -236,7 +269,6 @@ async function dockerRun(service, envMap) {
 
   const args = [
     "run",
-    "--rm",
     "-d",
     "--name",
     name,
@@ -257,6 +289,7 @@ async function dockerRun(service, envMap) {
     "-e",
     `STRICT_CONTRACT_ROUTES=${envMap.get("STRICT_CONTRACT_ROUTES") || "true"}`,
   ];
+  if (platform) args.push("--platform", platform);
 
   const extraEnv = service.env && typeof service.env === "object" ? service.env : {};
   for (const [k, v] of Object.entries(extraEnv)) {
@@ -344,7 +377,7 @@ async function stop(requestedIds) {
   for (const s of toStop) {
     const name = containerName(s.id);
     try {
-      await spawnWithPromise("docker", ["stop", name]);
+      await spawnWithPromise("docker", ["rm", "-f", name]);
       console.log("Stopped", s.id);
     } catch (e) {
       console.warn(`Container ${name} may not be running: ${e.message}`);

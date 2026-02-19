@@ -16,8 +16,14 @@ port_busy(){
     lsof -Pi :"$p" -sTCP:LISTEN -t >/dev/null
   elif command -v ss >/dev/null 2>&1; then
     ss -ltn "sport = :$p" | tail -n +2 | grep -q .
+  elif command -v netstat >/dev/null 2>&1; then
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+      netstat -anv -p tcp 2>/dev/null | grep -Eq "[\\.:]$p[[:space:]].*LISTEN"
+    else
+      netstat -tuln 2>/dev/null | grep -q ":$p "
+    fi
   else
-    netstat -tuln 2>/dev/null | grep -q ":$p "
+    return 1
   fi
 }
 
@@ -104,7 +110,7 @@ resolve_storage_abs(){
   if [[ "$raw" = /* ]] || [[ "$raw" =~ ^[A-Za-z]:[\\/].* ]]; then
     echo "$raw"
   else
-    realpath "$ROOT/$raw"
+    python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$ROOT/$raw"
   fi
 }
 
