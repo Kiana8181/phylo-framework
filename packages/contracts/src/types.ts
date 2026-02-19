@@ -46,7 +46,83 @@ export type RunStatus = {
 
 export type FigurePayload = {
   phylogeny?: string[];
+  [key: string]: Array<string | null> | undefined;
 } | null;
+
+export type TreeServiceImage = {
+  mime: string;
+  base64: string;
+};
+
+export type TreeNodeAttrs = {
+  sequence_id?: string;
+  abundance?: number;
+  tooltip?: string;
+  [key: string]: any;
+};
+
+export type LineagePlotNode = {
+  id: string;
+  label: string;
+  x: number;
+  y: number;
+  isLeaf: boolean;
+  parentId?: string;
+  abundance?: number;
+};
+
+export type LineagePlotEdge = {
+  source: string;
+  target: string;
+};
+
+export type LineagePlot = {
+  format: "lineage-plot-v1";
+  nodes: LineagePlotNode[];
+  edges: LineagePlotEdge[];
+  meta?: {
+    rootId?: string;
+    germlineLabel?: string;
+    width?: number;
+    height?: number;
+    normalizedNewick?: string;
+  };
+};
+
+export type RunTree = {
+  id: string;
+  newick: string;
+  original_newick?: string;
+  has_lineage_plot: boolean;
+  has_service_image: boolean;
+  visualizations?: {
+    service_image?: TreeServiceImage;
+  };
+  node_attributes?: Record<string, TreeNodeAttrs>;
+  label_to_sequence_id?: Record<string, string>;
+  lineage_plot?: LineagePlot;
+};
+
+export type RunTreeListItem = {
+  treeId: string;
+  treeIndex: number;
+  hasLineagePlot: boolean;
+  hasServiceImage: boolean;
+};
+
+export type RunTreesListResponse = {
+  trees: RunTreeListItem[];
+};
+
+export type RunTreePayload = {
+  treeId: string;
+  newick: string;
+  original_newick?: string | null;
+  node_attributes?: Record<string, TreeNodeAttrs> | null;
+  lineage_plot?: LineagePlot | null;
+  label_to_sequence_id?: Record<string, string> | null;
+  service_image?: TreeServiceImage | null;
+};
 
 export type RunLogEntry = {
   step?: string;
@@ -55,14 +131,23 @@ export type RunLogEntry = {
   out?: string;
 };
 
+export type RunWarning =
+  | string
+  | {
+      code: string;
+      message: string;
+      treeId?: string;
+      details?: any;
+    };
+
 export type RunResult = {
   ok: boolean;
-  trees: string[];
+  trees: Array<RunTree | string>;
   clones: any;
   stats: any;
-  annotations: Array<Array<Record<string, any>> | null>;
-  figures: FigurePayload;
-  warnings?: string[];
+  annotations?: Array<Array<Record<string, any>> | null>;
+  figures?: FigurePayload;
+  warnings?: RunWarning[];
   render?: string | null;
   logs?: RunLogEntry[];
   artifact_zip_b64?: any;

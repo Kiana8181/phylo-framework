@@ -2,13 +2,15 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Load .env from apps/api directory
-env_path = Path(__file__).parent / ".env"
-load_dotenv(env_path)
-# Also try loading from root (for Alembic)
+# Primary source of truth: root .env
 root_env = Path(__file__).parent.parent.parent / ".env"
 if root_env.exists():
-    load_dotenv(root_env, override=False)
+    load_dotenv(root_env)
+
+# Backward-compatible fallback for legacy setups
+legacy_env = Path(__file__).parent / ".env"
+if legacy_env.exists():
+    load_dotenv(legacy_env, override=False)
 
 # Repository root = .../phylo
 ROOT_DIR = Path(__file__).resolve().parents[2]

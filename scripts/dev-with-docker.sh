@@ -1,10 +1,8 @@
+#!/usr/bin/env bash
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HOST_RUNTIME_DIR="$(realpath "$ROOT/runtime")"
-HOST_RUNS_DIR="${HOST_RUNTIME_DIR}/runs"
-CONTAINER_RUNTIME_DIR="/runtime"
-CONTAINER_RUNS_DIR="${CONTAINER_RUNTIME_DIR}/runs"
+ENV_FILE="$ROOT/.env"
 
 RED=$'\033[31m'; GRN=$'\033[32m'; YLW=$'\033[33m'; BLU=$'\033[34m'; CLR=$'\033[0m'
 die(){ echo "${RED}ERROR:${CLR} $*" >&2; exit 1; }
@@ -18,15 +16,23 @@ port_busy(){
     lsof -Pi :"$p" -sTCP:LISTEN -t >/dev/null
   elif command -v ss >/dev/null 2>&1; then
     ss -ltn "sport = :$p" | tail -n +2 | grep -q .
+  elif command -v netstat >/dev/null 2>&1; then
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+      netstat -anv -p tcp 2>/dev/null | grep -Eq "[\\.:]$p[[:space:]].*LISTEN"
+    else
+      netstat -tuln 2>/dev/null | grep -q ":$p "
+    fi
   else
-    netstat -tuln 2>/dev/null | grep -q ":$p "
+    return 1
   fi
 }
 
 wait_http(){
   local port="$1" i
   for i in {1..120}; do
-    if curl -fsS "http://127.0.0.1:${port}/spec" >/dev/null || \
+    if curl -fsS "http://127.0.0.1:${port}/docs" >/dev/null || \
+       curl -fsS "http://localhost:${port}/docs" >/dev/null || \
+       curl -fsS "http://127.0.0.1:${port}/spec" >/dev/null || \
        curl -fsS "http://localhost:${port}/spec" >/dev/null || \
        curl -fsS "http://127.0.0.1:${port}/__docs__/" >/dev/null || \
        curl -fsS "http://localhost:${port}/__docs__/" >/dev/null; then
@@ -37,32 +43,15 @@ wait_http(){
   return 1
 }
 
-find_env_file(){
-  local dir="$1"
-  for fname in ".env.local" ".env.development.local" ".env.development" ".env"; do
-    [[ -f "$dir/$fname" ]] && { echo "$dir/$fname"; return 0; }
+wait_postgres(){
+  local i
+  for i in {1..90}; do
+    if [[ "$(docker inspect -f '{{.State.Health.Status}}' phylo-postgres 2>/dev/null || true)" == "healthy" ]]; then
+      return 0
+    fi
+    sleep 1
   done
   return 1
-}
-
-require_envs(){
-  API_ENV="$(find_env_file "$ROOT/apps/api")" || die "API env not found. Create apps/api/.env (or .env.local)."
-  WEB_ENV="$(find_env_file "$ROOT/apps/web")" || die "Web env not found. Create apps/web/.env (or .env.local)."
-  echo "${BLU}==> Loading API env: ${API_ENV}${CLR}"
-  set -a; # export everything we source
-  source "$API_ENV"
-  set +a
-
-  [[ -n "${CONTRACTS_DIR:-}" ]] || die "CONTRACTS_DIR is not set in ${API_ENV}"
-  [[ -d "${CONTRACTS_DIR}" ]] || die "CONTRACTS_DIR path does not exist: ${CONTRACTS_DIR}"
-  [[ -n "${METHOD_DOWSER_URL:-}" ]] || die "METHOD_DOWSER_URL is not set in ${API_ENV}"
-  [[ -n "${METHOD_GCTREE_URL:-}" ]] || die "METHOD_GCTREE_URL is not set in ${API_ENV}"
-  [[ -n "${METHOD_BREPPHYLO_URL:-}" ]] || die "METHOD_BREPPHYLO_URL is not set in ${API_ENV}"
-  [[ -n "${METHOD_CLONALTREE_URL:-}" ]] || die "METHOD_CLONALTREE_URL is not set in ${API_ENV}"
-
-  if ! grep -qE '^NEXT_PUBLIC_API_BASE_URL=' "$WEB_ENV"; then
-    die "NEXT_PUBLIC_API_BASE_URL is missing in ${WEB_ENV}"
-  fi
 }
 
 ensure_node_deps_and_build_contracts(){
@@ -72,7 +61,7 @@ ensure_node_deps_and_build_contracts(){
     if grep -q '"@phylo/contracts"[[:space:]]*:[[:space:]]*"workspace:\*"' "$ROOT/apps/web/package.json" 2>/dev/null; then
       die "Your npm ($NPM_MAJ.x) does not support \"workspace:*\".
 Either upgrade npm (npm i -g npm@latest) or set:
-  apps/web/package.json → \"@phylo/contracts\": \"file:../../packages/contracts\""
+  apps/web/package.json -> \"@phylo/contracts\": \"file:../../packages/contracts\""
     fi
     echo "${YLW}npm < 7 detected. Using plain 'npm i'.${CLR}"
     (cd "$ROOT" && npm i)
@@ -86,113 +75,124 @@ Either upgrade npm (npm i -g npm@latest) or set:
   fi
 }
 
+method_host_ports(){
+  node -e 'const fs=require("fs"); const p=require("path"); const cfg=JSON.parse(fs.readFileSync(p.join(process.argv[1],"config","method-services.json"),"utf8")); for (const s of cfg.services||[]) console.log(String(s.port));' "$ROOT"
+}
+
+load_root_env(){
+  [[ -f "$ENV_FILE" ]] || die "Root .env not found at $ENV_FILE. Run: node scripts/method-services.mjs sync-env"
+  while IFS= read -r -d '' kv; do
+    export "$kv"
+  done < <(python3 - "$ENV_FILE" <<'PY'
+import re
+import sys
+
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as f:
+    for raw in f:
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, val = line.split("=", 1)
+        key = key.strip()
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
+            continue
+        val = val.strip()
+        if len(val) >= 2 and ((val[0] == val[-1] == '"') or (val[0] == val[-1] == "'")):
+            val = val[1:-1]
+        print(f"{key}={val}", end="\0")
+PY
+)
+}
+
+resolve_storage_abs(){
+  local raw="${STORAGE_LOCAL_PATH:-runtime/storage}"
+  if [[ "$raw" = /* ]] || [[ "$raw" =~ ^[A-Za-z]:[\\/].* ]]; then
+    echo "$raw"
+  else
+    python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$ROOT/$raw"
+  fi
+}
+
 echo "${BLU}==> Checking prerequisites${CLR}"
 need_cmd docker; need_cmd node; need_cmd npm; need_cmd python3; need_cmd curl
 
-for p in 3000 8000 8001 8002 8003 8004; do
-  port_busy "$p" && die "Port $p is not free."
+cd "$ROOT"
+
+echo "${BLU}==> Syncing method-service env from config${CLR}"
+node "$ROOT/scripts/method-services.mjs" sync-env >/dev/null
+load_root_env
+
+API_PORT="${API_PORT:-8000}"
+WEB_PORT="${WEB_PORT:-3000}"
+PG_PORT="${POSTGRES_PORT:-5440}"
+
+# Clear previously managed method containers before checking ports.
+node "$ROOT/scripts/method-services.mjs" stop >/dev/null 2>&1 || true
+
+for p in "$WEB_PORT" "$API_PORT" "$PG_PORT"; do
+  if port_busy "$p"; then
+    if [[ "$p" == "$PG_PORT" ]] && docker ps --format '{{.Names}}' | grep -qx "phylo-postgres"; then
+      echo "${YLW}WARN:${CLR} PostgreSQL port ${PG_PORT} is already in use by phylo-postgres; reusing it."
+    else
+      die "Port $p is not free."
+    fi
+  fi
 done
+while IFS= read -r p; do
+  [[ -n "$p" ]] || continue
+  port_busy "$p" && die "Port $p is not free."
+done < <(method_host_ports)
 
-require_envs
-mkdir -p "$HOST_RUNS_DIR"
+HOST_STORAGE_DIR="$(resolve_storage_abs)"
+mkdir -p "$HOST_STORAGE_DIR"
 
-echo "${BLU}==> Building and starting Dowser container (first time may be LONG)${CLR}"
-docker rm -f phylo-dowser-dev >/dev/null 2>&1 || true
-docker build -t phylo-dowser:dev "$ROOT/services/dowser"
-docker run -d --name phylo-dowser-dev -p 8001:8001 \
-  -e CONTRACTS_DIR=/contracts -e STRICT_CONTRACT_ROUTES=true \
-  -e RUNS_DIR="$CONTAINER_RUNS_DIR" \
-  -e IGPHYML_BIN=/usr/local/share/igphyml/src/igphyml \
-  -e IGPHYML_MOTIFS=/usr/local/share/igphyml/src/motifs \
-  -e IGPHYML_PATH=/usr/local/share/igphyml/src/motifs \
-  -v "$ROOT/packages/contracts:/contracts:ro" \
-  -v "$HOST_RUNTIME_DIR:$CONTAINER_RUNTIME_DIR:ro" \
-  phylo-dowser:dev >/dev/null
+cleanup(){
+  echo
+  echo "${YLW}Shutting down...${CLR}"
+  if [[ -n "${API_PID:-}" ]]; then kill "$API_PID" 2>/dev/null || true; fi
+  node "$ROOT/scripts/method-services.mjs" stop >/dev/null 2>&1 || true
+  docker compose --profile dev stop postgres >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
 
-echo "${BLU}==> Waiting for Dowser HTTP on :8001${CLR}"
-wait_http 8001 || { docker logs --tail=200 phylo-dowser-dev || true; die "Dowser failed readiness check"; }
-echo "${GRN}Dowser is up on http://localhost:8001${CLR}"
+echo "${BLU}==> Starting PostgreSQL (Docker Compose, profile=dev)${CLR}"
+docker compose --profile dev up -d postgres
+wait_postgres || die "PostgreSQL did not become healthy"
+echo "${GRN}PostgreSQL is healthy.${CLR}"
 
-echo "${BLU}==> Building and starting GCtree container (first time may be LONG)${CLR}"   # [gctree]
-docker rm -f phylo-gctree-dev >/dev/null 2>&1 || true                                     # [gctree]
-docker build -t phylo-gctree:dev "$ROOT/services/gctree"                                  # [gctree]
+echo "${BLU}==> Starting method services from config via Docker${CLR}"
+node "$ROOT/scripts/method-services.mjs" start
 
-HOST_CONTRACTS_DIR="$(realpath "$ROOT/packages/contracts")"
+# Local API talks to DB via host-mapped postgres port
+export POSTGRES_HOST="127.0.0.1"
+export POSTGRES_PORT="$PG_PORT"
+export DATABASE_URL="postgresql+asyncpg://${POSTGRES_USER:-phylo_user}:${POSTGRES_PASSWORD:-phylo_pass}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB:-phylo_db}"
 
-docker run -d --name phylo-gctree-dev \
-  -e CONTRACTS_DIR="/contracts" \
-  -e STRICT_CONTRACT_ROUTES="${STRICT_CONTRACT_ROUTES:-true}" \
-  -e RUNS_DIR="$CONTAINER_RUNS_DIR" \
-  -p 8002:8002 \
-  -v "$HOST_CONTRACTS_DIR":/contracts:ro \
-  -v "$HOST_RUNTIME_DIR:$CONTAINER_RUNTIME_DIR:ro" \
-  phylo-gctree:dev                                                                      # [gctree]
+# API writes to host storage; method containers read same files at this in-container prefix
+export METHOD_SERVICE_FILE_PREFIX="${METHOD_SERVICE_FILE_PREFIX:-/runtime/storage}"
+export HOST_RUNTIME_SHARED_ROOT="$HOST_STORAGE_DIR"
 
-# make sure METHOD_GCTREE_URL exists in API env (optional but helpful):
-[[ -n "${METHOD_GCTREE_URL:-}" ]] || die "METHOD_GCTREE_URL is not set in ${API_ENV}"    # [gctree]
-
-echo "${BLU}==> Building and starting ClonalTree container${CLR}"
-docker rm -f phylo-clonaltree-dev >/dev/null 2>&1 || true
-docker build -t phylo-clonaltree:dev "$ROOT/services/clonaltree"
-docker run -d --name phylo-clonaltree-dev -p 8004:8004 \
-  -e CONTRACTS_DIR=/contracts -e STRICT_CONTRACT_ROUTES=true \
-  -e RUNS_DIR="$CONTAINER_RUNS_DIR" \
-  -v "$ROOT/packages/contracts:/contracts:ro" \
-  -v "$HOST_RUNTIME_DIR:$CONTAINER_RUNTIME_DIR:ro" \
-  phylo-clonaltree:dev >/dev/null
-
-echo "${BLU}==> Waiting for ClonalTree HTTP on :8004${CLR}"
-wait_http 8004 || { docker logs --tail=200 phylo-clonaltree-dev || true; die "ClonalTree failed readiness check"; }
-echo "${GRN}ClonalTree is up on http://localhost:8004${CLR}"
-
-echo "${BLU}==> Building and starting BrepPhylo container${CLR}"
-docker rm -f phylo-brepphylo-dev >/dev/null 2>&1 || true
-docker build -t phylo-brepphylo:dev "$ROOT/services/brepphylo"
-docker run -d --name phylo-brepphylo-dev -p 8003:8003 \
-  -e CONTRACTS_DIR=/contracts -e STRICT_CONTRACT_ROUTES=true \
-  -e RUNS_DIR="$CONTAINER_RUNS_DIR" \
-  -e DNAPARS_PATH=/usr/local/bin/dnapars \
-  -e IGPHYML_BIN=/usr/local/share/igphyml/src/igphyml \
-  -e IGPHYML_MOTIFS=/usr/local/share/igphyml/src/motifs \
-  -e IGPHYML_PATH=/usr/local/share/igphyml/src/motifs \
-  -v "$ROOT/packages/contracts:/contracts:ro" \
-  -v "$HOST_RUNTIME_DIR:$CONTAINER_RUNTIME_DIR:ro" \
-  phylo-brepphylo:dev >/dev/null
-
-echo "${BLU}==> Waiting for BrepPhylo HTTP on :8003${CLR}"
-wait_http 8003 || { docker logs --tail=200 phylo-brepphylo-dev || true; die "BrepPhylo failed readiness check"; }
-echo "${GRN}BrepPhylo is up on http://localhost:8003${CLR}"
-
-# in the trap line, add the container:
-trap 'echo; echo "${YLW}Shutting down...${CLR}"; \
-      if [[ -n "${API_PID:-}" ]]; then kill "$API_PID" 2>/dev/null || true; fi; \
-      docker rm -f phylo-dowser-dev >/dev/null 2>&1 || true; \
-      docker rm -f phylo-gctree-dev >/dev/null 2>&1 || true; \
-      docker rm -f phylo-clonaltree-dev >/dev/null 2>&1 || true; \
-      docker rm -f phylo-brepphylo-dev >/dev/null 2>&1 || true' EXIT
+# Ensure web dev server always gets API base URL from the single root env
+export NEXT_PUBLIC_API_BASE_URL="${NEXT_PUBLIC_API_BASE_URL:-http://localhost:${API_PORT}}"
 
 echo "${BLU}==> Setting up Python venv for API${CLR}"
 [[ -d "$ROOT/.venv" ]] || python3 -m venv "$ROOT/.venv" || die "Failed to create venv"
+# shellcheck disable=SC1091
 source "$ROOT/.venv/bin/activate"
 python -m pip install -U pip >/dev/null
 python -m pip install -r "$ROOT/apps/api/requirements.txt"
 
-# ensure API writes to host path but sends container-visible paths to method services
-export RUNS_DIR="$HOST_RUNS_DIR"
-export RUNS_DIR_SERVICE="$CONTAINER_RUNS_DIR"
+echo "${BLU}==> Running database migrations${CLR}"
+(cd "$ROOT" && alembic upgrade head)
 
 echo "${BLU}==> Ensuring Node deps and building @phylo/contracts${CLR}"
 ensure_node_deps_and_build_contracts
 
-echo "${BLU}==> Starting API on :8000${CLR}"
-uvicorn apps.api.main:app --host 0.0.0.0 --port 8000 &
+echo "${BLU}==> Starting API on :${API_PORT}${CLR}"
+uvicorn apps.api.main:app --host 0.0.0.0 --port "$API_PORT" >/tmp/api.log 2>&1 &
 API_PID=$!
+wait_http "$API_PORT" || { tail -n 200 /tmp/api.log 2>/dev/null || true; die "API failed readiness check"; }
 
-for i in {1..60}; do
-  curl -fsS "http://127.0.0.1:8000/docs" >/dev/null && break || true
-  curl -fsS "http://localhost:8000/docs" >/dev/null && break || true
-  sleep 1
-done
-
-echo "${BLU}==> Starting Next.js dev on :3000${CLR}"
-(cd "$ROOT/apps/web" && npm run dev)
+echo "${BLU}==> Starting Next.js dev on :${WEB_PORT}${CLR}"
+(cd "$ROOT/apps/web" && npm run dev -- -p "$WEB_PORT")

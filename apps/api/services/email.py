@@ -25,7 +25,7 @@ async def send_email(
     Returns True if sent successfully, False otherwise (e.g. not configured or API error).
     """
     if not RESEND_API_KEY:
-        logger.warning("RESEND_API_KEY is empty; cannot send email. Check apps/api/.env")
+        logger.warning("RESEND_API_KEY is empty; cannot send email. Check root .env")
         return False
 
     from_addr = (from_addr or EMAIL_FROM).strip()

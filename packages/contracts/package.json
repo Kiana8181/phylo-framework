@@ -4,7 +4,7 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "files": ["dist", "methods"],
+  "files": ["dist", "methods", "result.schema.json"],
   "scripts": {
     "build": "tsc -p tsconfig.json"
   },

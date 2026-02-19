@@ -4,6 +4,8 @@ import {
   API_ROUTES,
   type CreateRunResponse,
   type RunResult,
+  type RunTreePayload,
+  type RunTreesListResponse,
   type RunStatus,
   type RunSummary,
 } from "@phylo/contracts";
@@ -54,6 +56,20 @@ export const RunsApi = {
     return serviceHandler<RunResult>({
       method: Method.Get,
       url: API_ROUTES.runResult(id),
+    });
+  },
+
+  async trees(id: string): Promise<RunTreesListResponse> {
+    return serviceHandler<RunTreesListResponse>({
+      method: Method.Get,
+      url: API_ROUTES.runTrees(id),
+    });
+  },
+
+  async tree(id: string, treeId: string): Promise<RunTreePayload> {
+    return serviceHandler<RunTreePayload>({
+      method: Method.Get,
+      url: API_ROUTES.runTree(id, treeId),
     });
   },
 };
