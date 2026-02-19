@@ -190,328 +190,194 @@ Everything in containers with internal networking.
 
 ## Central control for method services
 
-Ports and URLs for method services (Dowser, GCtree, BrepPhylo, ClonalTree) are defined in one place and kept in sync with the API.
+Ports and service endpoints come from one config file and sync into one root env file.
 
-**Config:** `config/method-services.json` — edit here to change ports or add services.
+- **Config source:** `config/method-services.json`
+- **Runtime env source:** `.env` (repo root)
 
 | Command | Description |
 |--------|-------------|
-| `npm run services:sync-env` | Write `METHOD_*_URL` into `apps/api/.env` from config (run after changing ports) |
-| `npm run services:list` | List services and their URLs |
-| `npm run services:start` | Start **all** method services with Docker (build + run) |
-| `npm run services:start -- gctree dowser` | Start only the listed services |
-| `npm run services:stop` | Stop all method containers |
-| `npm run services:stop -- gctree` | Stop one |
+| `npm run services:sync-env` | Generate/update `METHOD_*` vars in root `.env` from `config/method-services.json` |
+| `npm run services:list` | List service IDs, host/container ports, and local/docker URLs |
+| `npm run services:start` | Build + start all method services in Docker |
+| `npm run services:start -- gctree dowser` | Build + start only selected method services |
+| `npm run services:stop` | Stop all managed method containers |
+| `npm run services:stop -- gctree` | Stop one managed method container |
 
-**Typical workflow (API + Web local, methods in Docker):**
+Generated keys include both local and compose-network URLs:
 
-```bash
-npm run services:sync-env    # once, or after editing config
-npm run services:start -- gctree   # start only GCtree
-npm run dev:api              # in another terminal
-npm run dev:web              # in another terminal
-```
+- `METHOD_<ID>_URL` (example: `http://localhost:8002`)
+- `METHOD_<ID>_URL_DOCKER` (example: `http://gctree:8002`)
+- `METHOD_<ID>_HOST_PORT`
+- `METHOD_<ID>_CONTAINER_PORT`
 
 ---
 
 ## Manual Run (Developers)
 
-If you want to run everything **without** the helper scripts, follow this.
+If you want to run without `./run.sh`, use this flow.
 
-### 1) Prepare environment files
+### 1) Sync + edit the single env file
 
-Create and fill these files (adjust ports/paths if you changed them).
-
-**apps/api/.env**
-
-You can generate method URLs from the central config:
+From repo root:
 
 ```bash
 npm run services:sync-env
 ```
 
-Or create manually:
+Then edit only root `.env` for project configuration (API, web, DB, storage, method URLs, auth/email keys, etc.).
 
-```env
-CONTRACTS_DIR=packages/contracts
-METHOD_DOWSER_URL=http://localhost:8001
-METHOD_GCTREE_URL=http://localhost:8002
-METHOD_BREPPHYLO_URL=http://localhost:8003
-METHOD_CLONALTREE_URL=http://localhost:8004
-CORS_ORIGINS=http://localhost:3000
-```
-
-**apps/web/.env.local**
-
-```env
-NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
-```
-
-### 2) Install project dependencies
-
-From the **repo root**:
+### 2) Install dependencies
 
 ```bash
-# Node deps (monorepo)
+# Node deps (monorepo/workspaces)
 npm i
 
-# Python venv for API
+# Python venv for API + migrations
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -U pip
 pip install -r apps/api/requirements.txt
 
-# (Optional if your contracts package compiles TS)
+# Optional contracts build
 npm -w @phylo/contracts run build
 ```
 
-### 3.1) Start a method service (Dowser) — pick ONE option
-
-#### Option A — Docker (recommended; no local R needed)
-
-Build the image **from the dowser folder**, then run it **from repo root**:
+### 3) Start PostgreSQL and run migrations
 
 ```bash
-# build
-cd services/dowser
-docker build -t phylo-dowser:dev .
-
-# run (from REPO ROOT)
-cd ../..
-docker run --rm -p 8001:8001   -v "$(pwd)/packages/contracts:/contracts:ro"   -e CONTRACTS_DIR=/contracts   phylo-dowser:dev
+docker compose --profile dev up -d postgres
+source .venv/bin/activate
+npm run db:migrate
 ```
 
-**Windows PowerShell** (repo root):
+### 4) Start method services (pick one approach)
 
-```powershell
-docker run --rm -p 8001:8001 `
-  -v ${PWD}/packages/contracts:/contracts:ro `
-  -e CONTRACTS_DIR=/contracts `
-  phylo-dowser:dev
-```
-
-This exposes Dowser at **http://localhost:8001** with contracts mounted read-only.
-
-#### Option B — Local R (requires R 4.3+ & packages)
-
-From the **repo root**:
+#### A) Docker methods (uses `method-services.mjs` + config)
 
 ```bash
-Rscript -e 'setwd("services/dowser"); Sys.setenv(CONTRACTS_DIR="../../packages/contracts"); pr <- plumber::plumb("plumber.R"); pr$run(host="0.0.0.0", port=8001)'
+npm run services:start
 ```
 
-Keep this terminal open; it’s your method server.
+#### B) Local methods
 
-### 3.2) Start a method service (GCtree) — pick ONE option
-
-#### Option A — Docker (recommended; no local PHYLIP needed)
-
-Build the image **from the gctree folder**, then run it **from repo root**:
+Use ports from root `.env` (`METHOD_*_HOST_PORT`) and make sure API sends a host-readable prefix:
 
 ```bash
-# build
-cd services/gctree
-docker build -t phylo-gctree:dev .
-
-# run (from REPO ROOT)
-cd ../..
-docker run --rm -p 8002:8002   -v "$(pwd)/packages/contracts:/contracts:ro"   -e CONTRACTS_DIR=/contracts   phylo-gctree:dev
+# from repo root
+set -a; source .env; set +a
+export CONTRACTS_DIR="$(pwd)/${CONTRACTS_DIR:-packages/contracts}"
+export METHOD_SERVICE_FILE_PREFIX="$(pwd)/${STORAGE_LOCAL_PATH:-runtime/storage}"
+mkdir -p "$METHOD_SERVICE_FILE_PREFIX"
 ```
 
-**Windows PowerShell** (repo root):
+Run each local service in its own terminal (you can run only one if you want):
 
-```powershell
-docker run --rm -p 8002:8002 `
-  -v ${PWD}/packages/contracts:/contracts:ro `
-  -e CONTRACTS_DIR=/contracts `
-  phylo-gctree:dev
-```
-
-This exposes GCtree at **http://localhost:8002** with contracts mounted read-only.
-
-> If you changed the service port in code/env, adjust `-p 8002:8002` accordingly.
-
-#### Option B — Local Python (requires Python 3.10+ and PHYLIP `dnapars`)
-
-From the **repo root**:
+**Dowser (local R)**
 
 ```bash
-# 1) Install service deps
+set -a; source .env; set +a
+export CONTRACTS_DIR="$(pwd)/${CONTRACTS_DIR:-packages/contracts}"
+export STRICT_CONTRACT_ROUTES="${STRICT_CONTRACT_ROUTES:-true}"
+Rscript --vanilla -e "setwd('services/dowser'); pr <- plumber::plumb('plumber.R'); pr\$run(host='0.0.0.0', port=${METHOD_DOWSER_HOST_PORT})"
+```
+
+Notice: if you use `tree_model=igphyml`, configure `IGPHYML_BIN` and motif path vars (`IGPHYML_MOTIFS` or `IGPHYML_PATH`).
+
+**GCtree (local Python)**
+
+```bash
+set -a; source .env; set +a
+export CONTRACTS_DIR="$(pwd)/${CONTRACTS_DIR:-packages/contracts}"
+export STRICT_CONTRACT_ROUTES="${STRICT_CONTRACT_ROUTES:-true}"
+source .venv/bin/activate
 pip install -r services/gctree/requirements.txt
-
-# --- Choose ONE way to get 'dnapars' ---
-
-# Ubuntu/Debian:
-# (universe repo needed; if unavailable, use conda option below)
-sudo apt-get update && sudo apt-get install -y phylip
-
-# OR via conda/mamba (any OS):
-#   - you can use existing base conda, no need to put GCtree itself in conda
-#   - this just provides the 'dnapars' binary
-# mamba install -c bioconda phylip
-# conda install -c bioconda phylip
-
-# 4) (Optional) sanity-check tools
-gctree --help
-dnapars 2>/dev/null || dnapars -help
-
-# 5) Run the service
-export CONTRACTS_DIR="$(pwd)/packages/contracts"
-python -m uvicorn services.gctree.app:app --host 0.0.0.0 --port 8002
+(
+  cd services/gctree
+  export QT_QPA_PLATFORM="offscreen"
+  export MPLBACKEND="agg"
+  export PYTHONPATH="$(pwd)${PYTHONPATH:+:$PYTHONPATH}"
+  uvicorn app:app --host 0.0.0.0 --port "${METHOD_GCTREE_HOST_PORT}"
+)
 ```
 
-**Windows PowerShell**:
+Notice: `gctree`, `deduplicate`, and `mkconfig` CLIs must be on `PATH` (installed by `pip install -r services/gctree/requirements.txt`).
 
-```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-
-pip install -r services/gctree/requirements.txt
-pip install gctree
-
-# Prefer conda on Windows for PHYLIP:
-# conda install -c bioconda phylip
-
-$env:CONTRACTS_DIR = (Join-Path (Get-Location) "packages\contracts")
-python -m uvicorn services.gctree.app:app --host 0.0.0.0 --port 8002
-```
-
-Open **http://localhost:8002** when it’s running.
-
-> **Notes**
->
-> - If you see `Parsed 0 from outfile but -1 expected!` or `No trees found in 'outfile'`, it usually means `dnapars` didn’t produce a valid `outfile` (bad input, wrong working dir, or `dnapars` not found in PATH). Verify `dnapars` is installed and accessible, and that inputs exist.
-> - If your service module isn’t `services.gctree.app:app`, replace it with your actual ASGI path (e.g., `services.gctree.main:app`).
-
-### 3.3) Start a method service (BrepPhylo) — pick ONE option
-
-#### Option A — Docker (IgPhyML + dnapars baked in)
-
-Build the image **from the brepphylo folder**, then run it **from repo root**:
+**BrepPhylo (local R)**
 
 ```bash
-# build
-cd services/brepphylo
-docker build -t phylo-brepphylo:dev .
-
-# run (from REPO ROOT)
-cd ../..
-docker run --rm -p 8003:8003   -v "$(pwd)/packages/contracts:/contracts:ro"   -e CONTRACTS_DIR=/contracts   phylo-brepphylo:dev
+set -a; source .env; set +a
+export CONTRACTS_DIR="$(pwd)/${CONTRACTS_DIR:-packages/contracts}"
+export STRICT_CONTRACT_ROUTES="${STRICT_CONTRACT_ROUTES:-true}"
+Rscript --vanilla -e "setwd('services/brepphylo'); pr <- plumber::plumb('plumber.R'); pr\$run(host='0.0.0.0', port=${METHOD_BREPPHYLO_HOST_PORT})"
 ```
 
-**Windows PowerShell** (repo root):
+Notice: default `tree_type=dnapars` expects `dnapars` on `PATH` (or `DNAPARS_PATH`). If using `tree_type=igphyml`, set `IGPHYML_BIN` and motifs (`IGPHYML_MOTIFS` or `IGPHYML_PATH`).
 
-```powershell
-docker run --rm -p 8003:8003 `
-  -v ${PWD}/packages/contracts:/contracts:ro `
-  -e CONTRACTS_DIR=/contracts `
-  phylo-brepphylo:dev
-```
-
-This exposes BrepPhylo at **http://localhost:8003** with contracts mounted read-only.
-
-#### Option B — Local R (requires IgPhyML + BrepPhylo deps)
-
-Ensure you have **R 4.3+**, **IgPhyML** on PATH (e.g., `/usr/local/bin/igphyml` and motifs in `/usr/local/share/igphyml/src/motifs`), and the BrepPhylo stack installed:
+**ClonalTree (local Python)**
 
 ```bash
-R -q -e "install.packages(c('plumber','jsonlite','jsonvalidate','httr','ape','igraph','remotes'), repos='https://cloud.r-project.org')"
-R -q -e "install.packages('BiocManager', repos='https://cloud.r-project.org'); BiocManager::install(c('Biostrings','msa','GenomicRanges','GenomicAlignments'), ask = FALSE)"
-R -q -e "remotes::install_github('Fraternalilab/BrepPhylo', dependencies = TRUE)"
-```
-
-From the **repo root**:
-
-```bash
-Rscript -e 'setwd("services/brepphylo"); Sys.setenv(CONTRACTS_DIR="../../packages/contracts"); Sys.setenv(IGPHYML_BIN="/usr/local/bin/igphyml"); Sys.setenv(IGPHYML_MOTIFS="/usr/local/share/igphyml/src/motifs"); pr <- plumber::plumb("plumber.R"); pr$run(host="0.0.0.0", port=8003)'
-```
-
-Keep this terminal open; it’s your BrepPhylo server.
-
-### 3.4) Start a method service (ClonalTree) — pick ONE option
-
-#### Option A — Docker (recommended; MUSCLE v3 baked in)
-
-Build the image **from the clonaltree folder**, then run it **from repo root**:
-
-```bash
-# build
-cd services/clonaltree
-docker build -t phylo-clonaltree:dev .
-
-# run (from REPO ROOT)
-cd ../..
-docker run --rm -p 8004:8004   -v "$(pwd)/packages/contracts:/contracts:ro"   -e CONTRACTS_DIR=/contracts   phylo-clonaltree:dev
-```
-
-**Windows PowerShell** (repo root):
-
-```powershell
-docker run --rm -p 8004:8004 `
-  -v ${PWD}/packages/contracts:/contracts:ro `
-  -e CONTRACTS_DIR=/contracts `
-  phylo-clonaltree:dev
-```
-
-This exposes ClonalTree at **http://localhost:8004** with contracts mounted read-only. The image installs MUSCLE v3 (required; v5 is not supported).
-
-#### Option B — Local Python (requires MUSCLE v3.x on PATH)
-
-From the **repo root**:
-
-```bash
-# 1) Install service deps
+set -a; source .env; set +a
+export CONTRACTS_DIR="$(pwd)/${CONTRACTS_DIR:-packages/contracts}"
+export STRICT_CONTRACT_ROUTES="${STRICT_CONTRACT_ROUTES:-true}"
+source .venv/bin/activate
 pip install -r services/clonaltree/requirements.txt
-
-# 2) Install MUSCLE v3 (examples)
-# macOS:  brew install muscle
-# Ubuntu: sudo apt-get update && sudo apt-get install -y muscle
-# verify version is 3.x (v5 is incompatible)
-muscle -version
-
-# 3) Run the service
-export CONTRACTS_DIR="$(pwd)/packages/contracts"
-python -m uvicorn services.clonaltree.app:app --host 0.0.0.0 --port 8004
+(
+  cd services/clonaltree
+  export QT_QPA_PLATFORM="offscreen"
+  export MPLBACKEND="agg"
+  uvicorn app:app --host 0.0.0.0 --port "${METHOD_CLONALTREE_HOST_PORT}"
+)
 ```
 
-Keep this terminal open; it’s your method server. If `muscle -version` shows 5.x, install a 3.x build (Homebrew/apt usually ship 3.x; conda has `muscle=3.8`).
+Notice: ClonalTree requires **MUSCLE v3.x**.  
+If you start via `./run.sh` -> `Dev -> Local R` (or `scripts/dev-with-local-r.sh`), MUSCLE v3.8.31 is auto-installed/checked.  
+If you start ClonalTree manually, ensure `muscle -version` reports major version `< 5`; otherwise `/run` fails with `MUSCLE v3 is required`.
 
-### 4) Start the API (FastAPI)
-
-In a **new terminal** (repo root):
+### 5) Start API
 
 ```bash
-# load API env
-set -a; source apps/api/.env; set +a
+set -a; source .env; set +a
+source .venv/bin/activate
 
-# start API
+# If methods run in Docker:
+# export METHOD_SERVICE_FILE_PREFIX=/runtime/storage
+#
+# If methods run locally:
+# export METHOD_SERVICE_FILE_PREFIX="$(pwd)/${STORAGE_LOCAL_PATH:-runtime/storage}"
+
 npm run dev:api
 ```
 
-### 5) Start the Web UI (Next.js)
-
-In another **new terminal** (repo root):
+### 6) Start web UI
 
 ```bash
-# Next.js will read apps/web/.env.local automatically
+set -a; source .env; set +a
 npm run dev:web
 ```
 
-Open **http://localhost:3000** and you should see the app. The UI will call the API on `:8000`, which in turn calls Dowser on `:8001`.
+Open `http://localhost:3000`.
 
 ---
 
 ## Environment Variables
 
-- `CONTRACTS_DIR` — path to `packages/contracts` (API & methods use this)
-- `CORS_ORIGINS` — dev default includes `http://localhost:3000`
-- `METHOD_DOWSER_URL` — URL of Dowser service, e.g. `http://localhost:8001` in dev
-- `METHOD_GCTREE_URL` — URL of GCtree service, e.g. `http://localhost:8002`
-- `METHOD_BREPPHYLO_URL` — URL of BrepPhylo service, e.g. `http://localhost:8003`
-- `METHOD_CLONALTREE_URL` — URL of ClonalTree service, e.g. `http://localhost:8004`
-- `NEXT_PUBLIC_API_BASE_URL` — Web UI → API base URL (set in `apps/web/.env*`)
-- `RUNS_DIR_SERVICE` — optional; when API runs on the host but methods run in Docker, set to the in-container mount (e.g., `/runtime/runs`) so method services can read uploaded files.
-- `IGPHYML_BIN` / `IGPHYML_MOTIFS` — for BrepPhylo; in Docker images they default to `/usr/local/share/igphyml/src/igphyml` and `/usr/local/share/igphyml/src/motifs`.
+All runtime configuration should live in root `.env`.
+
+- `CONTRACTS_DIR` — contracts path used by API/methods
+- `CORS_ORIGINS` — allowed web origins for API CORS
+- `NEXT_PUBLIC_API_BASE_URL` — web -> API base URL
+- `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` / `POSTGRES_HOST` / `POSTGRES_PORT` — DB connection pieces
+- `DATABASE_URL` — optional explicit DB URL override
+- `STORAGE_LOCAL_PATH` — host-side storage directory
+- `STORAGE_LOCAL_URL` — API URL prefix for local storage
+- `METHOD_SERVICE_FILE_PREFIX` — path prefix that method services use to read uploaded files
+- `METHOD_<ID>_URL` — host URL for each method service
+- `METHOD_<ID>_URL_DOCKER` — compose-network URL for each method service
+- `METHOD_<ID>_HOST_PORT` / `METHOD_<ID>_CONTAINER_PORT` — generated service ports
+- `IGPHYML_BIN` / `IGPHYML_MOTIFS` / `IGPHYML_PATH` / `DNAPARS_PATH` — optional method runtime overrides
+
+`apps/api/.env` and `apps/web/.env` are now legacy compatibility files and should stay empty.
 
 ---
 
@@ -545,6 +411,9 @@ packages/
   contracts/  # Shared contracts (schemas, UI hints)
 services/
   dowser/     # R/plumber service (Dowser)
-# helper scripts are placed at repo root:
-#   run.sh, dev-with-docker.sh, dev-with-local-r.sh, select-mode.mjs
+# helper scripts:
+#   run.sh
+#   scripts/dev-with-docker.sh
+#   scripts/dev-with-local-r.sh
+#   scripts/select-mode.mjs
 ```

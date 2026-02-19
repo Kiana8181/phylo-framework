@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef } from "react";
 import { parseNewick, NewickNode } from "@/lib/newick";
 
 type Anno = { label: string } & Record<string, any>;
@@ -17,6 +17,7 @@ type Props = {
   colorMap?: Record<string, string>;
   colorBy?: string | null;
   unknownValue?: string;
+  displayIdField?: string | null;
 };
 
 type LNode = NewickNode & { parent?: LNode; x?: number; y?: number };
@@ -51,7 +52,7 @@ function colorByIndex(k: number): string {
 function buildColorMapDistinct(
   list: Anno[] | undefined,
   field: string | null,
-  unknownValue: string
+  unknownValue: string,
 ): Record<string, string> {
   const map: Record<string, string> = {};
   if (!list?.length || !field) return map;
@@ -80,18 +81,24 @@ function buildColorMapDistinct(
 function buildTipTitle(
   label: string,
   anno: Anno | undefined,
-  colorField: string | null
+  colorField: string | null,
+  displayField: string | null,
 ): string {
+  if (typeof anno?.tooltip === "string" && anno.tooltip.trim()) {
+    return anno.tooltip.trim();
+  }
+
   const lines: string[] = [];
 
-  // 1) display label
-  if (label) lines.push(label);
+  // 1) display label / selected identity field
+  const displayValue = (displayField && String((anno as any)?.[displayField] ?? "").trim()) || label;
+  if (displayValue) lines.push(displayValue);
 
   if (!anno) return lines.join("\n");
 
   // 2) sequence_id (if present and not duplicate of label)
   const seqId = String(anno.sequence_id ?? "").trim();
-  if (seqId && seqId !== label) lines.push(`sequence_id: ${seqId}`);
+  if (seqId && seqId !== displayValue) lines.push(`sequence_id: ${seqId}`);
 
   // 3) colorBy field (if set)
   if (colorField) {
@@ -100,7 +107,8 @@ function buildTipTitle(
   }
 
   // 4) all remaining fields (sorted), excluding label + sequence_id + colorField
-  const skip = new Set<string>(["label", "sequence_id"]);
+  const skip = new Set<string>(["label", "sequence_id", "tooltip"]);
+  if (displayField) skip.add(displayField);
   if (colorField) skip.add(colorField);
 
   const extras = Object.keys(anno)
@@ -115,6 +123,23 @@ function buildTipTitle(
   return lines.join("\n");
 }
 
+function isBlackColor(value: string): boolean {
+  const c = value.trim().toLowerCase();
+  if (!c) return false;
+  if (c === "black" || c === "#000" || c === "#000000" || c === "#000000ff") return true;
+
+  const rgb = c.match(/^rgba?\(([^)]+)\)$/);
+  if (rgb) {
+    const parts = rgb[1].split(",").map((v) => Number(v.trim()));
+    if (parts.length >= 3) {
+      const [r, g, b] = parts;
+      return r === 0 && g === 0 && b === 0;
+    }
+  }
+
+  return false;
+}
+
 export default function TreeSVG({
   newick,
   width = 900,
@@ -122,14 +147,14 @@ export default function TreeSVG({
   filename = "tree",
   fontSize = 12,
   strokeWidth = 1,
-  showLabels: showLabelsProp = false,
+  showLabels = false,
   annotations,
   colorMap,
   colorBy,
   unknownValue,
+  displayIdField,
 }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
-  const [showLabels, setShowLabels] = useState<boolean>(showLabelsProp);
 
   const coloringEnabled = !!colorBy;
   const colorField = colorBy || null;
@@ -184,16 +209,11 @@ export default function TreeSVG({
     })(root);
 
     const longestLabelLen =
-      tmpLeaves.length === 0
-        ? 0
-        : Math.max(...tmpLeaves.map((n) => (n.name ?? "").length));
+      tmpLeaves.length === 0 ? 0 : Math.max(...tmpLeaves.map((n) => (n.name ?? "").length));
     const labelPad = 10;
     const labelArea =
       showLabels && longestLabelLen
-        ? Math.max(
-            160,
-            estimateTextWidth("W".repeat(longestLabelLen), fontSize) + 18
-          )
+        ? Math.max(160, estimateTextWidth("W".repeat(longestLabelLen), fontSize) + 18)
         : 20;
 
     const margin = { top: 20, right: labelArea, bottom: 20, left: 20 };
@@ -329,11 +349,7 @@ export default function TreeSVG({
         role="img"
       >
         {/* branches */}
-        <g
-          stroke="currentColor"
-          strokeWidth={strokeWidth}
-          vectorEffect="non-scaling-stroke"
-        >
+        <g stroke="currentColor" strokeWidth={strokeWidth} vectorEffect="non-scaling-stroke">
           {layout.edges.map((e, i) => (
             <line key={i} x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2} />
           ))}
@@ -344,26 +360,21 @@ export default function TreeSVG({
           {layout.leafNodes.map((n, i) => {
             const label = n.name ?? "";
             const anno = annoByLabel[label];
+            const defaultLeafFill = "var(--foreground)";
 
-            let fill = "#000000";
+            let fill = defaultLeafFill;
             if (coloringEnabled && colorField) {
               const call = (anno?.[colorField] as string) || "";
               if (call && call !== "Germline" && call !== unknown) {
-                fill = colors[call] ?? "#000000";
+                const resolved = colors[call] ?? defaultLeafFill;
+                fill = isBlackColor(resolved) ? defaultLeafFill : resolved;
               }
             }
 
-            const title = buildTipTitle(label, anno, colorField);
+            const title = buildTipTitle(label, anno, colorField, displayIdField || null);
 
             return (
-              <circle
-                key={i}
-                cx={n.x!}
-                cy={n.y!}
-                r={3}
-                fill={fill}
-                style={{ cursor: "pointer" }}
-              >
+              <circle key={i} cx={n.x!} cy={n.y!} r={3} fill={fill} style={{ cursor: "pointer" }}>
                 <title>{title}</title>
               </circle>
             );
@@ -376,7 +387,8 @@ export default function TreeSVG({
             {layout.leafNodes.map((n, i) => {
               const label = n.name ?? "";
               const anno = annoByLabel[label];
-              const title = buildTipTitle(label, anno, colorField);
+              const title = buildTipTitle(label, anno, colorField, displayIdField || null);
+              const displayLabel = (displayIdField && String(anno?.[displayIdField] ?? "").trim()) || label;
               return (
                 <g key={i}>
                   <line
@@ -389,12 +401,8 @@ export default function TreeSVG({
                     opacity={0.4}
                     vectorEffect="non-scaling-stroke"
                   />
-                  <text
-                    x={Math.round(layout.labelX)}
-                    y={n.y!}
-                    dominantBaseline="middle"
-                  >
-                    {label}
+                  <text x={Math.round(layout.labelX)} y={n.y!} dominantBaseline="middle">
+                    {displayLabel}
                     <title>{title}</title>
                   </text>
                 </g>
@@ -405,33 +413,14 @@ export default function TreeSVG({
       </svg>
 
       <div className="mt-3 flex flex-wrap gap-2">
-        <button
-          onClick={downloadPNG}
-          className="rounded border px-3 py-1 text-sm"
-        >
+        <button onClick={downloadPNG} className="rounded border px-3 py-1 text-sm">
           Download PNG
         </button>
-        <button
-          onClick={downloadSVG}
-          className="rounded border px-3 py-1 text-sm"
-        >
+        <button onClick={downloadSVG} className="rounded border px-3 py-1 text-sm">
           Download SVG
         </button>
-        <button
-          onClick={downloadNewick}
-          className="rounded border px-3 py-1 text-sm"
-        >
+        <button onClick={downloadNewick} className="rounded border px-3 py-1 text-sm">
           Download Newick
-        </button>
-
-        <button
-          onClick={() => setShowLabels((v) => !v)}
-          className="ml-auto rounded border px-3 py-1 text-sm"
-          aria-pressed={showLabels}
-          aria-label="Toggle labels"
-          title="Toggle tip labels"
-        >
-          {showLabels ? "Hide labels" : "Show labels"}
         </button>
       </div>
     </div>

@@ -1,6 +1,10 @@
 {
   "requiresFile": true,
   "maxFiles": 1,
+  "uploadGuidance": [
+    "Dowser accepts TSV, CSV, RDA, and RDS.",
+    "If you want to compare across methods, upload a format accepted by all desired methods."
+  ],
   "order": [
     "tree_model",
     "minseq",

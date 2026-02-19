@@ -35,6 +35,9 @@ export default function RunParameters({
   const [filePickerOpen, setFilePickerOpen] = useState(false);
   const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
   const [selectedFileDisplay, setSelectedFileDisplay] = useState<{ name: string; size: number } | null>(null);
+  const uploadGuidance = Array.isArray(spec.uiHints?.uploadGuidance)
+    ? (spec.uiHints?.uploadGuidance as string[])
+    : [];
 
   const requiresFile =
     spec.uiHints?.requiresFile === true || (spec?.accepts?.length ?? 0) > 0;
@@ -106,6 +109,13 @@ export default function RunParameters({
                 <p className="text-xs text-muted-foreground">
                   Accepted: {(spec?.accepts ?? []).join(", ") || "—"}
                 </p>
+                {uploadGuidance.length > 0 && (
+                  <div className="mt-2 text-xs text-muted-foreground space-y-1">
+                    {uploadGuidance.map((line, idx) => (
+                      <p key={`${spec.id}-upload-guidance-${idx}`}>{line}</p>
+                    ))}
+                  </div>
+                )}
               </div>
               <Button
                 variant="outline"

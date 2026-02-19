@@ -3,10 +3,12 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import traceback
 import uuid
 from datetime import datetime
-from typing import Optional
+from pathlib import Path
+from typing import Any, Optional
 from uuid import UUID
 
 import httpx
@@ -17,19 +19,137 @@ from apps.api.auth.dependencies import get_current_user, get_current_user_requir
 from apps.api.contracts.loader import get_service_routes, get_ui_hints
 from apps.api.config import (
     HTTP_CLIENT_TIMEOUT,
-    method_service_url,
+    ROOT_DIR,
     STORAGE_QUOTA_PER_USER_BYTES,
+    method_service_url,
 )
 from apps.api.database import get_db
-from apps.api.database.models import RunStatus, StorageType, User
+from apps.api.database.models import ACTIVE_RUN_STATUSES, Run, RunStatus, StorageType, User
+from apps.api.preprocess.method_capabilities import extension_from_path, is_native_accept
+from apps.api.preprocess.prepare_input import PreprocessError, prepare_input_for_method
 from apps.api.repositories.file_repository import FileRepository
 from apps.api.repositories.run_repository import RunRepository
+from apps.api.repositories.run_tree_repository import RunTreeRepository
+from apps.api.services.tree_contract import assemble_unified_tree_result
 from apps.api.storage import get_storage
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
 # Storage instance (singleton)
 storage = get_storage()
+
+METHOD_SERVICE_FILE_PREFIX = "METHOD_SERVICE_FILE_PREFIX"
+HOST_RUNTIME_SHARED_ROOT = "HOST_RUNTIME_SHARED_ROOT"
+STORAGE_LOCAL_PATH = "STORAGE_LOCAL_PATH"
+DEFAULT_CONTAINER_RUNTIME_ROOT = Path("/runtime/storage")
+
+
+def _storage_local_root_host() -> Path:
+    raw = (os.getenv(STORAGE_LOCAL_PATH) or "runtime/storage").strip()
+    root = Path(raw)
+    if not root.is_absolute():
+        root = ROOT_DIR / root
+    return root.resolve()
+
+
+def _runtime_shared_root_host() -> Path:
+    raw = (os.getenv(HOST_RUNTIME_SHARED_ROOT) or "").strip()
+    if not raw:
+        return _storage_local_root_host()
+
+    root = Path(raw)
+    if not root.is_absolute():
+        root = ROOT_DIR / root
+        return root.resolve()
+
+    # Guard against a common local-dev misconfiguration where a container-only
+    # mount path is copied into host config.
+    if root == DEFAULT_CONTAINER_RUNTIME_ROOT or DEFAULT_CONTAINER_RUNTIME_ROOT in root.parents:
+        return _storage_local_root_host()
+    return root.resolve()
+
+
+def _runtime_shared_root_container() -> Path:
+    raw = (os.getenv(METHOD_SERVICE_FILE_PREFIX) or "/runtime/storage").strip()
+    root = Path(raw)
+    if not root.is_absolute():
+        root = Path("/") / raw.lstrip("/")
+    return root
+
+
+def _run_work_dir(run_id: UUID) -> Path:
+    path = _runtime_shared_root_host() / "runs" / str(run_id) / "work" / uuid.uuid4().hex
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _to_container_path(host_path: Path) -> str:
+    shared = _runtime_shared_root_host().resolve()
+    rel = host_path.resolve().relative_to(shared)
+    return (_runtime_shared_root_container() / rel).as_posix()
+
+
+def _resolve_storage_path_under_shared_mount(storage_path: str) -> Path | None:
+    shared = _runtime_shared_root_host().resolve()
+    raw_path = Path(storage_path)
+    candidates: list[Path] = []
+
+    if raw_path.is_absolute():
+        candidates.append(raw_path)
+    else:
+        candidates.append(shared / raw_path)
+        base_path = getattr(storage, "base_path", None)
+        if isinstance(base_path, Path):
+            candidates.append(base_path / raw_path)
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        key = str(resolved)
+        if key in seen:
+            continue
+        seen.add(key)
+        if not resolved.exists():
+            continue
+        try:
+            resolved.relative_to(shared)
+            return resolved
+        except ValueError:
+            continue
+    return None
+
+
+async def stage_storage_path_to_workspace(storage_path: str, workspace: Path) -> Path:
+    source = Path(storage_path)
+    suffix = source.suffix.lower()
+    staged = workspace / f"00_staged_input{suffix}"
+    file_bytes = await storage.download(storage_path)
+    staged.write_bytes(file_bytes)
+    return staged
+
+
+def _cleanup_workspace(workspace: Path | None, run_id: UUID) -> None:
+    if workspace is None:
+        return
+    if not workspace.exists():
+        return
+
+    allowed_root = (_runtime_shared_root_host() / "runs" / str(run_id) / "work").resolve()
+    try:
+        workspace.resolve().relative_to(allowed_root)
+    except ValueError:
+        return
+
+    shutil.rmtree(workspace, ignore_errors=True)
+
+
+def _structured_error_payload(
+    *,
+    code: str,
+    message: str,
+    details: dict[str, Any],
+) -> dict[str, Any]:
+    return {"ok": False, "error": {"code": code, "message": message, "details": details}}
 
 
 def _public_status(run, include_run_id: bool = False) -> dict:
@@ -39,9 +159,40 @@ def _public_status(run, include_run_id: bool = False) -> dict:
         "progress": run.progress,
         "message": run.message,
     }
+    raw_error = getattr(run, "error", None)
+    if raw_error:
+        try:
+            parsed = json.loads(raw_error)
+            if isinstance(parsed, dict) and isinstance(parsed.get("error"), dict):
+                out["error"] = parsed["error"]
+                parsed_message = parsed["error"].get("message")
+                if isinstance(parsed_message, str) and parsed_message.strip():
+                    out["message"] = parsed_message
+        except Exception:
+            pass
     if include_run_id:
         out["run_id"] = str(run.id)
     return out
+
+
+async def _load_run_with_access(
+    run_id: str,
+    *,
+    current_user: Optional[User],
+    run_repo: RunRepository,
+) -> Run:
+    try:
+        run_uuid = UUID(run_id)
+    except ValueError:
+        raise HTTPException(400, "Invalid run ID format")
+
+    run = await run_repo.get_by_id(run_uuid)
+    if not run:
+        raise HTTPException(404, "Run not found")
+
+    if current_user and not current_user.is_admin and run.user_id != current_user.id:
+        raise HTTPException(403, "Access denied")
+    return run
 
 
 async def _progress_updater(
@@ -50,21 +201,32 @@ async def _progress_updater(
 ):
     """Gradually increase progress while waiting for method service response."""
     from apps.api.database.base import AsyncSessionLocal
-    
-    progress = 5
+
     max_progress = 90  # Don't go to 100% until we get the response
     increment = 3  # Increase by 3% each time
     interval = 3  # Update every 3 seconds
-    
-    while not stop_event.is_set() and progress < max_progress:
+
+    while not stop_event.is_set():
         await asyncio.sleep(interval)
         if stop_event.is_set():
             break
-        progress = min(progress + increment, max_progress)
         try:
             async with AsyncSessionLocal() as db:
                 run_repo = RunRepository(db)
-                await run_repo.update_progress(run_id, progress, "Processing...")
+                run = await run_repo.get_by_id(run_id)
+                if run is None:
+                    break
+                if run.status not in ACTIVE_RUN_STATUSES:
+                    break
+
+                current_progress = int(run.progress or 0)
+                if current_progress >= max_progress:
+                    break
+
+                next_progress = min(current_progress + increment, max_progress)
+                updated = await run_repo.update_progress(run_id, next_progress, "Processing...")
+                if updated is None:
+                    break
                 await db.commit()
         except Exception:
             # If run was deleted or error occurred, stop updating
@@ -96,94 +258,238 @@ async def _execute_method_async(
             await db.commit()
             return
         
-        # Mark as QUEUED (in queue, worker has picked it up)
-        await run_repo.update_status(run_id, RunStatus.QUEUED, "In queue")
-        await db.commit()
-        
         routes = get_service_routes(method_id) or {"run": "/run"}
         url = f"{base.rstrip('/')}{routes.get('run', '/run')}"
         
-        # Update status to RUNNING when actually calling the method
-        await run_repo.update_status(run_id, RunStatus.RUNNING, f"Submitting to {method_id}")
-        await run_repo.update_progress(run_id, 5, f"Submitting to {method_id}")
+        # Atomically claim this run execution once. If another worker already
+        # claimed RUNNING, exit to avoid concurrent writes for the same run_id.
+        claimed = await run_repo.transition_to_running_once(run_id, f"Submitting to {method_id}")
+        if not claimed:
+            await db.rollback()
+            return
         await db.commit()
-        
-        # Method services in Docker see files under a mounted path (e.g. /runtime/storage).
-        # Use METHOD_SERVICE_FILE_PREFIX so the container can find the file (default /runtime/storage).
-        if file_path:
-            prefix = (os.getenv("METHOD_SERVICE_FILE_PREFIX") or "/runtime/storage").strip().rstrip("/")
-            # Normalize to forward slashes for Linux containers
-            file_path = prefix + "/" + file_path.replace("\\", "/").lstrip("/")
 
-        # Prepare payload
-        payload = {
-            "file_path": file_path,
-            "params": params or {},
-        }
-        
-        # Start progress updater task
-        stop_progress = asyncio.Event()
-        progress_task = asyncio.create_task(
-            _progress_updater(run_id, stop_progress)
-        )
-        
+        # Stage files to the shared runtime mount whenever needed so method-services
+        # always receive a container-visible filesystem path.
+        run_workspace: Path | None = None
+        method_input_host_path: Path | None = None
+
         try:
-            # Use async httpx client
-            async with httpx.AsyncClient(timeout=HTTP_CLIENT_TIMEOUT, trust_env=False) as client:
-                response = await client.post(url, json=payload)
+            if file_path:
+                original_storage_path = file_path
+                input_ext = extension_from_path(Path(original_storage_path))
 
-                # Stop progress updater
+                native_ok = False
+                try:
+                    native_ok = is_native_accept(method_id, input_ext)  # type: ignore[arg-type]
+                except Exception:
+                    native_ok = False
+
+                if native_ok:
+                    existing_shared = _resolve_storage_path_under_shared_mount(original_storage_path)
+                    if existing_shared is not None and existing_shared.is_file():
+                        method_input_host_path = existing_shared
+                    else:
+                        run_workspace = _run_work_dir(run_id)
+                        try:
+                            method_input_host_path = await stage_storage_path_to_workspace(
+                                original_storage_path,
+                                run_workspace,
+                            )
+                        except Exception as exc:
+                            structured = _structured_error_payload(
+                                code="INVALID_FILE",
+                                message="Failed to read uploaded file for method execution.",
+                                details={
+                                    "method_id": method_id,
+                                    "storage_path": original_storage_path,
+                                    "next_actions": [
+                                        "Re-upload the input file and retry.",
+                                        "If the file came from file history, verify it still exists.",
+                                    ],
+                                    "technical_error": str(exc),
+                                },
+                            )
+                            await run_repo.set_error(run_id, json.dumps(structured, ensure_ascii=True, sort_keys=True))
+                            await run_repo.update(run_id, message=structured["error"]["message"])
+                            await db.commit()
+                            return
+                else:
+                    run_workspace = _run_work_dir(run_id)
+                    try:
+                        staged_original = await stage_storage_path_to_workspace(
+                            original_storage_path,
+                            run_workspace,
+                        )
+                    except Exception as exc:
+                        structured = _structured_error_payload(
+                            code="INVALID_FILE",
+                            message="Failed to read uploaded file for preprocessing.",
+                            details={
+                                "method_id": method_id,
+                                "storage_path": original_storage_path,
+                                "next_actions": [
+                                    "Re-upload the input file and retry.",
+                                    "If the file came from file history, verify it still exists.",
+                                ],
+                                "technical_error": str(exc),
+                            },
+                        )
+                        await run_repo.set_error(run_id, json.dumps(structured, ensure_ascii=True, sort_keys=True))
+                        await run_repo.update(run_id, message=structured["error"]["message"])
+                        await db.commit()
+                        return
+
+                    try:
+                        prepared = prepare_input_for_method(
+                            method_id=method_id,  # type: ignore[arg-type]
+                            uploaded_path=staged_original,
+                            params=params or {},
+                            work_dir=run_workspace,
+                        )
+                        method_input_host_path = prepared.final_path
+                    except PreprocessError as exc:
+                        structured = _structured_error_payload(
+                            code=exc.code,
+                            message=exc.message,
+                            details=exc.details,
+                        )
+                        await run_repo.set_error(run_id, json.dumps(structured, ensure_ascii=True, sort_keys=True))
+                        await run_repo.update(run_id, message=exc.message)
+                        await db.commit()
+                        return
+
+                if method_input_host_path is None or not method_input_host_path.exists():
+                    structured = _structured_error_payload(
+                        code="INVALID_FILE",
+                        message="Prepared input file is missing on the API server.",
+                        details={
+                            "method_id": method_id,
+                            "storage_path": original_storage_path,
+                            "next_actions": [
+                                "Retry the run.",
+                                "Re-upload the input file if the issue persists.",
+                            ],
+                        },
+                    )
+                    await run_repo.set_error(run_id, json.dumps(structured, ensure_ascii=True, sort_keys=True))
+                    await run_repo.update(run_id, message=structured["error"]["message"])
+                    await db.commit()
+                    return
+
+                try:
+                    file_path = _to_container_path(method_input_host_path)
+                except Exception as exc:
+                    structured = _structured_error_payload(
+                        code="INTERNAL_PATH_ERROR",
+                        message="Prepared input is outside the shared runtime mount.",
+                        details={
+                            "method_id": method_id,
+                            "host_path": str(method_input_host_path),
+                            "shared_root": str(_runtime_shared_root_host()),
+                            "next_actions": [
+                                "Contact support and include this run ID.",
+                            ],
+                            "technical_error": str(exc),
+                        },
+                    )
+                    await run_repo.set_error(run_id, json.dumps(structured, ensure_ascii=True, sort_keys=True))
+                    await run_repo.update(run_id, message=structured["error"]["message"])
+                    await db.commit()
+                    return
+
+                container_root = _runtime_shared_root_container().as_posix().rstrip("/")
+                if file_path != container_root and not file_path.startswith(f"{container_root}/"):
+                    structured = _structured_error_payload(
+                        code="INTERNAL_PATH_ERROR",
+                        message="Method input path is not under the shared container runtime root.",
+                        details={
+                            "method_id": method_id,
+                            "file_path": file_path,
+                            "container_root": container_root,
+                            "next_actions": [
+                                "Contact support and include this run ID.",
+                            ],
+                        },
+                    )
+                    await run_repo.set_error(run_id, json.dumps(structured, ensure_ascii=True, sort_keys=True))
+                    await run_repo.update(run_id, message=structured["error"]["message"])
+                    await db.commit()
+                    return
+
+            # Prepare payload
+            payload = {
+                "file_path": file_path,
+                "params": params or {},
+            }
+
+            # Start progress updater task
+            stop_progress = asyncio.Event()
+            progress_task = asyncio.create_task(
+                _progress_updater(run_id, stop_progress)
+            )
+
+            try:
+                # Use async httpx client
+                async with httpx.AsyncClient(timeout=HTTP_CLIENT_TIMEOUT, trust_env=False) as client:
+                    response = await client.post(url, json=payload)
+
+                    # Stop progress updater
+                    stop_progress.set()
+                    try:
+                        await asyncio.wait_for(progress_task, timeout=1.0)
+                    except asyncio.TimeoutError:
+                        progress_task.cancel()
+
+                    if response.status_code >= 400:
+                        err_msg = None
+                        try:
+                            j = response.json()
+                            if isinstance(j, dict):
+                                err_msg = j.get("error") or j.get("message")
+                        except Exception:
+                            pass
+                        err_msg = err_msg or response.text or f"{response.status_code} {response.reason_phrase}"
+                        await run_repo.set_error(run_id, err_msg)
+                        await db.commit()
+                        return
+
+                    result = response.json()
+                    unified_result, tree_rows = assemble_unified_tree_result(method_id, result)
+
+                    # Save unified result and per-tree payloads.
+                    await run_repo.set_result(run_id, unified_result, RunStatus.DONE)
+                    tree_repo = RunTreeRepository(db)
+                    await tree_repo.replace_for_run(run_id, tree_rows)
+                    await db.commit()
+
+            except httpx.ConnectError as e:
                 stop_progress.set()
                 try:
                     await asyncio.wait_for(progress_task, timeout=1.0)
                 except asyncio.TimeoutError:
                     progress_task.cancel()
-
-                if response.status_code >= 400:
-                    err_msg = None
-                    try:
-                        j = response.json()
-                        if isinstance(j, dict):
-                            err_msg = j.get("error") or j.get("message")
-                    except Exception:
-                        pass
-                    err_msg = err_msg or response.text or f"{response.status_code} {response.reason_phrase}"
-                    await run_repo.set_error(run_id, err_msg)
-                    await db.commit()
-                    return
-
-                result = response.json()
-
-                # Save result to database with 100% progress
-                await run_repo.set_result(run_id, result, RunStatus.DONE)
-                await run_repo.update_progress(run_id, 100, "Complete")
+                friendly = (
+                    "Could not connect to the method service. "
+                    "Make sure the service is running and METHOD_*_URL (e.g. METHOD_GCTREE_URL) is set correctly."
+                )
+                await run_repo.set_error(
+                    run_id,
+                    friendly + "\n\nTechnical detail: " + str(e),
+                )
                 await db.commit()
-
-        except httpx.ConnectError as e:
-            stop_progress.set()
-            try:
-                await asyncio.wait_for(progress_task, timeout=1.0)
-            except asyncio.TimeoutError:
-                progress_task.cancel()
-            friendly = (
-                "Could not connect to the method service. "
-                "Make sure the service is running and METHOD_*_URL (e.g. METHOD_GCTREE_URL) is set correctly."
-            )
-            await run_repo.set_error(
-                run_id,
-                friendly + "\n\nTechnical detail: " + str(e),
-            )
-            await db.commit()
-        except Exception as e:
-            stop_progress.set()
-            try:
-                await asyncio.wait_for(progress_task, timeout=1.0)
-            except asyncio.TimeoutError:
-                progress_task.cancel()
-            msg = str(e)
-            error_detail = f"{msg}\n{traceback.format_exc()}"
-            await run_repo.set_error(run_id, error_detail)
-            await db.commit()
+            except Exception as e:
+                stop_progress.set()
+                try:
+                    await asyncio.wait_for(progress_task, timeout=1.0)
+                except asyncio.TimeoutError:
+                    progress_task.cancel()
+                msg = str(e)
+                error_detail = f"{msg}\n{traceback.format_exc()}"
+                await run_repo.set_error(run_id, error_detail)
+                await db.commit()
+        finally:
+            _cleanup_workspace(run_workspace, run_id)
 
 
 def _run_summary(run) -> dict:
@@ -350,6 +656,7 @@ async def create_run(
             
             # Update run status
             await run_repo.update_progress(run.id, 5, f"File uploaded: {file.filename}")
+            await db.commit()
             
         except Exception as e:
             await run_repo.set_error(run.id, f"Failed to upload file: {e}")
@@ -390,22 +697,9 @@ async def run_status(
     db: AsyncSession = Depends(get_db),
 ):
     """Get run status."""
-    try:
-        run_uuid = UUID(run_id)
-    except ValueError:
-        raise HTTPException(400, "Invalid run ID format")
-    
     run_repo = RunRepository(db)
-    run = await run_repo.get_by_id(run_uuid)
-    
-    if not run:
-        raise HTTPException(404, "Run not found")
-    
-    # Check authorization (user can only see their own runs, unless admin)
-    if current_user:
-        if not current_user.is_admin and run.user_id != current_user.id:
-            raise HTTPException(403, "Access denied")
-    
+    run = await _load_run_with_access(run_id, current_user=current_user, run_repo=run_repo)
+
     return _public_status(run)
 
 
@@ -416,23 +710,46 @@ async def run_result(
     db: AsyncSession = Depends(get_db),
 ):
     """Get run result."""
-    try:
-        run_uuid = UUID(run_id)
-    except ValueError:
-        raise HTTPException(400, "Invalid run ID format")
-    
     run_repo = RunRepository(db)
-    run = await run_repo.get_by_id(run_uuid)
-    
-    if not run:
-        raise HTTPException(404, "Run not found")
-    
-    # Check authorization
-    if current_user:
-        if not current_user.is_admin and run.user_id != current_user.id:
-            raise HTTPException(403, "Access denied")
-    
+    run = await _load_run_with_access(run_id, current_user=current_user, run_repo=run_repo)
+
     if run.status != RunStatus.DONE:
         raise HTTPException(409, "Run not finished")
-    
+
     return run.result or {"ok": False}
+
+
+@router.get("/{run_id}/trees")
+async def list_run_trees(
+    run_id: str,
+    current_user: Optional[User] = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """List lightweight tree metadata for a completed run."""
+    run_repo = RunRepository(db)
+    run = await _load_run_with_access(run_id, current_user=current_user, run_repo=run_repo)
+    if run.status != RunStatus.DONE:
+        raise HTTPException(409, "Run not finished")
+
+    tree_repo = RunTreeRepository(db)
+    return {"trees": await tree_repo.list_for_run(run.id)}
+
+
+@router.get("/{run_id}/trees/{tree_id}")
+async def get_run_tree_payload(
+    run_id: str,
+    tree_id: str,
+    current_user: Optional[User] = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Load full per-tree payload for a completed run."""
+    run_repo = RunRepository(db)
+    run = await _load_run_with_access(run_id, current_user=current_user, run_repo=run_repo)
+    if run.status != RunStatus.DONE:
+        raise HTTPException(409, "Run not finished")
+
+    tree_repo = RunTreeRepository(db)
+    payload = await tree_repo.get_tree_payload(run.id, tree_id)
+    if payload is None:
+        raise HTTPException(404, "Tree not found")
+    return payload

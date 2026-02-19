@@ -27,6 +27,14 @@
         "tree_stats": {
           "type": "array",
           "items": { "type": "string" }
+        },
+        "method_charts": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "other_outputs": {
+          "type": "array",
+          "items": { "type": "string" }
         }
       },
       "additionalProperties": {
@@ -38,6 +46,16 @@
       "type": "array",
       "description": "Optional per-tip annotations (currently unused, kept for schema compatibility).",
       "items": { "type": "object" }
+    },
+    "node_abundances": {
+      "type": ["object", "null"],
+      "description": "Optional node abundance mapping keyed by Newick node label.",
+      "additionalProperties": { "type": "number" }
+    },
+    "label_to_sequence_id": {
+      "type": ["object", "null"],
+      "description": "Optional mapping from tree labels to source sequence IDs.",
+      "additionalProperties": { "type": "string" }
     },
     "clones": {
       "type": "object",
