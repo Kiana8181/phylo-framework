@@ -506,6 +506,20 @@ export default function LineageSVG({
           <g>
             {layout.nodes.map((node) => {
               const hovered = hoveredNodeId === node.id;
+              const needle = highlightText?.trim();
+              const matchesHighlight = Boolean(
+                needle &&
+                  (node.title.toLowerCase().includes(needle.toLowerCase()) ||
+                    node.displayLabel.toLowerCase().includes(needle.toLowerCase()) ||
+                    node.label.toLowerCase().includes(needle.toLowerCase()))
+              );
+              const circleFill = matchesHighlight ? "#dc2626" : node.color;
+              const circleStroke = matchesHighlight
+                ? "#b91c1c"
+                : hovered
+                  ? "#0f172a"
+                  : "#111827";
+              const circleStrokeWidth = matchesHighlight ? 2.5 : hovered ? 2.6 : 1.1;
               return (
                 <g
                   key={node.id}
@@ -516,10 +530,10 @@ export default function LineageSVG({
                     cx={node.x}
                     cy={node.y}
                     r={node.radius}
-                    fill={node.color}
-                    stroke={hovered ? "#0f172a" : "#111827"}
-                    strokeWidth={hovered ? 2.6 : 1.1}
-                    opacity={hovered ? 1 : 0.95}
+                    fill={circleFill}
+                    stroke={circleStroke}
+                    strokeWidth={circleStrokeWidth}
+                    opacity={hovered || matchesHighlight ? 1 : 0.95}
                   >
                     <title>{node.title}</title>
                   </circle>
@@ -547,7 +561,7 @@ export default function LineageSVG({
                           highlightText ?? ""
                         ).map((seg, i) =>
                           seg.highlight ? (
-                            <tspan key={i} fill="var(--highlight-fill, #facc15)" fontWeight="bold">
+                            <tspan key={i} fill="#dc2626" fontWeight="bold">
                               {seg.text}
                             </tspan>
                           ) : (

@@ -264,6 +264,7 @@ function ComparisonColumn({
                   annotations={phyloAnnotations}
                   showLabels={showLabels}
                   displayIdField={displayIdField || undefined}
+                  highlightText={highlightText || undefined}
                 />
               )}
             </div>
@@ -629,6 +630,7 @@ function RunLineageBlock({
                 annotations={phyloAnnotations}
                 showLabels={showLabels}
                 displayIdField={displayIdField || undefined}
+                highlightText={highlightText || undefined}
               />
             )}
           </div>
