@@ -11,9 +11,12 @@ import { useRunResult, useRunStatus } from "@/features/runs/hooks";
 import { cleanNewick } from "@/lib/newick";
 import type { MethodInfo } from "@phylo/contracts";
 import Image from "next/image";
+import Link from "next/link";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
+import { GitCompare } from "lucide-react";
 
 function _figureToDataUrl(raw: unknown): string | null {
   const txt = String(raw ?? "").trim();
@@ -97,6 +100,11 @@ function DashboardPageContent() {
   const { data: status, isError: statusError, error: statusErr } = useRunStatus(runId ?? undefined);
   const resultEnabled = status?.status === "DONE" && !!runId;
   const { data: result } = useRunResult(runId ?? undefined, resultEnabled);
+  const { data: sameDatasetRuns } = useQuery({
+    queryKey: ["runSameDataset", runId],
+    queryFn: () => RunsApi.sameDataset(runId!),
+    enabled: !!runId && resultEnabled,
+  });
 
   const runInProgress = !!runId && status?.status !== "DONE" && status?.status !== "ERROR";
 
@@ -184,20 +192,41 @@ function DashboardPageContent() {
       {/* Results */}
       {result && (
         <section className="space-y-6">
-          <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center justify-between gap-4 flex-wrap">
             <h2 className="text-xl font-semibold">Results</h2>
-            {status?.status === "DONE" && (
-              <Button
-                variant="default"
-                onClick={() => {
-                  setRunId(null);
-                  setFiles([]);
-                  setSelected(null);
-                }}
-              >
-                Start another run
-              </Button>
-            )}
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:flex-wrap">
+              {status?.status === "DONE" && runId && (
+                <>
+                  <Link href={`/dashboard/comparison?baseRunId=${encodeURIComponent(runId)}`}>
+                    <Button variant="outline" size="sm" className="gap-1.5">
+                      <GitCompare className="h-4 w-4" />
+                      Compare to
+                    </Button>
+                  </Link>
+                  {sameDatasetRuns && sameDatasetRuns.length > 0 && (
+                    <span className="text-sm text-muted-foreground">
+                      {sameDatasetRuns.length} run{sameDatasetRuns.length !== 1 ? "s" : ""} on same dataset
+                      {sameDatasetRuns.length <= 5
+                        ? ` (${sameDatasetRuns.map((r) => r.method_id).join(", ")})`
+                        : ""}
+                      — add them in Comparison.
+                    </span>
+                  )}
+                </>
+              )}
+              {status?.status === "DONE" && (
+                <Button
+                  variant="default"
+                  onClick={() => {
+                    setRunId(null);
+                    setFiles([]);
+                    setSelected(null);
+                  }}
+                >
+                  Start another run
+                </Button>
+              )}
+            </div>
           </div>
           <ResultsSummary
             stats={result?.stats}

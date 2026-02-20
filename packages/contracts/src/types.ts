@@ -39,9 +39,11 @@ export type FilesListResponse = {
 };
 
 export type RunStatus = {
-  status: "PENDING" | "RUNNING" | "DONE" | "ERROR";
+  run_id?: string;
+  status: "PENDING" | "RUNNING" | "DONE" | "ERROR" | "QUEUED" | "CANCELLED";
   progress?: number;
   message?: string;
+  method_id?: string;
 };
 
 export type FigurePayload = {

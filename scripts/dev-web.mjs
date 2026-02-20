@@ -11,10 +11,15 @@ if (forwardedArgs.length > 0) {
   args.push("--", ...forwardedArgs);
 }
 
-const child = spawn(npmCmd, args, {
+const spawnOpts = {
   stdio: "inherit",
   env: process.env,
-});
+};
+// On Windows, spawning .cmd files requires shell (Node security patch CVE-2024-27980)
+if (process.platform === "win32") {
+  spawnOpts.shell = true;
+}
+const child = spawn(npmCmd, args, spawnOpts);
 
 const forwardSignal = (signal) => {
   if (!child.killed) child.kill(signal);

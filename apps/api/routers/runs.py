@@ -77,10 +77,16 @@ def _runtime_shared_root_container() -> Path:
     return root
 
 
-def _run_work_dir(run_id: UUID) -> Path:
+def _run_work_dir_sync(run_id: UUID) -> Path:
+    """Sync helper: create work dir and return path. Use via asyncio.to_thread to avoid blocking."""
     path = _runtime_shared_root_host() / "runs" / str(run_id) / "work" / uuid.uuid4().hex
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+async def _run_work_dir(run_id: UUID) -> Path:
+    """Create work dir for run; runs in thread to avoid blocking event loop."""
+    return await asyncio.to_thread(_run_work_dir_sync, run_id)
 
 
 def _to_container_path(host_path: Path) -> str:
@@ -119,12 +125,28 @@ def _resolve_storage_path_under_shared_mount(storage_path: str) -> Path | None:
     return None
 
 
+def _path_is_file(p: Path) -> bool:
+    """Sync helper for Path.is_file(); use via asyncio.to_thread to avoid blocking."""
+    return p.is_file()
+
+
+def _path_exists(p: Path) -> bool:
+    """Sync helper for Path.exists(); use via asyncio.to_thread to avoid blocking."""
+    return p.exists()
+
+
+def _write_bytes_to_path(path: Path, data: bytes) -> None:
+    """Sync helper for writing bytes to path (used in thread to avoid blocking)."""
+    path.write_bytes(data)
+
+
 async def stage_storage_path_to_workspace(storage_path: str, workspace: Path) -> Path:
     source = Path(storage_path)
     suffix = source.suffix.lower()
     staged = workspace / f"00_staged_input{suffix}"
     file_bytes = await storage.download(storage_path)
-    staged.write_bytes(file_bytes)
+    # Large writes would block the event loop; run in thread
+    await asyncio.to_thread(_write_bytes_to_path, staged, file_bytes)
     return staged
 
 
@@ -158,6 +180,7 @@ def _public_status(run, include_run_id: bool = False) -> dict:
         "status": run.status.value if hasattr(run.status, "value") else str(run.status),
         "progress": run.progress,
         "message": run.message,
+        "method_id": run.method_id,
     }
     raw_error = getattr(run, "error", None)
     if raw_error:
@@ -233,22 +256,72 @@ async def _progress_updater(
             break
 
 
+async def _pending_run_executor_loop() -> None:
+    """Periodically pick up PENDING runs that were never started (e.g. after server reload).
+    Runs every 15s and schedules execution for runs PENDING for more than 15s."""
+    from apps.api.database.base import AsyncSessionLocal
+
+    while True:
+        await asyncio.sleep(15)
+        try:
+            async with AsyncSessionLocal() as db:
+                run_repo = RunRepository(db)
+                file_repo = FileRepository(db)
+                stale = await run_repo.get_stale_pending_runs(age_seconds=15, limit=3)
+                for run in stale:
+                    file_path: Optional[str] = None
+                    if run.input_file_id:
+                        f = await file_repo.get_by_id(run.input_file_id)
+                        if f:
+                            file_path = f.storage_path
+                    if file_path is None:
+                        files = await file_repo.get_by_run(run.id)
+                        if files:
+                            file_path = files[0].storage_path
+                    params = run.params if isinstance(run.params, dict) else {}
+                    asyncio.create_task(_execute_method_async(run.id, params, file_path))
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            traceback.print_exc()
+
+
 async def _execute_method_async(
     run_id: UUID,
     params: dict,
     file_path: Optional[str] = None,
 ):
-    """Execute method in background (async version)."""
-    # Create new database session for background task
+    """Execute method in background. All blocking work runs in thread pool via asyncio.to_thread."""
     from apps.api.database.base import AsyncSessionLocal
-    
+
+    try:
+        await _execute_method_async_impl(run_id, params, file_path)
+    except Exception as e:
+        traceback.print_exc()
+        try:
+            async with AsyncSessionLocal() as db:
+                run_repo = RunRepository(db)
+                await run_repo.set_error(run_id, f"Run failed: {e!s}")
+                await db.commit()
+        except Exception:
+            pass
+
+
+async def _execute_method_async_impl(
+    run_id: UUID,
+    params: dict,
+    file_path: Optional[str],
+):
+    """Inner implementation; exceptions are caught by _execute_method_async."""
+    from apps.api.database.base import AsyncSessionLocal
+
     async with AsyncSessionLocal() as db:
         run_repo = RunRepository(db)
         run = await run_repo.get_by_id(run_id)
-        
+
         if not run:
             return
-        
+
         method_id = run.method_id
         base = method_service_url(method_id)
         
@@ -257,17 +330,22 @@ async def _execute_method_async(
             await run_repo.set_error(run_id, msg)
             await db.commit()
             return
-        
-        routes = get_service_routes(method_id) or {"run": "/run"}
-        url = f"{base.rstrip('/')}{routes.get('run', '/run')}"
-        
-        # Atomically claim this run execution once. If another worker already
-        # claimed RUNNING, exit to avoid concurrent writes for the same run_id.
+
+        # Claim run and set RUNNING immediately so the run is not stuck in PENDING
+        # (e.g. if get_service_routes or staging hangs later, UI still shows RUNNING).
         claimed = await run_repo.transition_to_running_once(run_id, f"Submitting to {method_id}")
         if not claimed:
             await db.rollback()
             return
         await db.commit()
+
+        # Contracts loader does sync file I/O; run in thread so event loop stays responsive
+        routes = await asyncio.to_thread(get_service_routes, method_id) or {"run": "/run"}
+        url = f"{base.rstrip('/')}{routes.get('run', '/run')}"
+
+        # Start progress updater immediately so status/progress update during staging and POST
+        stop_progress = asyncio.Event()
+        progress_task = asyncio.create_task(_progress_updater(run_id, stop_progress))
 
         # Stage files to the shared runtime mount whenever needed so method-services
         # always receive a container-visible filesystem path.
@@ -286,11 +364,13 @@ async def _execute_method_async(
                     native_ok = False
 
                 if native_ok:
-                    existing_shared = _resolve_storage_path_under_shared_mount(original_storage_path)
-                    if existing_shared is not None and existing_shared.is_file():
+                    existing_shared = await asyncio.to_thread(
+                        _resolve_storage_path_under_shared_mount, original_storage_path
+                    )
+                    if existing_shared is not None and await asyncio.to_thread(_path_is_file, existing_shared):
                         method_input_host_path = existing_shared
                     else:
-                        run_workspace = _run_work_dir(run_id)
+                        run_workspace = await _run_work_dir(run_id)
                         try:
                             method_input_host_path = await stage_storage_path_to_workspace(
                                 original_storage_path,
@@ -315,7 +395,7 @@ async def _execute_method_async(
                             await db.commit()
                             return
                 else:
-                    run_workspace = _run_work_dir(run_id)
+                    run_workspace = await _run_work_dir(run_id)
                     try:
                         staged_original = await stage_storage_path_to_workspace(
                             original_storage_path,
@@ -341,9 +421,11 @@ async def _execute_method_async(
                         return
 
                     try:
-                        prepared = prepare_input_for_method(
-                            method_id=method_id,  # type: ignore[arg-type]
-                            uploaded_path=staged_original,
+                        # Run sync preprocessing in a thread to avoid blocking the event loop
+                        prepared = await asyncio.to_thread(
+                            prepare_input_for_method,
+                            method_id,  # type: ignore[arg-type]
+                            staged_original,
                             params=params or {},
                             work_dir=run_workspace,
                         )
@@ -359,7 +441,12 @@ async def _execute_method_async(
                         await db.commit()
                         return
 
-                if method_input_host_path is None or not method_input_host_path.exists():
+                path_exists = (
+                    await asyncio.to_thread(_path_exists, method_input_host_path)
+                    if method_input_host_path is not None
+                    else False
+                )
+                if method_input_host_path is None or not path_exists:
                     structured = _structured_error_payload(
                         code="INVALID_FILE",
                         message="Prepared input file is missing on the API server.",
@@ -378,7 +465,7 @@ async def _execute_method_async(
                     return
 
                 try:
-                    file_path = _to_container_path(method_input_host_path)
+                    file_path = await asyncio.to_thread(_to_container_path, method_input_host_path)
                 except Exception as exc:
                     structured = _structured_error_payload(
                         code="INTERNAL_PATH_ERROR",
@@ -423,23 +510,10 @@ async def _execute_method_async(
                 "params": params or {},
             }
 
-            # Start progress updater task
-            stop_progress = asyncio.Event()
-            progress_task = asyncio.create_task(
-                _progress_updater(run_id, stop_progress)
-            )
-
             try:
                 # Use async httpx client
                 async with httpx.AsyncClient(timeout=HTTP_CLIENT_TIMEOUT, trust_env=False) as client:
                     response = await client.post(url, json=payload)
-
-                    # Stop progress updater
-                    stop_progress.set()
-                    try:
-                        await asyncio.wait_for(progress_task, timeout=1.0)
-                    except asyncio.TimeoutError:
-                        progress_task.cancel()
 
                     if response.status_code >= 400:
                         err_msg = None
@@ -455,7 +529,9 @@ async def _execute_method_async(
                         return
 
                     result = response.json()
-                    unified_result, tree_rows = assemble_unified_tree_result(method_id, result)
+                    unified_result, tree_rows = await asyncio.to_thread(
+                        assemble_unified_tree_result, method_id, result
+                    )
 
                     # Save unified result and per-tree payloads.
                     await run_repo.set_result(run_id, unified_result, RunStatus.DONE)
@@ -464,11 +540,6 @@ async def _execute_method_async(
                     await db.commit()
 
             except httpx.ConnectError as e:
-                stop_progress.set()
-                try:
-                    await asyncio.wait_for(progress_task, timeout=1.0)
-                except asyncio.TimeoutError:
-                    progress_task.cancel()
                 friendly = (
                     "Could not connect to the method service. "
                     "Make sure the service is running and METHOD_*_URL (e.g. METHOD_GCTREE_URL) is set correctly."
@@ -479,17 +550,19 @@ async def _execute_method_async(
                 )
                 await db.commit()
             except Exception as e:
-                stop_progress.set()
-                try:
-                    await asyncio.wait_for(progress_task, timeout=1.0)
-                except asyncio.TimeoutError:
-                    progress_task.cancel()
                 msg = str(e)
                 error_detail = f"{msg}\n{traceback.format_exc()}"
                 await run_repo.set_error(run_id, error_detail)
                 await db.commit()
         finally:
-            _cleanup_workspace(run_workspace, run_id)
+            stop_progress.set()
+            try:
+                await asyncio.wait_for(progress_task, timeout=2.0)
+            except asyncio.TimeoutError:
+                progress_task.cancel()
+            # Cleanup can be slow (rmtree); run in thread to avoid blocking event loop
+            if run_workspace is not None:
+                await asyncio.to_thread(_cleanup_workspace, run_workspace, run_id)
 
 
 def _run_summary(run) -> dict:
@@ -576,17 +649,8 @@ async def create_run(
                 },
             )
 
-    # Create run in database
-    run = await run_repo.create_run(
-        method_id=method,
-        params=p,
-        user_id=user_id,
-    )
-
-    file_path = None
-    file_record = None
-
-    # Use existing file by file_id (only when no new file uploaded)
+    # Resolve existing file when file_id is provided (so we can set input_file_id on run)
+    existing_file = None
     if file is None and file_id and file_id.strip() and user_id:
         try:
             existing_file_id = UUID(file_id.strip())
@@ -595,6 +659,19 @@ async def create_run(
         existing_file = await file_repo.get_by_id_and_user(existing_file_id, user_id)
         if not existing_file:
             raise HTTPException(404, "File not found or you do not have access to it.")
+
+    # Create run in database
+    run = await run_repo.create_run(
+        method_id=method,
+        params=p,
+        user_id=user_id,
+        input_file_id=existing_file.id if existing_file else None,
+    )
+
+    file_path = None
+    file_record = None
+
+    if existing_file:
         file_path = existing_file.storage_path
 
     # Handle new file upload (takes precedence over file_id)
@@ -649,11 +726,12 @@ async def create_run(
                 mime_type=file.content_type,
                 run_id=run.id,
             )
-            
+            await run_repo.update(run.id, input_file_id=file_record.id)
+
             # Update run with file path (for method service compatibility)
             # Method services expect file_path, so we'll pass storage_path
             file_path = storage_path_result
-            
+
             # Update run status
             await run_repo.update_progress(run.id, 5, f"File uploaded: {file.filename}")
             await db.commit()
@@ -662,10 +740,9 @@ async def create_run(
             await run_repo.set_error(run.id, f"Failed to upload file: {e}")
             raise HTTPException(500, f"Failed to save upload: {e}")
     
-    # Start background task
-    # Background task will create its own database session
+    # Run on main event loop; blocking ops (file I/O, contracts, preprocessing) use asyncio.to_thread
     background.add_task(_execute_method_async, run.id, p, file_path)
-    
+
     return {"run_id": str(run.id)}
 
 
@@ -688,6 +765,45 @@ async def get_current_run(
         return {"run_id": None, "status": None, "progress": None, "message": None}
 
     return _public_status(active, include_run_id=True)
+
+
+# Declare same-dataset before other /{run_id}/... routes so the path "same-dataset" is matched
+@router.get("/{run_id}/same-dataset")
+async def list_same_dataset_runs(
+    run_id: str,
+    current_user: Optional[User] = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """List DONE runs that used the same input file (dataset) as the given run."""
+    try:
+        run_repo = RunRepository(db)
+        file_repo = FileRepository(db)
+        run = await _load_run_with_access(run_id, current_user=current_user, run_repo=run_repo)
+        input_file_id = getattr(run, "input_file_id", None)
+        file_ids = []
+        if input_file_id is not None:
+            file_ids = [input_file_id]
+        else:
+            # Fallback: runs created before input_file_id may have a file linked via run_id (upload)
+            files = await file_repo.get_by_run(run.id)
+            file_ids = [f.id for f in files]
+        if not file_ids:
+            return []
+        user_id = current_user.id if current_user else None
+        is_admin = getattr(current_user, "is_admin", False) if current_user else False
+        same_runs = await run_repo.get_by_same_dataset_file_ids(
+            file_ids,
+            exclude_run_id=run.id,
+            current_user_id=user_id,
+            is_admin=is_admin,
+        )
+        return [_run_summary(r) for r in same_runs]
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Same-dataset lookup failed: {e!s}")
 
 
 @router.get("/{run_id}/status")

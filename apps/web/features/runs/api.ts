@@ -72,4 +72,11 @@ export const RunsApi = {
       url: API_ROUTES.runTree(id, treeId),
     });
   },
+
+  async sameDataset(runId: string): Promise<RunSummary[]> {
+    return serviceHandler<RunSummary[]>({
+      method: Method.Get,
+      url: API_ROUTES.runSameDataset(runId),
+    });
+  },
 };

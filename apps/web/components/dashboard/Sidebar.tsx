@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { FileStack, FolderOpen, Play, PanelLeftClose, PanelLeft } from "lucide-react";
+import { FileStack, FolderOpen, GitCompare, Play, PanelLeftClose, PanelLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useEffect, useState } from "react";
 
@@ -13,6 +13,7 @@ const navItems = [
   { href: "/dashboard", label: "Run model", icon: Play },
   { href: "/dashboard/history", label: "Run history", icon: FileStack },
   { href: "/dashboard/files", label: "File management", icon: FolderOpen },
+  { href: "/dashboard/comparison", label: "Comparison", icon: GitCompare },
 ];
 
 export default function Sidebar() {

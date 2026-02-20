@@ -10,8 +10,9 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { ExternalLink, Loader2, ChevronLeft, ChevronRight } from "lucide-react";
+import { ExternalLink, Loader2, ChevronLeft, ChevronRight, Copy, GitCompare } from "lucide-react";
 import { useState } from "react";
+import { notify } from "@/lib/notify";
 
 const PAGE_SIZE = 10;
 
@@ -99,8 +100,27 @@ export default function RunHistoryPage() {
                   <tbody>
                     {runs.map((run) => (
                       <tr key={run.id} className="border-b last:border-0">
-                        <td className="py-3 px-2 font-mono text-xs truncate max-w-[8rem]">
-                          {run.id}
+                        <td className="py-3 px-2 font-mono text-xs">
+                          <div className="flex items-center gap-1 max-w-[14rem]">
+                            <span className="truncate" title={run.id}>
+                              {run.id}
+                            </span>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 shrink-0"
+                              onClick={() => {
+                                navigator.clipboard.writeText(run.id).then(
+                                  () => notify.success("Run ID copied"),
+                                  () => notify.error("Copy failed")
+                                );
+                              }}
+                              title="Copy Run ID"
+                              aria-label="Copy Run ID"
+                            >
+                              <Copy className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
                         </td>
                         <td className="py-3 px-2">{run.method_id}</td>
                         <td className="py-3 px-2">
@@ -115,12 +135,22 @@ export default function RunHistoryPage() {
                           {formatDate(run.created_at)}
                         </td>
                         <td className="py-3 px-2 text-right">
-                          <Link href={`/dashboard?runId=${run.id}`}>
-                            <Button variant="ghost" size="sm" className="gap-1">
-                              View details
-                              <ExternalLink className="h-3 w-3" />
-                            </Button>
-                          </Link>
+                          <div className="flex items-center justify-end gap-1">
+                            <Link href={`/dashboard?runId=${run.id}`}>
+                              <Button variant="ghost" size="sm" className="gap-1">
+                                View details
+                                <ExternalLink className="h-3 w-3" />
+                              </Button>
+                            </Link>
+                            {run.status === "DONE" && (
+                              <Link href={`/dashboard/comparison?baseRunId=${encodeURIComponent(run.id)}`}>
+                                <Button variant="ghost" size="sm" className="gap-1" title="Compare with other runs on same dataset">
+                                  <GitCompare className="h-3 w-3" />
+                                  Compare
+                                </Button>
+                              </Link>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     ))}
