@@ -6,14 +6,17 @@ from sqlalchemy.pool import NullPool
 
 from apps.api.config import DATABASE_URL
 
-# Create async engine
-# Using NullPool for better async performance in some cases
-# Set echo=True for SQL query logging in development
+# Create async engine.
+# server_settings timezone=UTC forces PostgreSQL to use UTC so that timestamptz
+# values are returned with a safe timezone name. On Windows, other timezone names
+# (e.g. numeric like <+00>-00) can cause OSError [Errno 22] Invalid argument
+# when Python's zoneinfo/datetime code tries to resolve the timezone.
 engine = create_async_engine(
     DATABASE_URL,
-    echo=False,  # Set to True for SQL query logging
-    pool_pre_ping=True,  # Verify connections before using
-    poolclass=NullPool,  # Better for async operations
+    echo=False,
+    pool_pre_ping=True,
+    poolclass=NullPool,
+    connect_args={"server_settings": {"timezone": "UTC"}},
 )
 
 # Create async session factory

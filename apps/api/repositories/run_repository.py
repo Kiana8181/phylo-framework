@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import Optional, List
 from uuid import UUID
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
-from sqlalchemy import case, select, update
+from sqlalchemy import case, exists, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.database.models import Run, RunStatus, ACTIVE_RUN_STATUSES
@@ -22,12 +22,14 @@ class RunRepository(BaseRepository[Run]):
         method_id: str,
         params: dict,
         user_id: Optional[UUID] = None,
+        input_file_id: Optional[UUID] = None,
     ) -> Run:
         """Create a new run."""
         return await self.create(
             method_id=method_id,
             params=params,
             user_id=user_id,
+            input_file_id=input_file_id,
             status=RunStatus.PENDING,
             progress=0,
             message="Queued",
@@ -56,6 +58,22 @@ class RunRepository(BaseRepository[Run]):
             .where(Run.user_id == user_id)
             .order_by(Run.created_at.desc())
             .offset(skip)
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    async def get_stale_pending_runs(
+        self,
+        age_seconds: int = 20,
+        limit: int = 5,
+    ) -> List[Run]:
+        """Return PENDING runs older than age_seconds (e.g. missed by background task after reload)."""
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=age_seconds)
+        result = await self.session.execute(
+            select(Run)
+            .where(Run.status == RunStatus.PENDING)
+            .where(Run.created_at < cutoff)
+            .order_by(Run.created_at.asc())
             .limit(limit)
         )
         return list(result.scalars().all())
@@ -213,4 +231,77 @@ class RunRepository(BaseRepository[Run]):
             .where(Run.expires_at.isnot(None))
             .where(Run.expires_at < datetime.utcnow())
         )
+        return list(result.scalars().all())
+
+    async def get_by_same_input_file(
+        self,
+        input_file_id: UUID,
+        exclude_run_id: UUID,
+        current_user_id: Optional[UUID],
+        is_admin: bool = False,
+        limit: int = 100,
+    ) -> List[Run]:
+        """Get DONE runs that used the same input file, excluding one run, visible to user."""
+        return await self.get_by_input_file_ids(
+            [input_file_id],
+            exclude_run_id=exclude_run_id,
+            current_user_id=current_user_id,
+            is_admin=is_admin,
+            limit=limit,
+        )
+
+    async def get_by_input_file_ids(
+        self,
+        input_file_ids: List[UUID],
+        exclude_run_id: UUID,
+        current_user_id: Optional[UUID],
+        is_admin: bool = False,
+        limit: int = 100,
+    ) -> List[Run]:
+        """Get DONE runs that used any of the given input files, excluding one run, visible to user."""
+        if not input_file_ids:
+            return []
+        stmt = (
+            select(Run)
+            .where(Run.input_file_id.in_(input_file_ids))
+            .where(Run.id != exclude_run_id)
+            .where(Run.status == RunStatus.DONE)
+            .order_by(Run.created_at.desc())
+            .limit(limit)
+        )
+        if not is_admin and current_user_id is not None:
+            stmt = stmt.where(or_(Run.user_id.is_(None), Run.user_id == current_user_id))
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_by_same_dataset_file_ids(
+        self,
+        file_ids: List[UUID],
+        exclude_run_id: UUID,
+        current_user_id: Optional[UUID],
+        is_admin: bool = False,
+        limit: int = 100,
+    ) -> List[Run]:
+        """Get DONE runs that share the same dataset: either input_file_id in file_ids, or a file (run_id) in file_ids.
+        Two-way: run A (file by run_id) and run B (input_file_id) both see each other."""
+        if not file_ids:
+            return []
+        from apps.api.database.models import File
+
+        # Runs that have input_file_id in file_ids OR have a file (File.run_id = Run.id) whose id is in file_ids
+        has_input = Run.input_file_id.in_(file_ids)
+        has_file_for_run = exists(
+            select(1).where(File.run_id == Run.id, File.id.in_(file_ids))
+        )
+        stmt = (
+            select(Run)
+            .where(or_(has_input, has_file_for_run))
+            .where(Run.id != exclude_run_id)
+            .where(Run.status == RunStatus.DONE)
+            .order_by(Run.created_at.desc())
+            .limit(limit)
+        )
+        if not is_admin and current_user_id is not None:
+            stmt = stmt.where(or_(Run.user_id.is_(None), Run.user_id == current_user_id))
+        result = await self.session.execute(stmt)
         return list(result.scalars().all())

@@ -165,6 +165,26 @@ function truncateLabel(label: string, maxChars: number): string {
   return `${label.slice(0, maxChars - 1).trimEnd()}…`;
 }
 
+function splitByHighlight(text: string, highlight: string): Array<{ text: string; highlight: boolean }> {
+  if (!highlight || !highlight.trim()) return [{ text, highlight: false }];
+  const parts: Array<{ text: string; highlight: boolean }> = [];
+  const needle = highlight.trim();
+  const lower = text.toLowerCase();
+  const needleLower = needle.toLowerCase();
+  let start = 0;
+  while (true) {
+    const i = lower.indexOf(needleLower, start);
+    if (i === -1) {
+      if (start < text.length) parts.push({ text: text.slice(start), highlight: false });
+      break;
+    }
+    if (i > start) parts.push({ text: text.slice(start, i), highlight: false });
+    parts.push({ text: text.slice(i, i + needle.length), highlight: true });
+    start = i + needle.length;
+  }
+  return parts.length ? parts : [{ text, highlight: false }];
+}
+
 function buildLayout(
   lineagePlot: LineagePlot,
   nodeAttributes: Record<string, NodeAttrs> | undefined,
@@ -355,6 +375,7 @@ export default function LineageSVG({
   showLabels = true,
   filename = "tree",
   newickText,
+  highlightText,
 }: {
   lineagePlot: LineagePlot;
   nodeAttributes?: Record<string, NodeAttrs>;
@@ -362,6 +383,7 @@ export default function LineageSVG({
   showLabels?: boolean;
   filename?: string;
   newickText?: string | null;
+  highlightText?: string | null;
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
@@ -520,7 +542,18 @@ export default function LineageSVG({
                         fontSize={LABEL_FONT_SIZE}
                         fill="currentColor"
                       >
-                        {truncateLabel(node.displayLabel, layout.maxLabelChars)}
+                        {splitByHighlight(
+                          truncateLabel(node.displayLabel, layout.maxLabelChars),
+                          highlightText ?? ""
+                        ).map((seg, i) =>
+                          seg.highlight ? (
+                            <tspan key={i} fill="var(--highlight-fill, #facc15)" fontWeight="bold">
+                              {seg.text}
+                            </tspan>
+                          ) : (
+                            <tspan key={i}>{seg.text}</tspan>
+                          )
+                        )}
                         <title>{node.title}</title>
                       </text>
                     </g>

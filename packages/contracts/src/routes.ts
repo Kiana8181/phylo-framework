@@ -12,6 +12,8 @@ export const API_ROUTES = {
   runTrees: (runId: string) => `/runs/${encodeURIComponent(runId)}/trees`,
   runTree: (runId: string, treeId: string) =>
     `/runs/${encodeURIComponent(runId)}/trees/${encodeURIComponent(treeId)}`,
+  runSameDataset: (runId: string) =>
+    `/runs/${encodeURIComponent(runId)}/same-dataset`,
   filesList: () => `/files`,
   filesDelete: (id: string) => `/files/${encodeURIComponent(id)}`,
   authLogin: () => `/auth/login`,
