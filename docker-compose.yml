@@ -29,8 +29,8 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-phylo_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-phylo_pass}
       POSTGRES_DB: ${POSTGRES_DB:-phylo_db}
-    ports:
-      - "${POSTGRES_PORT:-5440}:5432"
+    # ports:
+    #   - "${POSTGRES_PORT:-5440}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -39,6 +39,8 @@ services:
       timeout: 5s
       retries: 5
     profiles: ["dev", "prod"]
+    networks:
+      - phylo_framework
 
   web:
     build:
@@ -66,6 +68,7 @@ services:
     profiles: ["dev"]
 
   web-prod:
+    container_name: phylo-web-prod
     build:
       context: .
       dockerfile: apps/web/Dockerfile
@@ -77,9 +80,12 @@ services:
     environment:
       NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
     depends_on: [api-prod]
-    ports:
-      - "${WEB_PORT:-3000}:3000"
+    # ports:
+    #   - "${WEB_PORT:-3000}:3000"
     profiles: ["prod"]
+    networks:
+      - phylo_framework
+      - proxy_net
 
   api:
     build:
@@ -115,6 +121,7 @@ services:
     profiles: ["dev"]
 
   api-prod:
+    container_name: phylo-api-prod
     build:
       context: .
       dockerfile: apps/api/Dockerfile
@@ -130,12 +137,12 @@ services:
         condition: service_started
       gctree:
         condition: service_started
-      brepphylo:
-        condition: service_started
+      # brepphylo:
+      #   condition: service_started
       clonaltree:
         condition: service_started
-    ports:
-      - "${API_PORT:-8000}:8000"
+    # ports:
+    #   - "${API_PORT:-8000}:8000"
     volumes:
       - type: bind
         source: ./packages/contracts
@@ -146,8 +153,12 @@ services:
         target: /runtime/storage
     command: uvicorn apps.api.main:app --host 0.0.0.0 --port 8000
     profiles: ["prod"]
+    networks:
+      - phylo_framework
+      - proxy_net
 
   dowser:
+    container_name: phylo-dowser
     platform: ${IMMCANTATION_PLATFORM:-linux/amd64}
     build:
       context: ./services/dowser
@@ -169,12 +180,15 @@ services:
         source: ${STORAGE_LOCAL_PATH:-runtime/storage}
         target: /runtime/storage
         read_only: true
-    expose:
-      - "${METHOD_DOWSER_CONTAINER_PORT:-8001}"
+    # expose:
+    #   - "${METHOD_DOWSER_CONTAINER_PORT:-8001}"
     command: ["R", "-q", "-e", "port <- as.integer(Sys.getenv('METHOD_DOWSER_CONTAINER_PORT', '8001')); pr <- plumber::plumb('/srv/plumber.R'); pr$$run(host='0.0.0.0', port=port)"]
     profiles: ["dev", "prod"]
+    networks:
+      - phylo_framework
 
   gctree:
+    container_name: phylo-gctree
     build:
       context: ./services/gctree
       dockerfile: Dockerfile
@@ -192,12 +206,15 @@ services:
         source: ${STORAGE_LOCAL_PATH:-runtime/storage}
         target: /runtime/storage
         read_only: true
-    expose:
-      - "${METHOD_GCTREE_CONTAINER_PORT:-8002}"
+    # expose:
+    #   - "${METHOD_GCTREE_CONTAINER_PORT:-8002}"
     command: sh -lc "uvicorn app:app --host 0.0.0.0 --port ${METHOD_GCTREE_CONTAINER_PORT:-8002}"
     profiles: ["dev", "prod"]
+    networks:
+      - phylo_framework
 
   brepphylo:
+    container_name: phylo-brepphylo
     platform: ${IMMCANTATION_PLATFORM:-linux/amd64}
     build:
       context: ./services/brepphylo
@@ -220,12 +237,15 @@ services:
         source: ${STORAGE_LOCAL_PATH:-runtime/storage}
         target: /runtime/storage
         read_only: true
-    expose:
-      - "${METHOD_BREPPHYLO_CONTAINER_PORT:-8003}"
+    # expose:
+    #   - "${METHOD_BREPPHYLO_CONTAINER_PORT:-8003}"
     command: ["R", "-q", "-e", "port <- as.integer(Sys.getenv('METHOD_BREPPHYLO_CONTAINER_PORT', '8003')); pr <- plumber::plumb('/srv/plumber.R'); pr$$run(host='0.0.0.0', port=port)"]
     profiles: ["dev", "prod"]
+    networks:
+      - phylo_framework
 
   clonaltree:
+    container_name: phylo-clonaltree
     build:
       context: ./services/clonaltree
       dockerfile: Dockerfile
@@ -243,10 +263,18 @@ services:
         source: ${STORAGE_LOCAL_PATH:-runtime/storage}
         target: /runtime/storage
         read_only: true
-    expose:
-      - "${METHOD_CLONALTREE_CONTAINER_PORT:-8004}"
+    # expose:
+    #   - "${METHOD_CLONALTREE_CONTAINER_PORT:-8004}"
     command: sh -lc "uvicorn app:app --host 0.0.0.0 --port ${METHOD_CLONALTREE_CONTAINER_PORT:-8004}"
     profiles: ["dev", "prod"]
+    networks:
+      - phylo_framework
 
 volumes:
   postgres_data:
+
+networks:
+  proxy_net:
+    external: true
+  phylo_framework:
+    external: true
