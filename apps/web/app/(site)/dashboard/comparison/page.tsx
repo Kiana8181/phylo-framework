@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -20,7 +20,9 @@ import { Switch } from "@/components/ui/switch";
 import { RunsApi } from "@/features/runs/api";
 import { useRunStatus } from "@/features/runs/hooks";
 import type { RunSummary, LineagePlot } from "@phylo/contracts";
-import { Loader2, Search, Plus, X } from "lucide-react";
+import { Loader2, Maximize2, Search, Plus, X } from "lucide-react";
+import CompareExpandDialog, { type CompareExpandTreeRef } from "@/components/comparison/CompareExpandDialog";
+import RunAutocomplete from "@/components/comparison/RunAutocomplete";
 
 type RunTreeListItem = {
   treeId: string;
@@ -59,6 +61,34 @@ type ColumnRun = {
   status: string;
   trees: RunTreeListItem[];
 };
+
+type ComparisonPanelState = {
+  panelId: string;
+  runId: string;
+  treeIndex: number;
+};
+
+type ErrorWithResponseStatus = {
+  message?: string;
+  detail?: string;
+  response?: {
+    status?: number;
+  };
+};
+
+function toErrorWithResponseStatus(value: unknown): ErrorWithResponseStatus {
+  if (!value || typeof value !== "object") return {};
+  const maybe = value as Record<string, unknown>;
+  const response =
+    maybe.response && typeof maybe.response === "object"
+      ? (maybe.response as Record<string, unknown>)
+      : undefined;
+  return {
+    message: typeof maybe.message === "string" ? maybe.message : undefined,
+    detail: typeof maybe.detail === "string" ? maybe.detail : undefined,
+    response: response ? { status: typeof response.status === "number" ? response.status : undefined } : undefined,
+  };
+}
 
 function displayFieldsFromAttrs(nodeAttributes: Record<string, Record<string, unknown>> | undefined): string[] {
   if (!nodeAttributes) return [];
@@ -287,11 +317,13 @@ export default function ComparisonPage() {
 
   const [baseRunIdInput, setBaseRunIdInput] = useState("");
   const [baseRunId, setBaseRunId] = useState<string | null>(null);
-  const [comparisonRunIds, setComparisonRunIds] = useState<string[]>([]);
-  const [treeIndex, setTreeIndex] = useState(0);
+  const [comparisonPanels, setComparisonPanels] = useState<ComparisonPanelState[]>([]);
+  const [baseTreeIndex, setBaseTreeIndex] = useState(0);
   const [highlightSequence, setHighlightSequence] = useState("");
   const [displayIdField, setDisplayIdField] = useState("sequence_id");
   const [showLabels, setShowLabels] = useState(true);
+  const [expandOpen, setExpandOpen] = useState(false);
+  const nextPanelIdRef = useRef(1);
 
   useEffect(() => {
     if (baseFromUrl && baseFromUrl.trim()) {
@@ -305,62 +337,123 @@ export default function ComparisonPage() {
   const { data: baseTrees, isLoading: baseTreesLoading } = useRunTrees(baseRunId, baseDone);
   const { data: sameDatasetList } = useSameDataset(baseRunId, baseDone);
 
-  const baseRun: ColumnRun | null =
-    baseRunId && baseStatus && baseTrees?.trees
-      ? {
-          runId: baseRunId,
-          methodId: baseStatus.method_id ?? "—",
-          status: baseStatus.status ?? "—",
-          trees: baseTrees.trees,
-        }
-      : null;
+  const baseRun = useMemo<ColumnRun | null>(() => {
+    if (!baseRunId || !baseStatus || !baseTrees?.trees) return null;
+    return {
+      runId: baseRunId,
+      methodId: baseStatus.method_id ?? "—",
+      status: baseStatus.status ?? "—",
+      trees: baseTrees.trees,
+    };
+  }, [baseRunId, baseStatus, baseTrees]);
 
   const maxTrees = baseRun?.trees?.length ?? 0;
   useEffect(() => {
-    if (treeIndex >= maxTrees && maxTrees > 0) setTreeIndex(maxTrees - 1);
-  }, [treeIndex, maxTrees]);
+    setBaseTreeIndex((prev) => {
+      if (maxTrees <= 0) return 0;
+      return prev >= maxTrees ? maxTrees - 1 : prev;
+    });
+  }, [maxTrees]);
+
+  // Stable IDs isolate each comparison panel's run/tree state.
+  const createPanelId = useCallback((): string => {
+    const nextId = nextPanelIdRef.current;
+    nextPanelIdRef.current += 1;
+    return `comparison-panel-${nextId}`;
+  }, []);
 
   const loadBaseRun = useCallback(() => {
     const id = baseRunIdInput.trim();
     if (id) {
       setBaseRunId(id);
-      setComparisonRunIds([]);
-      setTreeIndex(0);
+      setComparisonPanels([]);
+      setBaseTreeIndex(0);
+      setExpandOpen(false);
     }
   }, [baseRunIdInput]);
 
   const addComparison = useCallback(() => {
-    setComparisonRunIds((prev) => [...prev, ""]);
+    setComparisonPanels((prev) => [
+      ...prev,
+      {
+        panelId: createPanelId(),
+        runId: "",
+        treeIndex: 0,
+      },
+    ]);
+  }, [createPanelId]);
+
+  const setComparisonRun = useCallback((panelId: string, runId: string | null) => {
+    setComparisonPanels((prev) =>
+      prev.map((panel) =>
+        panel.panelId === panelId
+          ? {
+              ...panel,
+              runId: runId ?? "",
+              treeIndex: 0,
+            }
+          : panel,
+      ),
+    );
   }, []);
 
-  const setComparisonAt = useCallback((index: number, runId: string) => {
-    setComparisonRunIds((prev) => {
-      const next = [...prev];
-      next[index] = runId;
-      return next;
+  const setComparisonTreeIndex = useCallback((panelId: string, nextTreeIndex: number) => {
+    setComparisonPanels((prev) =>
+      prev.map((panel) => (panel.panelId === panelId ? { ...panel, treeIndex: nextTreeIndex } : panel)),
+    );
+  }, []);
+
+  const removeComparisonPanel = useCallback((panelId: string) => {
+    setComparisonPanels((prev) => prev.filter((panel) => panel.panelId !== panelId));
+  }, []);
+
+  const expandTrees = useMemo<CompareExpandTreeRef[]>(() => {
+    const refs: CompareExpandTreeRef[] = [];
+    if (baseRun) {
+      refs.push({
+        panelId: "base",
+        title: "Base",
+        runId: baseRun.runId,
+        treeIndex: baseTreeIndex,
+      });
+    }
+    comparisonPanels.forEach((panel, index) => {
+      if (!panel.runId) return;
+      refs.push({
+        panelId: panel.panelId,
+        title: `Comparison ${index + 1}`,
+        runId: panel.runId,
+        treeIndex: panel.treeIndex,
+      });
     });
-    setTreeIndex(0);
-  }, []);
+    return refs;
+  }, [baseRun, baseTreeIndex, comparisonPanels]);
 
-  const removeComparisonAt = useCallback((index: number) => {
-    setComparisonRunIds((prev) => prev.filter((_, i) => i !== index));
-  }, []);
-
+  const selectedComparisonIds = comparisonPanels
+    .map((panel) => panel.runId.trim())
+    .filter((runId): runId is string => !!runId);
   const sameDatasetOptions = sameDatasetList ?? [];
-  const selectedComparisonIds = comparisonRunIds.filter(Boolean);
   const availableForSelect = sameDatasetOptions.filter(
-    (r) => r.id !== baseRunId && !selectedComparisonIds.includes(r.id)
+    (r) => r.id !== baseRunId && !selectedComparisonIds.includes(r.id),
   );
 
+  useEffect(() => {
+    if (!expandOpen) return;
+    if (expandTrees.length === 0) {
+      setExpandOpen(false);
+    }
+  }, [expandOpen, expandTrees.length]);
+
+  const baseStatusErrorLike = toErrorWithResponseStatus(baseStatusErr);
   const baseStatusErrorMessage =
     baseStatusError && baseStatusErr
       ? (typeof baseStatusErr === "string"
           ? baseStatusErr
-          : (baseStatusErr as any)?.message ?? (baseStatusErr as any)?.detail ?? "Failed to load run")
+          : baseStatusErrorLike.message ?? baseStatusErrorLike.detail ?? "Failed to load run")
       : null;
   const is404 =
     baseStatusError &&
-    ((baseStatusErr as any)?.response?.status === 404 ||
+    (baseStatusErrorLike.response?.status === 404 ||
       String(baseStatusErrorMessage ?? "").toLowerCase().includes("not found"));
 
   return (
@@ -416,7 +509,7 @@ export default function ComparisonPage() {
               variant="outline"
               size="sm"
               onClick={addComparison}
-              disabled={availableForSelect.length === 0 && comparisonRunIds.every((id) => !id)}
+              disabled={availableForSelect.length === 0 && comparisonPanels.every((panel) => !panel.runId)}
               className="gap-1.5"
             >
               <Plus className="h-4 w-4" />
@@ -439,21 +532,34 @@ export default function ComparisonPage() {
 
       {/* Side-by-side: Base | Comparison 1 | Comparison 2 | … */}
       <section className="space-y-3">
-        <h2 className="text-lg font-medium">Side-by-side comparison</h2>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-lg font-medium">Side-by-side comparison</h2>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="gap-1.5"
+            onClick={() => setExpandOpen(true)}
+            disabled={expandTrees.length === 0}
+          >
+            <Maximize2 className="h-4 w-4" />
+            Expand
+          </Button>
+        </div>
         <p className="text-sm text-muted-foreground">
-          Base and selected runs use the same tree index. Choose a run in each comparison slot to see lineage views next to each other.
+          Each panel keeps its own tree selection. Choose a run in each comparison slot to view trees side-by-side.
         </p>
         <div
           className="grid gap-4 overflow-x-auto pb-2"
           style={{
-            gridTemplateColumns: `repeat(${Math.max(1, 1 + comparisonRunIds.length)}, minmax(280px, 1fr))`,
+            gridTemplateColumns: `repeat(${Math.max(1, 1 + comparisonPanels.length)}, minmax(280px, 1fr))`,
           }}
         >
           <ComparisonColumn
             title="Base"
             run={baseRun}
-            treeIndex={treeIndex}
-            onTreeIndexChange={setTreeIndex}
+            treeIndex={baseTreeIndex}
+            onTreeIndexChange={setBaseTreeIndex}
             highlightText={highlightSequence}
             displayIdField={displayIdField}
             onDisplayIdFieldChange={setDisplayIdField}
@@ -471,17 +577,19 @@ export default function ComparisonPage() {
               </p>
             }
           />
-          {comparisonRunIds.map((runId, index) => (
+          {comparisonPanels.map((panel, index) => (
             <ComparisonSlot
-              key={index}
+              key={panel.panelId}
               index={index}
-              runId={runId}
+              runId={panel.runId}
               sameDatasetList={sameDatasetList ?? []}
-              selectedIds={[baseRunId, ...comparisonRunIds].filter(Boolean) as string[]}
-              onSelect={(id) => setComparisonAt(index, id)}
-              onRemove={() => removeComparisonAt(index)}
-              treeIndex={treeIndex}
-              onTreeIndexChange={setTreeIndex}
+              selectedIds={[baseRunId, ...comparisonPanels.map((candidate) => candidate.runId)].filter(
+                (id): id is string => !!id,
+              )}
+              onSelect={(id) => setComparisonRun(panel.panelId, id)}
+              onRemove={() => removeComparisonPanel(panel.panelId)}
+              treeIndex={panel.treeIndex}
+              onTreeIndexChange={(nextTreeIndex) => setComparisonTreeIndex(panel.panelId, nextTreeIndex)}
               highlightText={highlightSequence}
               displayIdField={displayIdField}
               onDisplayIdFieldChange={setDisplayIdField}
@@ -491,6 +599,15 @@ export default function ComparisonPage() {
           ))}
         </div>
       </section>
+
+      <CompareExpandDialog
+        open={expandOpen}
+        onOpenChange={setExpandOpen}
+        trees={expandTrees}
+        highlightText={highlightSequence}
+        displayIdField={displayIdField}
+        showLabels={showLabels}
+      />
     </main>
   );
 }
@@ -665,7 +782,7 @@ function ComparisonSlot({
   runId: string;
   sameDatasetList: RunSummary[];
   selectedIds: string[];
-  onSelect: (id: string) => void;
+  onSelect: (id: string | null) => void;
   onRemove: () => void;
   treeIndex: number;
   onTreeIndexChange: (i: number) => void;
@@ -691,6 +808,16 @@ function ComparisonSlot({
 
   const options = sameDatasetList.filter((r) => !selectedIds.includes(r.id) || r.id === runId);
 
+  const runTreeCount = run?.trees.length ?? 0;
+  const runIdentity = run?.runId ?? "";
+
+  useEffect(() => {
+    if (!runTreeCount) return;
+    if (treeIndex >= runTreeCount) {
+      onTreeIndexChange(runTreeCount - 1);
+    }
+  }, [onTreeIndexChange, runIdentity, runTreeCount, treeIndex]);
+
   return (
     <Card className="min-w-[280px] w-full flex flex-col">
       <CardHeader className="pb-2 flex flex-row items-start justify-between gap-2">
@@ -702,19 +829,12 @@ function ComparisonSlot({
       <CardContent className="space-y-3">
         <div className="space-y-1.5">
           <Label>Same dataset run</Label>
-          <Select value={runId || "none"} onValueChange={(v) => onSelect(v === "none" ? "" : v)}>
-            <SelectTrigger className="w-full">
-              <SelectValue placeholder="Select run…" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="none">Select run…</SelectItem>
-              {options.map((r) => (
-                <SelectItem key={r.id} value={r.id}>
-                  {r.method_id} · {r.id.slice(0, 8)}…
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <RunAutocomplete
+            value={runId || null}
+            onChange={onSelect}
+            options={options.map((r) => ({ id: r.id, method_id: r.method_id }))}
+            placeholder="Select run…"
+          />
         </div>
         {run ? (
           <RunLineageBlock

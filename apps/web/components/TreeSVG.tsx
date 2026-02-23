@@ -24,6 +24,8 @@ type Props = {
 
 type LNode = NewickNode & { parent?: LNode; x?: number; y?: number };
 
+const TREE_VIEWPORT_HEIGHT = 520;
+
 /** ---- Helpers ---- */
 
 function sanitizeNewick(s: string): string {
@@ -366,14 +368,19 @@ export default function TreeSVG({
   }
 
   return (
-    <div className="w-full overflow-auto">
-      <svg
-        ref={svgRef}
-        width={width}
-        height={computedHeight}
-        className="rounded border bg-background text-foreground"
-        role="img"
+    <div className="space-y-3">
+      <div
+        className="w-full overflow-auto rounded border"
+        style={{ height: TREE_VIEWPORT_HEIGHT, maxHeight: TREE_VIEWPORT_HEIGHT }}
       >
+        <svg
+          ref={svgRef}
+          width={width}
+          height={computedHeight}
+          data-tree-zoom-target="true"
+          className="block bg-background text-foreground"
+          role="img"
+        >
         {/* branches */}
         <g stroke="currentColor" strokeWidth={strokeWidth} vectorEffect="non-scaling-stroke">
           {layout.edges.map((e, i) => (
@@ -466,7 +473,8 @@ export default function TreeSVG({
             })}
           </g>
         )}
-      </svg>
+        </svg>
+      </div>
 
       <div className="mt-3 flex flex-wrap gap-2">
         <button onClick={downloadPNG} className="rounded border px-3 py-1 text-sm">
