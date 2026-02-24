@@ -161,9 +161,9 @@ export default function RunHistoryPage() {
                               </Link>
                               {run.status === "DONE" && (
                                 <Link href={`/dashboard/comparison?baseRunId=${encodeURIComponent(run.id)}`}>
-                                  <Button variant="ghost" size="sm" className="gap-1" title="Compare with other runs on same dataset">
+                                  <Button variant="ghost" size="sm" className="gap-1" title="Open Sequence Trace with other runs on the same dataset">
                                     <GitCompare className="h-3 w-3" />
-                                    Compare
+                                    Sequence Trace
                                   </Button>
                                 </Link>
                               )}

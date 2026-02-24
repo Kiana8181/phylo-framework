@@ -359,7 +359,7 @@ function DashboardPageContent() {
                 <Link href={`/dashboard/comparison?baseRunId=${encodeURIComponent(runId)}`}>
                   <Button variant="outline" size="sm" className="gap-1.5">
                     <GitCompare className="h-4 w-4" />
-                    Compare to
+                    Sequence Trace
                   </Button>
                 </Link>
                 <Button variant="default" size="sm" onClick={resetToCreateMode}>

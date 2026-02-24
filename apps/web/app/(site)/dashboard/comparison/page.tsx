@@ -17,6 +17,7 @@ import {
 import LineageSVG from "@/components/LineageSVG";
 import TreeSVG from "@/components/TreeSVG";
 import { Switch } from "@/components/ui/switch";
+import SequenceTraceInfoIcon from "@/components/sequence-trace/SequenceTraceInfoIcon";
 import { RunsApi } from "@/features/runs/api";
 import { useRunStatus } from "@/features/runs/hooks";
 import { useContractSpec, useMethods } from "@/features/methods/hooks";
@@ -472,7 +473,7 @@ export default function ComparisonPage() {
       if (!panel.runId) return;
       refs.push({
         panelId: panel.panelId,
-        title: `Comparison ${index + 1}`,
+        title: `Sequence Trace ${index + 1}`,
         runId: panel.runId,
         treeIndex: panel.treeIndex,
       });
@@ -510,11 +511,14 @@ export default function ComparisonPage() {
   return (
     <main className="mx-auto max-w-[1600px] w-full p-4 sm:p-6 space-y-6">
       <header>
-        <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
-          Comparison
-        </h1>
+        <div className="flex items-center gap-1.5">
+          <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
+            Sequence Trace
+          </h1>
+          <SequenceTraceInfoIcon />
+        </div>
         <p className="text-muted-foreground text-sm mt-1">
-          Compare lineage views of runs on the same dataset. Set a base model, then add one or more runs to compare.
+          Track selected sequences across phylogenetic trees from different algorithms. Set a base run, then add one or more runs.
         </p>
       </header>
 
@@ -525,7 +529,7 @@ export default function ComparisonPage() {
             Search / highlight in trees
           </CardTitle>
           <p className="text-xs text-muted-foreground font-normal mt-1">
-            Type a sequence_id or part of a label — matching nodes are highlighted in all comparison trees.
+            Type a sequence_id or part of a label — matching nodes are highlighted across all visible trees.
           </p>
         </CardHeader>
         <CardContent>
@@ -545,7 +549,7 @@ export default function ComparisonPage() {
             <Label htmlFor="base-run-id">Base run</Label>
             <Input
               id="base-run-id"
-              placeholder="Paste run ID or use Compare to from dashboard…"
+              placeholder="Paste run ID or use Sequence Trace from dashboard…"
               value={baseRunIdInput}
               onChange={(e) => setBaseRunIdInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && loadBaseRun()}
@@ -564,7 +568,7 @@ export default function ComparisonPage() {
               className="gap-1.5"
             >
               <Plus className="h-4 w-4" />
-              Add comparison
+              Add Sequence Trace
             </Button>
           )}
         </div>
@@ -572,10 +576,10 @@ export default function ComparisonPage() {
           <div className="rounded-lg border bg-muted/40 p-4 text-sm text-muted-foreground space-y-1">
             <p className="font-medium text-foreground">No other runs with the same input file</p>
             <p>
-              To compare, run the <strong>same file</strong> again (same upload or same file from File management) with different parameters or another method (e.g. gctree, dowser). New runs will appear when you click &quot;Add comparison&quot;.
+              To use Sequence Trace, run the <strong>same file</strong> again (same upload or same file from File management) with different parameters or another method (e.g. gctree, dowser). New runs will appear when you click &quot;Add Sequence Trace&quot;.
             </p>
             <p className="text-xs mt-2">
-              Runs created before the comparison feature may not be linked to a file; run the file again to get linkable runs.
+              Runs created before the Sequence Trace feature may not be linked to a file; run the file again to get linkable runs.
             </p>
           </div>
         )}
@@ -584,7 +588,10 @@ export default function ComparisonPage() {
       {/* Side-by-side: Base | Comparison 1 | Comparison 2 | … */}
       <section className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-lg font-medium">Side-by-side comparison</h2>
+          <div className="flex items-center gap-1.5">
+            <h2 className="text-lg font-medium">Side-by-side Sequence Trace</h2>
+            <SequenceTraceInfoIcon />
+          </div>
           <Button
             type="button"
             variant="outline"
@@ -598,7 +605,7 @@ export default function ComparisonPage() {
           </Button>
         </div>
         <p className="text-sm text-muted-foreground">
-          Each panel keeps its own tree selection. Choose a run in each comparison slot to view trees side-by-side.
+          Each panel keeps its own tree selection. Choose a run in each Sequence Trace slot to view trees side-by-side.
         </p>
         <div
           className="grid gap-4 overflow-x-auto pb-2"
@@ -629,7 +636,7 @@ export default function ComparisonPage() {
             }
             placeholder={
               <p className="text-sm text-muted-foreground">
-                Enter a run ID above and click Load, or open this page from &quot;Compare to&quot; on a finished run.
+                Enter a run ID above and click Load, or open this page from &quot;Sequence Trace&quot; on a finished run.
               </p>
             }
           />
@@ -887,7 +894,10 @@ function ComparisonSlot({
   return (
     <Card className="min-w-[280px] w-full flex flex-col overflow-visible">
       <CardHeader className="pb-2 flex flex-row items-start justify-between gap-2">
-        <CardTitle className="text-base">Comparison {index + 1}</CardTitle>
+        <CardTitle className="text-base flex items-center gap-1.5">
+          Sequence Trace {index + 1}
+          <SequenceTraceInfoIcon />
+        </CardTitle>
         <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={onRemove} aria-label="Remove">
           <X className="h-4 w-4" />
         </Button>
