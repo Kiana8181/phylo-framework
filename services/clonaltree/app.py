@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import csv
 import json
 import os
 import re
@@ -518,15 +519,16 @@ def cleanup_alignment_sidecars(out_dir: Path, run_name: str, clone_idx: str, lim
                 pass
 
 
-def parse_fasta_abundance(path: Path) -> Dict[str, float]:
-    """Parse FASTA headers in the form '>sequence_id@count' into abundance mapping."""
-    out: Dict[str, float] = {}
+def parse_fasta_headers(path: Path) -> List[Tuple[str, float]]:
+    """Parse FASTA headers in the form '>sequence_id@count' into (label, count)."""
+    headers: List[Tuple[str, float]] = []
     if not path.exists():
-        return out
+        return headers
     try:
         lines = path.read_text(errors="ignore").splitlines()
     except Exception:
-        return out
+        return headers
+
     for line in lines:
         if not line.startswith(">"):
             continue
@@ -546,7 +548,90 @@ def parse_fasta_abundance(path: Path) -> Dict[str, float]:
             count = 1.0
         if not seq_id:
             continue
-        out[seq_id] = max(1.0, out.get(seq_id, 0.0) + max(1.0, count))
+        headers.append((seq_id, max(1.0, count)))
+    return headers
+
+
+def parse_seq_info_lookup(path: Path) -> Dict[str, Dict[str, Any]]:
+    """Load seq_info TSV into a sequence_id -> row mapping."""
+    lookup: Dict[str, Dict[str, Any]] = {}
+    if not path.exists():
+        return lookup
+
+    try:
+        with path.open("r", encoding="utf-8", errors="ignore", newline="") as handle:
+            reader = csv.DictReader(handle, delimiter="\t")
+            if not reader.fieldnames:
+                return lookup
+            for raw_row in reader:
+                if not isinstance(raw_row, dict):
+                    continue
+                seq_id = str(raw_row.get("sequence_id") or "").strip()
+                if not seq_id:
+                    continue
+                row: Dict[str, Any] = {}
+                for key, value in raw_row.items():
+                    if key is None:
+                        continue
+                    normalized_key = str(key).strip()
+                    if not normalized_key:
+                        continue
+                    row[normalized_key] = "" if value is None else str(value).strip()
+                row["sequence_id"] = seq_id
+                lookup[seq_id] = row
+    except Exception:
+        return {}
+
+    return lookup
+
+
+def build_tree_annotations(seq_source: Path, seq_info_path: Path) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+    """
+    Build per-tree annotation rows keyed by tree label.
+    Labels are taken from selected FASTA headers so they match Newick tip labels.
+    """
+    headers = parse_fasta_headers(seq_source)
+    seq_info_lookup = parse_seq_info_lookup(seq_info_path)
+
+    annotations: List[Dict[str, Any]] = []
+    label_to_sequence_id: Dict[str, str] = {}
+    seen_labels: set[str] = set()
+
+    for label, duplicate_count in headers:
+        if not label or label in seen_labels:
+            continue
+        seen_labels.add(label)
+
+        row: Dict[str, Any] = {
+            "label": label,
+            "duplicate_count": duplicate_count,
+        }
+
+        seq_info_row = seq_info_lookup.get(label)
+        if seq_info_row:
+            for key, value in seq_info_row.items():
+                if key == "label":
+                    continue
+                row[key] = value
+
+        sequence_id = str(row.get("sequence_id") or "").strip()
+        if not sequence_id and label != "germline":
+            sequence_id = label
+            row["sequence_id"] = sequence_id
+
+        if sequence_id:
+            label_to_sequence_id[label] = sequence_id
+
+        annotations.append(row)
+
+    return annotations, label_to_sequence_id
+
+
+def parse_fasta_abundance(path: Path) -> Dict[str, float]:
+    """Parse selected FASTA headers into abundance mapping keyed by tree label."""
+    out: Dict[str, float] = {}
+    for label, count in parse_fasta_headers(path):
+        out[label] = max(1.0, out.get(label, 0.0) + max(1.0, count))
     return out
 
 
@@ -862,6 +947,8 @@ async def run_handler(request: Request):
 
         # Step 6: alignment + tree per clone/limit
         node_abundances_by_tree: Dict[str, Dict[str, float]] = {}
+        annotations_by_tree: Dict[str, List[Dict[str, Any]]] = {}
+        label_to_sequence_id_by_tree: Dict[str, Dict[str, str]] = {}
         for idx in range(1, selected_clones + 1):
             clone_seq_info = out_dir / f"{idx}_seq_info.tsv"
             if not clone_seq_info.exists():
@@ -924,6 +1011,10 @@ async def run_handler(request: Request):
                     abund_map = parse_fasta_abundance(seq_source)
                     if abund_map:
                         node_abundances_by_tree[tree_out.name] = abund_map
+                    ann_rows, label_map = build_tree_annotations(seq_source, clone_seq_info)
+                    annotations_by_tree[tree_out.name] = ann_rows
+                    if label_map:
+                        label_to_sequence_id_by_tree[tree_out.name] = label_map
 
                 cleanup_alignment_sidecars(out_dir, run_name, str(idx), limit_label)
 
@@ -941,6 +1032,8 @@ async def run_handler(request: Request):
 
         trees: List[str] = []
         node_abundances: List[Dict[str, float]] = []
+        annotations: List[List[Dict[str, Any]]] = []
+        label_to_sequence_id: List[Dict[str, str]] = []
         clones_aligned: Dict[str, List[Any]] = {"clone_id": [], "abundance": [], "seqs": []}
 
         for p in tree_paths:
@@ -950,6 +1043,8 @@ async def run_handler(request: Request):
                 continue
 
             node_abundances.append(node_abundances_by_tree.get(p.name, {}))
+            annotations.append(annotations_by_tree.get(p.name, []))
+            label_to_sequence_id.append(label_to_sequence_id_by_tree.get(p.name, {}))
 
             clone_rank, _ = parse_tree_name(p.name, run_name)
             if clone_rank is not None and 1 <= clone_rank <= len(top_clone_records):
@@ -1037,9 +1132,10 @@ async def run_handler(request: Request):
             {
                 "ok": True,
                 "trees": trees,
-                "annotations": [],
+                "annotations": annotations,
                 "figures": None,
                 "node_abundances": node_abundances,
+                "label_to_sequence_id": label_to_sequence_id,
                 "clones": clones_aligned,
                 "clone_catalog": repertoire_all_clones,
                 "tables": {
