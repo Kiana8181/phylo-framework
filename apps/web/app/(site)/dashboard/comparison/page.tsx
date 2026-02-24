@@ -19,10 +19,12 @@ import TreeSVG from "@/components/TreeSVG";
 import { Switch } from "@/components/ui/switch";
 import { RunsApi } from "@/features/runs/api";
 import { useRunStatus } from "@/features/runs/hooks";
+import { useContractSpec, useMethods } from "@/features/methods/hooks";
 import type { RunSummary, LineagePlot } from "@phylo/contracts";
 import { Loader2, Maximize2, Search, Plus, X } from "lucide-react";
 import CompareExpandDialog, { type CompareExpandTreeRef } from "@/components/comparison/CompareExpandDialog";
 import RunAutocomplete from "@/components/comparison/RunAutocomplete";
+import RunParamsDropdown from "@/components/runs/RunParamsDropdown";
 
 type RunTreeListItem = {
   treeId: string;
@@ -30,6 +32,12 @@ type RunTreeListItem = {
   hasLineagePlot: boolean;
   hasServiceImage: boolean;
 };
+
+function datasetLabel(datasetName?: string | null, datasetFiles?: string[] | null): string {
+  if (datasetName && datasetName.trim()) return datasetName;
+  if (datasetFiles && datasetFiles.length > 0) return datasetFiles.join(", ");
+  return "Dataset unavailable";
+}
 
 function useRunTrees(runId: string | null, enabled: boolean) {
   return useQuery({
@@ -58,8 +66,18 @@ function useTreePayload(runId: string | null, treeId: string | null, enabled: bo
 type ColumnRun = {
   runId: string;
   methodId: string;
+  methodLabel: string;
   status: string;
+  params: Record<string, unknown>;
+  datasetName?: string | null;
+  datasetFiles?: string[];
   trees: RunTreeListItem[];
+};
+
+type SameDatasetRef = {
+  id: string;
+  methodId?: string;
+  datasetName?: string | null;
 };
 
 type ComparisonPanelState = {
@@ -110,6 +128,7 @@ function displayFieldsFromAttrs(nodeAttributes: Record<string, Record<string, un
 function ComparisonColumn({
   title,
   run,
+  sameDatasetRuns,
   treeIndex,
   onTreeIndexChange,
   highlightText,
@@ -125,6 +144,7 @@ function ComparisonColumn({
 }: {
   title: string;
   run: ColumnRun | null;
+  sameDatasetRuns?: SameDatasetRef[];
   treeIndex: number;
   onTreeIndexChange: (i: number) => void;
   highlightText: string;
@@ -160,6 +180,8 @@ function ComparisonColumn({
     if (!nodeAttributes) return [];
     return Object.entries(nodeAttributes).map(([label, attrs]) => ({ label, ...(attrs ?? {}) }));
   }, [nodeAttributes]);
+  const { contractSpec } = useContractSpec(run?.methodId);
+  const runDatasetLabel = datasetLabel(run?.datasetName, run?.datasetFiles);
 
   if (error) {
     return (
@@ -196,19 +218,36 @@ function ComparisonColumn({
   }
 
   return (
-    <Card className="min-w-[280px] w-full flex flex-col">
-      <CardHeader className="pb-2 flex flex-row items-start justify-between gap-2">
-        <div className="min-w-0">
-          <CardTitle className="text-base">{title}</CardTitle>
-          <p className="text-xs text-muted-foreground truncate">
+    <Card className="min-w-[280px] w-full flex flex-col overflow-visible">
+      <CardHeader className="pb-2 space-y-2">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <CardTitle className="text-base">{title}</CardTitle>
+            <p className="text-xs text-muted-foreground">Run Summary</p>
+          </div>
+          {showRemove && onRemove && (
+            <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={onRemove} aria-label="Remove">
+              <X className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
+        <div className="space-y-0.5">
+          <p className="text-sm font-medium truncate">{run.methodLabel}</p>
+          <p className="text-xs text-muted-foreground truncate">{runDatasetLabel}</p>
+          <p className="text-xs text-muted-foreground">
             {run.methodId} · {run.status}
           </p>
         </div>
-        {showRemove && onRemove && (
-          <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={onRemove} aria-label="Remove">
-            <X className="h-4 w-4" />
-          </Button>
-        )}
+        <RunParamsDropdown
+          methodKey={run.methodId}
+          runId={run.runId}
+          runParams={run.params}
+          contractSpec={contractSpec}
+          datasetName={run.datasetName}
+          datasetFiles={run.datasetFiles}
+          sameDatasetRuns={sameDatasetRuns}
+          dense
+        />
       </CardHeader>
       <CardContent className="space-y-3 flex-1 flex flex-col min-h-0">
         {run.trees.length > 0 && (
@@ -314,6 +353,7 @@ function ComparisonColumn({
 export default function ComparisonPage() {
   const searchParams = useSearchParams();
   const baseFromUrl = searchParams.get("baseRunId");
+  const { data: methods } = useMethods();
 
   const [baseRunIdInput, setBaseRunIdInput] = useState("");
   const [baseRunId, setBaseRunId] = useState<string | null>(null);
@@ -324,6 +364,12 @@ export default function ComparisonPage() {
   const [showLabels, setShowLabels] = useState(true);
   const [expandOpen, setExpandOpen] = useState(false);
   const nextPanelIdRef = useRef(1);
+
+  const methodNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    (methods ?? []).forEach((method) => map.set(method.id, method.name));
+    return map;
+  }, [methods]);
 
   useEffect(() => {
     if (baseFromUrl && baseFromUrl.trim()) {
@@ -339,13 +385,18 @@ export default function ComparisonPage() {
 
   const baseRun = useMemo<ColumnRun | null>(() => {
     if (!baseRunId || !baseStatus || !baseTrees?.trees) return null;
+    const methodId = baseStatus.method_id ?? "—";
     return {
       runId: baseRunId,
-      methodId: baseStatus.method_id ?? "—",
+      methodId,
+      methodLabel: methodNameById.get(methodId) ?? methodId,
       status: baseStatus.status ?? "—",
+      params: (baseStatus.params ?? {}) as Record<string, unknown>,
+      datasetName: baseStatus.dataset_name ?? null,
+      datasetFiles: baseStatus.dataset_files ?? [],
       trees: baseTrees.trees,
     };
-  }, [baseRunId, baseStatus, baseTrees]);
+  }, [baseRunId, baseStatus, baseTrees, methodNameById]);
 
   const maxTrees = baseRun?.trees?.length ?? 0;
   useEffect(() => {
@@ -558,6 +609,11 @@ export default function ComparisonPage() {
           <ComparisonColumn
             title="Base"
             run={baseRun}
+            sameDatasetRuns={(sameDatasetList ?? []).map((candidate) => ({
+              id: candidate.id,
+              methodId: candidate.method_id,
+              datasetName: candidate.dataset_name,
+            }))}
             treeIndex={baseTreeIndex}
             onTreeIndexChange={setBaseTreeIndex}
             highlightText={highlightSequence}
@@ -595,6 +651,7 @@ export default function ComparisonPage() {
               onDisplayIdFieldChange={setDisplayIdField}
               showLabels={showLabels}
               onShowLabelsChange={setShowLabels}
+              methodNameById={methodNameById}
             />
           ))}
         </div>
@@ -777,6 +834,7 @@ function ComparisonSlot({
   onDisplayIdFieldChange,
   showLabels,
   onShowLabelsChange,
+  methodNameById,
 }: {
   index: number;
   runId: string;
@@ -791,20 +849,28 @@ function ComparisonSlot({
   onDisplayIdFieldChange: (v: string) => void;
   showLabels: boolean;
   onShowLabelsChange: (v: boolean) => void;
+  methodNameById: Map<string, string>;
 }) {
   const { data: status } = useRunStatus(runId || undefined);
   const done = status?.status === "DONE";
   const { data: trees, isLoading: treesLoading } = useRunTrees(runId || null, !!runId && done);
 
-  const run: ColumnRun | null =
-    runId && status && trees?.trees
-      ? {
-          runId,
-          methodId: status.method_id ?? "—",
-          status: status.status ?? "—",
-          trees: trees.trees,
-        }
-      : null;
+  const run: ColumnRun | null = useMemo(() => {
+    if (!runId || !status || !trees?.trees) return null;
+    const methodId = status.method_id ?? "—";
+    return {
+      runId,
+      methodId,
+      methodLabel: methodNameById.get(methodId) ?? methodId,
+      status: status.status ?? "—",
+      params: (status.params ?? {}) as Record<string, unknown>,
+      datasetName: status.dataset_name ?? null,
+      datasetFiles: status.dataset_files ?? [],
+      trees: trees.trees,
+    };
+  }, [methodNameById, runId, status, trees?.trees]);
+  const { contractSpec } = useContractSpec(run?.methodId);
+  const runDataset = datasetLabel(run?.datasetName, run?.datasetFiles);
 
   const options = sameDatasetList.filter((r) => !selectedIds.includes(r.id) || r.id === runId);
 
@@ -819,7 +885,7 @@ function ComparisonSlot({
   }, [onTreeIndexChange, runIdentity, runTreeCount, treeIndex]);
 
   return (
-    <Card className="min-w-[280px] w-full flex flex-col">
+    <Card className="min-w-[280px] w-full flex flex-col overflow-visible">
       <CardHeader className="pb-2 flex flex-row items-start justify-between gap-2">
         <CardTitle className="text-base">Comparison {index + 1}</CardTitle>
         <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={onRemove} aria-label="Remove">
@@ -837,17 +903,41 @@ function ComparisonSlot({
           />
         </div>
         {run ? (
-          <RunLineageBlock
-            run={run}
-            treeIndex={treeIndex}
-            onTreeIndexChange={onTreeIndexChange}
-            highlightText={highlightText}
-            displayIdField={displayIdField}
-            onDisplayIdFieldChange={onDisplayIdFieldChange}
-            showLabels={showLabels}
-            onShowLabelsChange={onShowLabelsChange}
-            isLoading={treesLoading}
-          />
+          <>
+            <div className="rounded border bg-card/40 p-3 space-y-2">
+              <p className="text-xs font-medium">Run Summary</p>
+              <p className="text-sm font-medium truncate">{run.methodLabel}</p>
+              <p className="text-xs text-muted-foreground truncate">{runDataset}</p>
+              <p className="text-xs text-muted-foreground">
+                {run.methodId} · {run.status}
+              </p>
+              <RunParamsDropdown
+                methodKey={run.methodId}
+                runId={run.runId}
+                runParams={run.params}
+                contractSpec={contractSpec}
+                datasetName={run.datasetName}
+                datasetFiles={run.datasetFiles}
+                sameDatasetRuns={sameDatasetList.map((candidate) => ({
+                  id: candidate.id,
+                  methodId: candidate.method_id,
+                  datasetName: candidate.dataset_name,
+                }))}
+                dense
+              />
+            </div>
+            <RunLineageBlock
+              run={run}
+              treeIndex={treeIndex}
+              onTreeIndexChange={onTreeIndexChange}
+              highlightText={highlightText}
+              displayIdField={displayIdField}
+              onDisplayIdFieldChange={onDisplayIdFieldChange}
+              showLabels={showLabels}
+              onShowLabelsChange={onShowLabelsChange}
+              isLoading={treesLoading}
+            />
+          </>
         ) : (
           <p className="text-sm text-muted-foreground">Choose a run above.</p>
         )}

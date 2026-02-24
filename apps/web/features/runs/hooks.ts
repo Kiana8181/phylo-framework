@@ -44,7 +44,7 @@ export function useRunStatus(runId?: string) {
         if (status === 403 || status === 404) return false;
       }
       const s = state.data?.status;
-      return s === "DONE" || s === "ERROR" ? false : 1200;
+      return s === "DONE" || s === "ERROR" || s === "CANCELLED" ? false : 1200;
     },
     retry: (failureCount, error: any) => {
       const status = error?.response?.status;
@@ -68,6 +68,8 @@ export function useRunStatus(runId?: string) {
         rawMsg.length > 120 ? "See run card below for full error details." : shortMsg,
         { id: toastId }
       );
+    } else if (s === "CANCELLED") {
+      notify.error("Run cancelled", q.data?.message || "The run was cancelled.", { id: toastId });
     } else if (s === "DONE") {
       notify.success("Run finished", undefined, { id: toastId });
     }

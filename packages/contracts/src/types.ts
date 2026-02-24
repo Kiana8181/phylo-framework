@@ -11,12 +11,22 @@ export type MethodSpec = {
 
 export type CreateRunResponse = { run_id: string };
 
+export type RunParams = Record<string, unknown>;
+
+export type RunDatasetMeta = {
+  dataset_name?: string | null;
+  dataset_files?: string[];
+};
+
 export type RunSummary = {
   id: string;
   method_id: string;
   status: string;
   progress?: number;
   message?: string | null;
+  params?: RunParams;
+  dataset_name?: string | null;
+  dataset_files?: string[];
   created_at: string | null;
   started_at?: string | null;
   finished_at?: string | null;
@@ -44,6 +54,14 @@ export type RunStatus = {
   progress?: number;
   message?: string;
   method_id?: string;
+  params?: RunParams;
+  dataset_name?: string | null;
+  dataset_files?: string[];
+  error?: {
+    code?: string;
+    message?: string;
+    details?: Record<string, unknown>;
+  };
 };
 
 export type FigurePayload = {
@@ -154,4 +172,10 @@ export type RunResult = {
   logs?: RunLogEntry[];
   artifact_zip_b64?: any;
   artifact_name?: string;
+} & {
+  run_id?: string;
+  method_id?: string;
+  params?: RunParams;
+  dataset_name?: string | null;
+  dataset_files?: string[];
 };

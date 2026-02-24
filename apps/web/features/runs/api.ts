@@ -15,6 +15,10 @@ export type CurrentRunResponse = {
   status?: string | null;
   progress?: number | null;
   message?: string | null;
+  method_id?: string | null;
+  params?: Record<string, unknown> | null;
+  dataset_name?: string | null;
+  dataset_files?: string[] | null;
 };
 
 export const RunsApi = {
