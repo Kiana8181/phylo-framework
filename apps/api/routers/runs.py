@@ -179,6 +179,44 @@ def _normalized_run_params(run: Run) -> dict[str, Any]:
     return raw if isinstance(raw, dict) else {}
 
 
+def _clone_ids_from_result_payload(payload: Any) -> list[str]:
+    if not isinstance(payload, dict):
+        return []
+    clones = payload.get("clones")
+    if not isinstance(clones, dict):
+        return []
+    raw_clone_ids = clones.get("clone_id")
+    if not isinstance(raw_clone_ids, list):
+        return []
+
+    out: list[str] = []
+    for clone_id in raw_clone_ids:
+        clone_text = str(clone_id).strip()
+        out.append(clone_text if clone_text else "")
+    return out
+
+
+def _attach_clone_ids_to_result_trees(payload: dict[str, Any]) -> dict[str, Any]:
+    trees = payload.get("trees")
+    if not isinstance(trees, list):
+        return payload
+
+    clone_ids = _clone_ids_from_result_payload(payload)
+    if not clone_ids:
+        return payload
+
+    for idx, tree in enumerate(trees):
+        if not isinstance(tree, dict):
+            continue
+        if idx >= len(clone_ids):
+            continue
+        clone_id = clone_ids[idx]
+        if not clone_id:
+            continue
+        tree.setdefault("clone_id", clone_id)
+    return payload
+
+
 async def _resolve_dataset_meta(run: Run, file_repo: FileRepository) -> tuple[str | None, list[str]]:
     names: list[str] = []
 
@@ -909,7 +947,7 @@ async def run_result(
     payload.setdefault("params", _normalized_run_params(run))
     payload.setdefault("dataset_name", dataset_name)
     payload.setdefault("dataset_files", dataset_files)
-    return payload
+    return _attach_clone_ids_to_result_trees(payload)
 
 
 @router.get("/{run_id}/trees")
@@ -925,7 +963,17 @@ async def list_run_trees(
         raise HTTPException(409, "Run not finished")
 
     tree_repo = RunTreeRepository(db)
-    return {"trees": await tree_repo.list_for_run(run.id)}
+    trees = await tree_repo.list_for_run(run.id)
+    clone_ids = _clone_ids_from_result_payload(run.result)
+    if clone_ids:
+        for tree in trees:
+            tree_index = int(tree.get("treeIndex", -1))
+            if tree_index < 0 or tree_index >= len(clone_ids):
+                continue
+            clone_id = clone_ids[tree_index]
+            if clone_id:
+                tree["cloneId"] = clone_id
+    return {"trees": trees}
 
 
 @router.get("/{run_id}/trees/{tree_id}")

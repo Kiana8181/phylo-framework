@@ -3,20 +3,13 @@
 import { memo, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Loader2, X } from "lucide-react";
-import type { LineagePlot, TreeNodeAttrs } from "@phylo/contracts";
+import type { LineagePlot, RunTreeListItem, TreeNodeAttrs } from "@phylo/contracts";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { RunsApi } from "@/features/runs/api";
 import LineageSVG from "@/components/LineageSVG";
 import TreeSVG from "@/components/TreeSVG";
 import TreeZoomPane from "@/components/comparison/TreeZoomPane";
-
-type RunTreeListItem = {
-  treeId: string;
-  treeIndex: number;
-  hasLineagePlot: boolean;
-  hasServiceImage: boolean;
-};
 
 export type CompareExpandTreeRef = {
   panelId: string;
@@ -65,6 +58,12 @@ function useTreePayload(runId: string | null, treeId: string | null, enabled: bo
     queryFn: () => RunsApi.tree(runId!, treeId!),
     enabled: !!runId && !!treeId && enabled,
   });
+}
+
+function treeStatusLabel(tree: RunTreeListItem | undefined, treeIndex: number): string {
+  const cloneText = String(tree?.cloneId ?? "").trim();
+  if (cloneText) return `Tree ${treeIndex + 1} (clone ${cloneText})`;
+  return `Tree ${treeIndex + 1}`;
 }
 
 const ExpandTreeTile = memo(function ExpandTreeTile({
@@ -120,7 +119,7 @@ const ExpandTreeTile = memo(function ExpandTreeTile({
       <CardHeader className="border-b pb-3">
         <CardTitle className="text-base">{treeRef.title}</CardTitle>
         <p className="text-xs text-muted-foreground">
-          {status?.method_id ?? "—"} · {status?.status ?? "—"} · Tree {resolvedTreeIndex + 1}
+          {status?.method_id ?? "—"} · {status?.status ?? "—"} · {treeStatusLabel(tree, resolvedTreeIndex)}
         </p>
       </CardHeader>
       <CardContent className="flex flex-1 min-h-0 flex-col gap-3 pt-4">

@@ -113,6 +113,7 @@ export type RunTree = {
   id: string;
   newick: string;
   original_newick?: string;
+  clone_id?: string;
   has_lineage_plot: boolean;
   has_service_image: boolean;
   visualizations?: {
@@ -128,6 +129,7 @@ export type RunTreeListItem = {
   treeIndex: number;
   hasLineagePlot: boolean;
   hasServiceImage: boolean;
+  cloneId?: string | null;
 };
 
 export type RunTreesListResponse = {

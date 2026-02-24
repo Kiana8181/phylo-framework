@@ -33,6 +33,7 @@ type TreeImage = {
 
 type TreeVM = {
   id: string;
+  cloneId?: string;
   phylogenyNewick: string;
   hasServiceImage: boolean;
   hasLineagePlot: boolean;
@@ -82,6 +83,12 @@ function hasEmbeddedPayload(tree: RunTree): boolean {
       tree.label_to_sequence_id ||
       tree.visualizations?.service_image
   );
+}
+
+function treeLabel(treeIdx: number, cloneId?: string): string {
+  const cloneText = String(cloneId ?? "").trim();
+  if (!cloneText) return `Tree ${treeIdx + 1}`;
+  return `Tree ${treeIdx + 1} (clone ${cloneText})`;
 }
 
 export default function TreesCarousel({
@@ -166,6 +173,7 @@ export default function TreesCarousel({
         const figureImage = toImagePayload(figures?.phylogeny?.[i]);
         return {
           id: `tree-${i + 1}`,
+          cloneId: undefined,
           phylogenyNewick: cleanNewick(t),
           hasServiceImage: Boolean(figureImage?.base64),
           hasLineagePlot: false,
@@ -189,6 +197,7 @@ export default function TreesCarousel({
       const lineagePlot = (payload?.lineage_plot ?? t.lineage_plot) as LineagePlot | undefined;
       return {
         id: treeId,
+        cloneId: typeof t.clone_id === "string" ? t.clone_id : undefined,
         phylogenyNewick: cleanNewick(t.original_newick || t.newick || ""),
         hasServiceImage: Boolean(t.has_service_image || svcImage?.base64),
         hasLineagePlot: Boolean(t.has_lineage_plot || lineagePlot),
@@ -277,7 +286,7 @@ export default function TreesCarousel({
               }`}
               onClick={() => setIdx(treeIdx)}
             >
-              Tree {treeIdx + 1}
+              {treeLabel(treeIdx, tree.cloneId)}
             </button>
           ))}
         </div>
