@@ -174,13 +174,62 @@ def _structured_error_payload(
     return {"ok": False, "error": {"code": code, "message": message, "details": details}}
 
 
-def _public_status(run, include_run_id: bool = False) -> dict:
+def _normalized_run_params(run: Run) -> dict[str, Any]:
+    raw = getattr(run, "params", None)
+    return raw if isinstance(raw, dict) else {}
+
+
+async def _resolve_dataset_meta(run: Run, file_repo: FileRepository) -> tuple[str | None, list[str]]:
+    names: list[str] = []
+
+    def add_name(raw: Any) -> None:
+        if not isinstance(raw, str):
+            return
+        cleaned = raw.strip()
+        if cleaned and cleaned not in names:
+            names.append(cleaned)
+
+    add_name(getattr(run, "dataset_name", None))
+
+    input_file_id = getattr(run, "input_file_id", None)
+    if input_file_id is not None:
+        linked_input = await file_repo.get_by_id(input_file_id)
+        if linked_input is not None:
+            add_name(getattr(linked_input, "original_filename", None))
+
+    run_files = await file_repo.get_by_run(run.id)
+    for file_row in run_files:
+        add_name(getattr(file_row, "original_filename", None))
+
+    dataset_name = names[0] if names else None
+    return dataset_name, names
+
+
+def _public_status(
+    run: Run,
+    *,
+    include_run_id: bool = False,
+    dataset_name: str | None = None,
+    dataset_files: list[str] | None = None,
+) -> dict[str, Any]:
     """Convert Run model to public status dict."""
+    resolved_dataset_name = dataset_name
+    if resolved_dataset_name is None:
+        raw_dataset_name = getattr(run, "dataset_name", None)
+        resolved_dataset_name = raw_dataset_name if isinstance(raw_dataset_name, str) else None
+
+    resolved_dataset_files = dataset_files if dataset_files is not None else []
+    if not resolved_dataset_files and resolved_dataset_name:
+        resolved_dataset_files = [resolved_dataset_name]
+
     out = {
         "status": run.status.value if hasattr(run.status, "value") else str(run.status),
         "progress": run.progress,
         "message": run.message,
         "method_id": run.method_id,
+        "params": _normalized_run_params(run),
+        "dataset_name": resolved_dataset_name,
+        "dataset_files": resolved_dataset_files,
     }
     raw_error = getattr(run, "error", None)
     if raw_error:
@@ -567,12 +616,17 @@ async def _execute_method_async_impl(
 
 def _run_summary(run) -> dict:
     """Build a run summary for list responses."""
+    raw_dataset_name = getattr(run, "dataset_name", None)
+    dataset_name = raw_dataset_name if isinstance(raw_dataset_name, str) else None
     return {
         "id": str(run.id),
         "method_id": run.method_id,
         "status": run.status.value if hasattr(run.status, "value") else str(run.status),
         "progress": run.progress,
         "message": run.message,
+        "params": _normalized_run_params(run),
+        "dataset_name": dataset_name,
+        "dataset_files": [dataset_name] if dataset_name else [],
         "created_at": run.created_at.isoformat() if run.created_at else None,
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "finished_at": run.finished_at.isoformat() if run.finished_at else None,
@@ -666,6 +720,7 @@ async def create_run(
         params=p,
         user_id=user_id,
         input_file_id=existing_file.id if existing_file else None,
+        dataset_name=existing_file.original_filename if existing_file else None,
     )
 
     file_path = None
@@ -726,7 +781,11 @@ async def create_run(
                 mime_type=file.content_type,
                 run_id=run.id,
             )
-            await run_repo.update(run.id, input_file_id=file_record.id)
+            await run_repo.update(
+                run.id,
+                input_file_id=file_record.id,
+                dataset_name=file_record.original_filename,
+            )
 
             # Update run with file path (for method service compatibility)
             # Method services expect file_path, so we'll pass storage_path
@@ -760,11 +819,18 @@ async def get_current_run(
         raise HTTPException(status_code=401, detail="Authentication required")
 
     run_repo = RunRepository(db)
+    file_repo = FileRepository(db)
     active = await run_repo.get_active_run_for_user(current_user.id)
     if not active:
         return {"run_id": None, "status": None, "progress": None, "message": None}
 
-    return _public_status(active, include_run_id=True)
+    dataset_name, dataset_files = await _resolve_dataset_meta(active, file_repo)
+    return _public_status(
+        active,
+        include_run_id=True,
+        dataset_name=dataset_name,
+        dataset_files=dataset_files,
+    )
 
 
 # Declare same-dataset before other /{run_id}/... routes so the path "same-dataset" is matched
@@ -814,9 +880,11 @@ async def run_status(
 ):
     """Get run status."""
     run_repo = RunRepository(db)
+    file_repo = FileRepository(db)
     run = await _load_run_with_access(run_id, current_user=current_user, run_repo=run_repo)
 
-    return _public_status(run)
+    dataset_name, dataset_files = await _resolve_dataset_meta(run, file_repo)
+    return _public_status(run, dataset_name=dataset_name, dataset_files=dataset_files)
 
 
 @router.get("/{run_id}/result")
@@ -827,12 +895,21 @@ async def run_result(
 ):
     """Get run result."""
     run_repo = RunRepository(db)
+    file_repo = FileRepository(db)
     run = await _load_run_with_access(run_id, current_user=current_user, run_repo=run_repo)
 
     if run.status != RunStatus.DONE:
         raise HTTPException(409, "Run not finished")
 
-    return run.result or {"ok": False}
+    dataset_name, dataset_files = await _resolve_dataset_meta(run, file_repo)
+    base_result = run.result if isinstance(run.result, dict) else {"ok": False}
+    payload = dict(base_result)
+    payload.setdefault("run_id", str(run.id))
+    payload.setdefault("method_id", run.method_id)
+    payload.setdefault("params", _normalized_run_params(run))
+    payload.setdefault("dataset_name", dataset_name)
+    payload.setdefault("dataset_files", dataset_files)
+    return payload
 
 
 @router.get("/{run_id}/trees")
