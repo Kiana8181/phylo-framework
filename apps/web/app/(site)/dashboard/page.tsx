@@ -385,6 +385,7 @@ function DashboardPageContent() {
             cloneRows={cloneRows}
             artifact_zip_b64={result?.artifact_zip_b64}
             artifact_name={result?.artifact_name || ""}
+            repertoireTable={result?.tables?.repertoire_two_levels_info}
           />
 
           {warnings.length > 0 && (
