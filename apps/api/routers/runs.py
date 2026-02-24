@@ -174,6 +174,69 @@ def _structured_error_payload(
     return {"ok": False, "error": {"code": code, "message": message, "details": details}}
 
 
+def _extract_error_message(value: Any) -> str | None:
+    if isinstance(value, str):
+        txt = value.strip()
+        return txt or None
+    if isinstance(value, dict):
+        msg = value.get("message")
+        if isinstance(msg, str) and msg.strip():
+            return msg.strip()
+        code = value.get("code")
+        if isinstance(code, str) and code.strip():
+            return code.strip()
+    return None
+
+
+def _normalize_failed_result_payload(
+    raw_payload: Any,
+    *,
+    status_code: int | None = None,
+    fallback_message: str | None = None,
+) -> tuple[dict[str, Any], str]:
+    payload = dict(raw_payload) if isinstance(raw_payload, dict) else {}
+    payload["ok"] = False
+
+    error_message = _extract_error_message(payload.get("error"))
+    if not error_message:
+        error_message = _extract_error_message(payload.get("message"))
+    if not error_message and fallback_message:
+        cleaned = fallback_message.strip()
+        if cleaned:
+            error_message = cleaned
+    if not error_message and status_code is not None:
+        error_message = f"Method service returned HTTP {status_code}."
+    if not error_message:
+        error_message = "Method service execution failed."
+
+    payload.setdefault("error", error_message)
+    if not isinstance(payload.get("logs"), list):
+        payload["logs"] = []
+    return payload, error_message
+
+
+async def _set_failed_run_with_payload(
+    run_repo: RunRepository,
+    run_id: UUID,
+    *,
+    error_message: str,
+    result_payload: dict[str, Any] | None = None,
+) -> None:
+    payload, normalized_error = _normalize_failed_result_payload(
+        result_payload,
+        fallback_message=error_message,
+    )
+    await run_repo.update(
+        run_id,
+        status=RunStatus.ERROR,
+        error=normalized_error,
+        message=normalized_error,
+        progress=100,
+        result=payload,
+        finished_at=datetime.utcnow(),
+    )
+
+
 def _normalized_run_params(run: Run) -> dict[str, Any]:
     raw = getattr(run, "params", None)
     return raw if isinstance(raw, dict) else {}
@@ -388,7 +451,22 @@ async def _execute_method_async(
         try:
             async with AsyncSessionLocal() as db:
                 run_repo = RunRepository(db)
-                await run_repo.set_error(run_id, f"Run failed: {e!s}")
+                await _set_failed_run_with_payload(
+                    run_repo,
+                    run_id,
+                    error_message=f"Run failed: {e!s}",
+                    result_payload={
+                        "ok": False,
+                        "error": f"Run failed: {e!s}",
+                        "logs": [
+                            {
+                                "step": "api.worker.unhandled",
+                                "ok": False,
+                                "out": str(e),
+                            }
+                        ],
+                    },
+                )
                 await db.commit()
         except Exception:
             pass
@@ -603,15 +681,33 @@ async def _execute_method_async_impl(
                     response = await client.post(url, json=payload)
 
                     if response.status_code >= 400:
-                        err_msg = None
+                        raw_payload: Any = None
                         try:
-                            j = response.json()
-                            if isinstance(j, dict):
-                                err_msg = j.get("error") or j.get("message")
+                            raw_payload = response.json()
                         except Exception:
-                            pass
-                        err_msg = err_msg or response.text or f"{response.status_code} {response.reason_phrase}"
-                        await run_repo.set_error(run_id, err_msg)
+                            raw_payload = None
+
+                        fallback = response.text or f"{response.status_code} {response.reason_phrase}"
+                        failed_payload, err_msg = _normalize_failed_result_payload(
+                            raw_payload,
+                            status_code=response.status_code,
+                            fallback_message=fallback,
+                        )
+                        logs = failed_payload.get("logs")
+                        if isinstance(logs, list):
+                            logs.append(
+                                {
+                                    "step": "api.method.http",
+                                    "ok": False,
+                                    "out": f"HTTP {response.status_code} from method service endpoint {url}",
+                                }
+                            )
+                        await _set_failed_run_with_payload(
+                            run_repo,
+                            run_id,
+                            error_message=err_msg,
+                            result_payload=failed_payload,
+                        )
                         await db.commit()
                         return
 
@@ -631,15 +727,43 @@ async def _execute_method_async_impl(
                     "Could not connect to the method service. "
                     "Make sure the service is running and METHOD_*_URL (e.g. METHOD_GCTREE_URL) is set correctly."
                 )
-                await run_repo.set_error(
+                detail = friendly + "\n\nTechnical detail: " + str(e)
+                await _set_failed_run_with_payload(
+                    run_repo,
                     run_id,
-                    friendly + "\n\nTechnical detail: " + str(e),
+                    error_message=detail,
+                    result_payload={
+                        "ok": False,
+                        "error": detail,
+                        "logs": [
+                            {
+                                "step": "api.method.connect",
+                                "ok": False,
+                                "out": str(e),
+                            }
+                        ],
+                    },
                 )
                 await db.commit()
             except Exception as e:
                 msg = str(e)
                 error_detail = f"{msg}\n{traceback.format_exc()}"
-                await run_repo.set_error(run_id, error_detail)
+                await _set_failed_run_with_payload(
+                    run_repo,
+                    run_id,
+                    error_message=msg or "Run failed",
+                    result_payload={
+                        "ok": False,
+                        "error": msg or "Run failed",
+                        "logs": [
+                            {
+                                "step": "api.method.unhandled",
+                                "ok": False,
+                                "out": error_detail,
+                            }
+                        ],
+                    },
+                )
                 await db.commit()
         finally:
             stop_progress.set()
@@ -936,11 +1060,38 @@ async def run_result(
     file_repo = FileRepository(db)
     run = await _load_run_with_access(run_id, current_user=current_user, run_repo=run_repo)
 
-    if run.status != RunStatus.DONE:
+    if run.status not in (RunStatus.DONE, RunStatus.ERROR, RunStatus.CANCELLED):
         raise HTTPException(409, "Run not finished")
 
     dataset_name, dataset_files = await _resolve_dataset_meta(run, file_repo)
-    base_result = run.result if isinstance(run.result, dict) else {"ok": False}
+    if isinstance(run.result, dict):
+        base_result = dict(run.result)
+    else:
+        base_result = {"ok": run.status == RunStatus.DONE}
+
+    if run.status in (RunStatus.ERROR, RunStatus.CANCELLED):
+        raw_error = getattr(run, "error", None)
+        parsed_error_payload: dict[str, Any] | None = None
+        if isinstance(raw_error, str) and raw_error.strip():
+            try:
+                maybe_json = json.loads(raw_error)
+                if isinstance(maybe_json, dict):
+                    parsed_error_payload = maybe_json
+            except Exception:
+                parsed_error_payload = None
+
+        if parsed_error_payload is not None:
+            if "error" in parsed_error_payload:
+                base_result.setdefault("error", parsed_error_payload.get("error"))
+            if isinstance(parsed_error_payload.get("logs"), list):
+                base_result.setdefault("logs", parsed_error_payload.get("logs"))
+
+        if "error" not in base_result:
+            base_result["error"] = run.message or "Run failed"
+        base_result["ok"] = False
+        if not isinstance(base_result.get("logs"), list):
+            base_result["logs"] = []
+
     payload = dict(base_result)
     payload.setdefault("run_id", str(run.id))
     payload.setdefault("method_id", run.method_id)
