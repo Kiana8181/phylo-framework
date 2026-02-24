@@ -23,6 +23,7 @@ class RunRepository(BaseRepository[Run]):
         params: dict,
         user_id: Optional[UUID] = None,
         input_file_id: Optional[UUID] = None,
+        dataset_name: Optional[str] = None,
     ) -> Run:
         """Create a new run."""
         return await self.create(
@@ -30,6 +31,7 @@ class RunRepository(BaseRepository[Run]):
             params=params,
             user_id=user_id,
             input_file_id=input_file_id,
+            dataset_name=dataset_name,
             status=RunStatus.PENDING,
             progress=0,
             message="Queued",
