@@ -20,23 +20,23 @@ import { Switch } from "@/components/ui/switch";
 import { RunsApi } from "@/features/runs/api";
 import { useRunStatus } from "@/features/runs/hooks";
 import { useContractSpec, useMethods } from "@/features/methods/hooks";
-import type { RunSummary, LineagePlot } from "@phylo/contracts";
+import type { RunSummary, LineagePlot, RunTreeListItem } from "@phylo/contracts";
 import { Loader2, Maximize2, Search, Plus, X } from "lucide-react";
 import CompareExpandDialog, { type CompareExpandTreeRef } from "@/components/comparison/CompareExpandDialog";
 import RunAutocomplete from "@/components/comparison/RunAutocomplete";
 import RunParamsDropdown from "@/components/runs/RunParamsDropdown";
 
-type RunTreeListItem = {
-  treeId: string;
-  treeIndex: number;
-  hasLineagePlot: boolean;
-  hasServiceImage: boolean;
-};
-
 function datasetLabel(datasetName?: string | null, datasetFiles?: string[] | null): string {
   if (datasetName && datasetName.trim()) return datasetName;
   if (datasetFiles && datasetFiles.length > 0) return datasetFiles.join(", ");
   return "Dataset unavailable";
+}
+
+function treeSelectLabel(tree: RunTreeListItem, treeIndex: number): string {
+  const cloneText = String(tree.cloneId ?? "").trim();
+  const cloneSuffix = cloneText ? ` (clone ${cloneText})` : "";
+  const lineageSuffix = tree.hasLineagePlot ? "" : " (no lineage)";
+  return `Tree ${treeIndex + 1}${cloneSuffix}${lineageSuffix}`;
 }
 
 function useRunTrees(runId: string | null, enabled: boolean) {
@@ -260,7 +260,7 @@ function ComparisonColumn({
               <SelectContent>
                 {run.trees.map((t, i) => (
                   <SelectItem key={t.treeId} value={String(i)}>
-                    {t.hasLineagePlot ? `Tree ${i + 1}` : `Tree ${i + 1} (no lineage)`}
+                    {treeSelectLabel(t, i)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -731,7 +731,7 @@ function RunLineageBlock({
             <SelectContent>
               {run.trees.map((t, i) => (
                 <SelectItem key={t.treeId} value={String(i)}>
-                  {t.hasLineagePlot ? `Tree ${i + 1}` : `Tree ${i + 1} (no lineage)`}
+                  {treeSelectLabel(t, i)}
                 </SelectItem>
               ))}
             </SelectContent>
