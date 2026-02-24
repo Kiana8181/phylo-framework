@@ -30,6 +30,7 @@ export default function ResultsSummary({
   repertoireTable?: RepertoireTable;
 }) {
   const [currentPage, setCurrentPage] = useState(1);
+  const [repertoirePage, setRepertoirePage] = useState(1);
   const [tableQuery, setTableQuery] = useState("");
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
 
@@ -73,11 +74,32 @@ export default function ResultsSummary({
     );
   }, [repertoireColumns, repertoireRows, tableQuery]);
 
+  const totalRepertoirePages = useMemo(
+    () => Math.max(1, Math.ceil(filteredRepertoireRows.length / ROWS_PER_PAGE)),
+    [filteredRepertoireRows.length],
+  );
+
+  const pagedRepertoireRows = useMemo(() => {
+    const start = (repertoirePage - 1) * ROWS_PER_PAGE;
+    return filteredRepertoireRows.slice(start, start + ROWS_PER_PAGE);
+  }, [filteredRepertoireRows, repertoirePage]);
+
+  useEffect(() => {
+    setRepertoirePage(1);
+  }, [tableQuery, repertoireRows]);
+
+  useEffect(() => {
+    if (repertoirePage > totalRepertoirePages) setRepertoirePage(totalRepertoirePages);
+  }, [repertoirePage, totalRepertoirePages]);
+
+  const repertoireStartRow = filteredRepertoireRows.length ? (repertoirePage - 1) * ROWS_PER_PAGE + 1 : 0;
+  const repertoireEndRow = Math.min(repertoirePage * ROWS_PER_PAGE, filteredRepertoireRows.length);
+
   const copyRepertoireTsv = async () => {
-    if (!repertoireColumns.length || !filteredRepertoireRows.length) return;
+    if (!repertoireColumns.length || !pagedRepertoireRows.length) return;
     const lines = [
       repertoireColumns.join("\t"),
-      ...filteredRepertoireRows.map((row) =>
+      ...pagedRepertoireRows.map((row) =>
         repertoireColumns.map((col) => String(row?.[col] ?? "")).join("\t")
       ),
     ];
@@ -199,7 +221,7 @@ export default function ResultsSummary({
               className="sm:max-w-xs"
             />
             <div className="text-xs text-muted-foreground">
-              Showing {filteredRepertoireRows.length} of {repertoireRows.length}
+              Showing {repertoireStartRow}-{repertoireEndRow} of {filteredRepertoireRows.length} filtered ({repertoireRows.length} total)
             </div>
           </div>
           <div className="overflow-x-auto">
@@ -214,8 +236,8 @@ export default function ResultsSummary({
                 </tr>
               </thead>
               <tbody>
-                {filteredRepertoireRows.map((row, rowIdx) => (
-                  <tr key={`repertoire-row-${rowIdx}`} className="border-t align-top">
+                {pagedRepertoireRows.map((row, rowIdx) => (
+                  <tr key={`repertoire-row-${(repertoirePage - 1) * ROWS_PER_PAGE + rowIdx}`} className="border-t align-top">
                     {repertoireColumns.map((col) => (
                       <td key={`${rowIdx}-${col}`} className="px-3 py-2 whitespace-nowrap">
                         {String(row?.[col] ?? "")}
@@ -226,6 +248,31 @@ export default function ResultsSummary({
               </tbody>
             </table>
           </div>
+          {filteredRepertoireRows.length > ROWS_PER_PAGE && (
+            <div className="flex items-center justify-between gap-3 border-t px-4 py-3 text-sm">
+              <div className="text-muted-foreground">
+                Page {repertoirePage} of {totalRepertoirePages}
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setRepertoirePage((p) => Math.max(1, p - 1))}
+                  disabled={repertoirePage === 1}
+                >
+                  Previous
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setRepertoirePage((p) => Math.min(totalRepertoirePages, p + 1))}
+                  disabled={repertoirePage === totalRepertoirePages}
+                >
+                  Next
+                </Button>
+              </div>
+            </div>
+          )}
           {repertoireTable?.truncated && (
             <div className="px-4 py-2 border-t text-xs text-muted-foreground">
               Preview truncated to {repertoireRows.length} rows (total {repertoireTable?.total_rows ?? repertoireRows.length}).
