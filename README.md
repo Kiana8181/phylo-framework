@@ -34,7 +34,20 @@ A one-page UI to run phylogeny/lineage tree methods behind a simple orchestrator
 
 ## Quick Start
 
-1. **Install Node & workspace deps (root)** and **API Python deps**:
+1. **Clone with submodules** (required for ClonalTree base code):
+
+```bash
+git clone --recurse-submodules <repo-url>
+cd phylo-framework
+```
+
+If you already cloned without submodules:
+
+```bash
+git submodule update --init --recursive
+```
+
+2. **Install Node & workspace deps (root)** and **API Python deps**:
 
 ```bash
 # Node deps (root — installs workspaces too)
@@ -47,13 +60,13 @@ python -m pip install -U pip
 pip install -r apps/api/requirements.txt
 ```
 
-2. **Make helper scripts executable** (they are expected at the repo root):
+3. **Make helper scripts executable** (they are expected at the repo root):
 
 ```bash
 chmod +x ./run.sh ./scripts/dev-with-docker.sh ./scripts/dev-with-local-r.sh
 ```
 
-3. **Run the interactive menu** (uses Inquirer under the hood):
+4. **Run the interactive menu** (uses Inquirer under the hood):
 
 ```bash
 ./run.sh
@@ -253,6 +266,12 @@ npm run db:migrate
 
 ### 4) Start method services (pick one approach)
 
+Before starting services, ensure submodules are initialized:
+
+```bash
+git submodule update --init --recursive
+```
+
 #### A) Docker methods (uses `method-services.mjs` + config)
 
 ```bash
@@ -330,9 +349,9 @@ pip install -r services/clonaltree/requirements.txt
 )
 ```
 
-Notice: ClonalTree requires **MUSCLE v3.x**.  
-If you start via `./run.sh` -> `Dev -> Local R` (or `scripts/dev-with-local-r.sh`), MUSCLE v3.8.31 is auto-installed/checked.  
-If you start ClonalTree manually, ensure `muscle -version` reports major version `< 5`; otherwise `/run` fails with `MUSCLE v3 is required`.
+Notice: ClonalTree requires **MUSCLE v5.x**.  
+If you start via `./run.sh` -> `Dev -> Local R` (or `scripts/dev-with-local-r.sh`), MUSCLE v5 is auto-installed/checked.  
+If you start ClonalTree manually, ensure `muscle -version` reports major version `>= 5`; otherwise `/run` fails with a version error.
 
 ### 5) Start API
 

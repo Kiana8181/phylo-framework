@@ -114,10 +114,22 @@ resolve_storage_abs(){
   fi
 }
 
+ensure_clonotype_submodule(){
+  local marker="$ROOT/services/clonaltree/base-codes/main_pipeline.py"
+  if [[ -f "$marker" ]]; then
+    return 0
+  fi
+  echo "${BLU}==> Initializing clonaltree submodule${CLR}"
+  git -C "$ROOT" submodule update --init --recursive services/clonaltree/base-codes || \
+    die "Failed to initialize services/clonaltree/base-codes submodule"
+  [[ -f "$marker" ]] || die "Missing clonaltree submodule files. Run: git submodule update --init --recursive"
+}
+
 echo "${BLU}==> Checking prerequisites${CLR}"
-need_cmd docker; need_cmd node; need_cmd npm; need_cmd python3; need_cmd curl
+need_cmd docker; need_cmd node; need_cmd npm; need_cmd python3; need_cmd curl; need_cmd git
 
 cd "$ROOT"
+ensure_clonotype_submodule
 
 echo "${BLU}==> Syncing method-service env from config${CLR}"
 node "$ROOT/scripts/method-services.mjs" sync-env >/dev/null
