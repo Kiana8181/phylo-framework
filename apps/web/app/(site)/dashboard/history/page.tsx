@@ -26,6 +26,12 @@ function formatDate(iso: string | null) {
   }
 }
 
+function formatDatasetLabel(datasetName?: string | null, datasetFiles?: string[] | null) {
+  if (datasetName && datasetName.trim()) return datasetName;
+  if (datasetFiles && datasetFiles.length > 0) return datasetFiles.join(", ");
+  return "—";
+}
+
 function statusBadge(status: string) {
   const map: Record<string, string> = {
     PENDING: "bg-muted text-muted-foreground",
@@ -92,68 +98,80 @@ export default function RunHistoryPage() {
                     <tr className="border-b">
                       <th className="text-left py-3 px-2 font-medium">Run ID</th>
                       <th className="text-left py-3 px-2 font-medium">Method</th>
+                      <th className="text-left py-3 px-2 font-medium">Dataset</th>
                       <th className="text-left py-3 px-2 font-medium">Status</th>
                       <th className="text-left py-3 px-2 font-medium">Created</th>
                       <th className="text-right py-3 px-2 font-medium">Action</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {runs.map((run) => (
-                      <tr key={run.id} className="border-b last:border-0">
-                        <td className="py-3 px-2 font-mono text-xs">
-                          <div className="flex items-center gap-1 max-w-[14rem]">
-                            <span className="truncate" title={run.id}>
-                              {run.id}
-                            </span>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-7 w-7 shrink-0"
-                              onClick={() => {
-                                navigator.clipboard.writeText(run.id).then(
-                                  () => notify.success("Run ID copied"),
-                                  () => notify.error("Copy failed")
-                                );
-                              }}
-                              title="Copy Run ID"
-                              aria-label="Copy Run ID"
-                            >
-                              <Copy className="h-3.5 w-3.5" />
-                            </Button>
-                          </div>
-                        </td>
-                        <td className="py-3 px-2">{run.method_id}</td>
-                        <td className="py-3 px-2">
-                          {statusBadge(run.status)}
-                          {run.progress != null && run.status === "RUNNING" && (
-                            <span className="ml-2 text-muted-foreground">
-                              {run.progress}%
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-3 px-2 text-muted-foreground">
-                          {formatDate(run.created_at)}
-                        </td>
-                        <td className="py-3 px-2 text-right">
-                          <div className="flex items-center justify-end gap-1">
-                            <Link href={`/dashboard?runId=${run.id}`}>
-                              <Button variant="ghost" size="sm" className="gap-1">
-                                View details
-                                <ExternalLink className="h-3 w-3" />
+                    {runs.map((run) => {
+                      const datasetLabel = formatDatasetLabel(run.dataset_name, run.dataset_files);
+                      return (
+                        <tr key={run.id} className="border-b last:border-0">
+                          <td className="py-3 px-2 font-mono text-xs">
+                            <div className="flex items-center gap-1 max-w-[14rem]">
+                              <span className="truncate" title={run.id}>
+                                {run.id}
+                              </span>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7 shrink-0"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(run.id).then(
+                                    () => notify.success("Run ID copied"),
+                                    () => notify.error("Copy failed")
+                                  );
+                                }}
+                                title="Copy Run ID"
+                                aria-label="Copy Run ID"
+                              >
+                                <Copy className="h-3.5 w-3.5" />
                               </Button>
-                            </Link>
-                            {run.status === "DONE" && (
-                              <Link href={`/dashboard/comparison?baseRunId=${encodeURIComponent(run.id)}`}>
-                                <Button variant="ghost" size="sm" className="gap-1" title="Compare with other runs on same dataset">
-                                  <GitCompare className="h-3 w-3" />
-                                  Compare
+                            </div>
+                          </td>
+                          <td className="py-3 px-2">{run.method_id}</td>
+                          <td className="py-3 px-2 text-muted-foreground">
+                            <span
+                              className="inline-block max-w-[16rem] truncate align-bottom"
+                              title={datasetLabel}
+                            >
+                              {datasetLabel}
+                            </span>
+                          </td>
+                          <td className="py-3 px-2">
+                            {statusBadge(run.status)}
+                            {run.progress != null && run.status === "RUNNING" && (
+                              <span className="ml-2 text-muted-foreground">
+                                {run.progress}%
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-3 px-2 text-muted-foreground">
+                            {formatDate(run.created_at)}
+                          </td>
+                          <td className="py-3 px-2 text-right">
+                            <div className="flex items-center justify-end gap-1">
+                              <Link href={`/dashboard?runId=${run.id}`}>
+                                <Button variant="ghost" size="sm" className="gap-1">
+                                  View details
+                                  <ExternalLink className="h-3 w-3" />
                                 </Button>
                               </Link>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
+                              {run.status === "DONE" && (
+                                <Link href={`/dashboard/comparison?baseRunId=${encodeURIComponent(run.id)}`}>
+                                  <Button variant="ghost" size="sm" className="gap-1" title="Compare with other runs on same dataset">
+                                    <GitCompare className="h-3 w-3" />
+                                    Compare
+                                  </Button>
+                                </Link>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
