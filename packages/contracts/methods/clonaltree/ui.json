@@ -14,6 +14,13 @@
     "top_clones",
     "clonotypes_per_clone",
     "use_refinement",
+    "v_distance",
+    "j_distance",
+    "cdr3_distance",
+    "combine_distance",
+    "merge_singleton",
+    "clonotype_method",
+    "clonotype_similarity_threshold",
     "tree_use_abundance",
     "tree_revision"
   ],
