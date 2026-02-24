@@ -10,6 +10,7 @@ import { RunsApi } from "@/features/runs/api";
 import LineageSVG from "@/components/LineageSVG";
 import TreeSVG from "@/components/TreeSVG";
 import TreeZoomPane from "@/components/comparison/TreeZoomPane";
+import SequenceTraceInfoIcon from "@/components/sequence-trace/SequenceTraceInfoIcon";
 
 export type CompareExpandTreeRef = {
   panelId: string;
@@ -117,7 +118,10 @@ const ExpandTreeTile = memo(function ExpandTreeTile({
   return (
     <Card className="flex h-full min-w-[500px] w-[min(92vw,680px)] shrink-0 flex-col">
       <CardHeader className="border-b pb-3">
-        <CardTitle className="text-base">{treeRef.title}</CardTitle>
+        <CardTitle className="text-base flex items-center gap-1.5">
+          {treeRef.title}
+          {treeRef.title.startsWith("Sequence Trace") && <SequenceTraceInfoIcon />}
+        </CardTitle>
         <p className="text-xs text-muted-foreground">
           {status?.method_id ?? "—"} · {status?.status ?? "—"} · {treeStatusLabel(tree, resolvedTreeIndex)}
         </p>
@@ -246,8 +250,11 @@ export default function CompareExpandDialog({
         onMouseDown={(event) => event.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b px-4 py-3">
-          <div>
-            <h3 className="text-base font-semibold">Expanded comparison gallery</h3>
+          <div className="space-y-1">
+            <div className="flex items-center gap-1.5">
+              <h3 className="text-base font-semibold">Expanded Sequence Trace gallery</h3>
+              <SequenceTraceInfoIcon />
+            </div>
             <p className="text-xs text-muted-foreground">
               {trees.length} tree{trees.length === 1 ? "" : "s"} shown from the current panel.
             </p>
@@ -257,7 +264,7 @@ export default function CompareExpandDialog({
             variant="ghost"
             size="icon"
             onClick={() => onOpenChange(false)}
-            aria-label="Close expanded comparison"
+            aria-label="Close expanded Sequence Trace"
           >
             <X className="h-4 w-4" />
           </Button>
@@ -265,7 +272,7 @@ export default function CompareExpandDialog({
 
         <div className="flex-1 overflow-auto p-4">
           {trees.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No trees are currently selected in this comparison panel.</p>
+            <p className="text-sm text-muted-foreground">No trees are currently selected in this Sequence Trace panel.</p>
           ) : (
             <div className="flex h-full min-h-0 items-stretch gap-4 overflow-x-auto pb-2">
               {trees.map((treeRef) => (
