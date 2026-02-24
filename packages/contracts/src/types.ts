@@ -162,13 +162,52 @@ export type RunWarning =
       details?: any;
     };
 
+export type RunOutputTable = {
+  filename: string;
+  format: string;
+  columns: string[];
+  rows: Array<Record<string, any>>;
+  total_rows?: number;
+  truncated?: boolean;
+  [key: string]: any;
+};
+
+export type RunTables = {
+  repertoire_two_levels_info?: RunOutputTable;
+  [key: string]: any;
+};
+
+export type RunProvenance = {
+  clonotype_submodule?: {
+    tag?: string | null;
+    commit?: string | null;
+    ref?: string | null;
+    [key: string]: any;
+  };
+  muscle?: {
+    major?: number | null;
+    version_raw?: string | null;
+    [key: string]: any;
+  };
+  container?: {
+    image_ref?: string | null;
+    image_digest?: string | null;
+    [key: string]: any;
+  };
+  [key: string]: any;
+};
+
 export type RunResult = {
   ok: boolean;
   trees: Array<RunTree | string>;
   clones: any;
+  clone_catalog?: any;
   stats: any;
+  node_abundances?: Array<Record<string, number>>;
   annotations?: Array<Array<Record<string, any>> | null>;
   figures?: FigurePayload;
+  tables?: RunTables;
+  provenance?: RunProvenance;
   warnings?: RunWarning[];
   render?: string | null;
   logs?: RunLogEntry[];

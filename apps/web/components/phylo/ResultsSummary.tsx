@@ -2,23 +2,36 @@
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import ArtifactsDownloadButton from "../ArtifactsDownloadButton";
 import { useEffect, useMemo, useState } from "react";
 
 const ROWS_PER_PAGE = 5;
+
+type RepertoireTable = {
+  filename?: string;
+  columns?: string[];
+  rows?: Array<Record<string, any>>;
+  total_rows?: number;
+  truncated?: boolean;
+};
 
 export default function ResultsSummary({
   stats,
   cloneRows,
   artifact_zip_b64,
   artifact_name,
+  repertoireTable,
 }: {
   stats: any;
   cloneRows: Array<{ id: string; seqs: any }>;
   artifact_zip_b64: any;
   artifact_name: string;
+  repertoireTable?: RepertoireTable;
 }) {
   const [currentPage, setCurrentPage] = useState(1);
+  const [tableQuery, setTableQuery] = useState("");
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
 
   const totalPages = useMemo(
     () => Math.max(1, Math.ceil(cloneRows.length / ROWS_PER_PAGE)),
@@ -40,6 +53,43 @@ export default function ResultsSummary({
 
   const startRow = cloneRows.length ? (currentPage - 1) * ROWS_PER_PAGE + 1 : 0;
   const endRow = Math.min(currentPage * ROWS_PER_PAGE, cloneRows.length);
+
+  const repertoireRows = useMemo(() => {
+    return Array.isArray(repertoireTable?.rows) ? repertoireTable.rows : [];
+  }, [repertoireTable?.rows]);
+
+  const repertoireColumns = useMemo(() => {
+    const columns = Array.isArray(repertoireTable?.columns) ? repertoireTable.columns : [];
+    if (columns.length) return columns;
+    if (!repertoireRows.length) return [] as string[];
+    return Object.keys(repertoireRows[0] ?? {});
+  }, [repertoireRows, repertoireTable?.columns]);
+
+  const filteredRepertoireRows = useMemo(() => {
+    const q = tableQuery.trim().toLowerCase();
+    if (!q) return repertoireRows;
+    return repertoireRows.filter((row) =>
+      repertoireColumns.some((col) => String(row?.[col] ?? "").toLowerCase().includes(q))
+    );
+  }, [repertoireColumns, repertoireRows, tableQuery]);
+
+  const copyRepertoireTsv = async () => {
+    if (!repertoireColumns.length || !filteredRepertoireRows.length) return;
+    const lines = [
+      repertoireColumns.join("\t"),
+      ...filteredRepertoireRows.map((row) =>
+        repertoireColumns.map((col) => String(row?.[col] ?? "")).join("\t")
+      ),
+    ];
+    try {
+      await navigator.clipboard.writeText(lines.join("\n"));
+      setCopyState("copied");
+      window.setTimeout(() => setCopyState("idle"), 1500);
+    } catch {
+      setCopyState("error");
+      window.setTimeout(() => setCopyState("idle"), 1500);
+    }
+  };
 
   return (
     <section className="space-y-4">
@@ -129,6 +179,60 @@ export default function ResultsSummary({
           )}
         </Card>
       ) : null}
+
+      {repertoireRows.length > 0 && (
+        <Card className="p-0 overflow-hidden">
+          <div className="px-4 py-3 border-b flex items-center justify-between gap-3">
+            <div>
+              <h4 className="font-medium">Other outputs / Tables</h4>
+              <p className="text-xs text-muted-foreground">{repertoireTable?.filename || "repertoire_two_levels_info.tsv"}</p>
+            </div>
+            <Button variant="outline" size="sm" onClick={copyRepertoireTsv}>
+              {copyState === "copied" ? "Copied" : copyState === "error" ? "Copy failed" : "Copy visible rows"}
+            </Button>
+          </div>
+          <div className="px-4 py-3 border-b flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between">
+            <Input
+              value={tableQuery}
+              onChange={(e) => setTableQuery(e.target.value)}
+              placeholder="Search table..."
+              className="sm:max-w-xs"
+            />
+            <div className="text-xs text-muted-foreground">
+              Showing {filteredRepertoireRows.length} of {repertoireRows.length}
+            </div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead className="bg-muted/40">
+                <tr>
+                  {repertoireColumns.map((col) => (
+                    <th key={col} className="px-3 py-2 text-left whitespace-nowrap">
+                      {col}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {filteredRepertoireRows.map((row, rowIdx) => (
+                  <tr key={`repertoire-row-${rowIdx}`} className="border-t align-top">
+                    {repertoireColumns.map((col) => (
+                      <td key={`${rowIdx}-${col}`} className="px-3 py-2 whitespace-nowrap">
+                        {String(row?.[col] ?? "")}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {repertoireTable?.truncated && (
+            <div className="px-4 py-2 border-t text-xs text-muted-foreground">
+              Preview truncated to {repertoireRows.length} rows (total {repertoireTable?.total_rows ?? repertoireRows.length}).
+            </div>
+          )}
+        </Card>
+      )}
 
       {artifact_zip_b64 && <ArtifactsDownloadButton base64={artifact_zip_b64} filename={artifact_name} />}
     </section>
