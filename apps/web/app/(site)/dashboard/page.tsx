@@ -12,6 +12,7 @@ import { useContractSpec, useMethods, useMethodSpec } from "@/features/methods/h
 import { RunsApi } from "@/features/runs/api";
 import { useRunResult, useRunStatus } from "@/features/runs/hooks";
 import { cleanNewick } from "@/lib/newick";
+import { formatRunDuration } from "@/lib/runDuration";
 import type { MethodInfo, RunTree, RunWarning } from "@phylo/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { GitCompare } from "lucide-react";
@@ -189,6 +190,9 @@ function DashboardPageContent() {
   const runDatasetFiles = result?.dataset_files ?? status?.dataset_files ?? [];
   const runDatasetLabel = _datasetLabel(runDatasetName, runDatasetFiles);
   const runParams = (result?.params ?? status?.params ?? {}) as Record<string, unknown>;
+  const runStartedAt = status?.started_at ?? result?.started_at ?? null;
+  const runFinishedAt = status?.finished_at ?? result?.finished_at ?? null;
+  const runDurationLabel = formatRunDuration(runStartedAt, runFinishedAt);
 
   const cloneRows = useMemo(
     () =>
@@ -268,6 +272,8 @@ function DashboardPageContent() {
           status={status?.status}
           progress={status?.progress ?? 0}
           message={status?.message}
+          startedAt={status?.started_at}
+          finishedAt={status?.finished_at}
           statusError={statusError ? statusErr : undefined}
           onDismiss={
             status?.status === "ERROR" || status?.status === "CANCELLED" || statusError
@@ -356,6 +362,11 @@ function DashboardPageContent() {
                 </p>
               </div>
               <div className="flex items-center gap-2 flex-wrap">
+                {runDurationLabel && (
+                  <span className="inline-flex items-center rounded-full border bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground">
+                    Time spent: {runDurationLabel}
+                  </span>
+                )}
                 <Link href={`/dashboard/comparison?baseRunId=${encodeURIComponent(runId)}`}>
                   <Button variant="outline" size="sm" className="gap-1.5">
                     <GitCompare className="h-4 w-4" />

@@ -57,6 +57,8 @@ export type RunStatus = {
   params?: RunParams;
   dataset_name?: string | null;
   dataset_files?: string[];
+  started_at?: string | null;
+  finished_at?: string | null;
   error?: {
     code?: string;
     message?: string;
@@ -219,4 +221,6 @@ export type RunResult = {
   params?: RunParams;
   dataset_name?: string | null;
   dataset_files?: string[];
+  started_at?: string | null;
+  finished_at?: string | null;
 };
