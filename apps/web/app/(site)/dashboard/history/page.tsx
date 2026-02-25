@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useRunsList } from "@/features/runs/hooks";
+import { formatRunDuration } from "@/lib/runDuration";
 import {
   Card,
   CardContent,
@@ -100,6 +101,7 @@ export default function RunHistoryPage() {
                       <th className="text-left py-3 px-2 font-medium">Method</th>
                       <th className="text-left py-3 px-2 font-medium">Dataset</th>
                       <th className="text-left py-3 px-2 font-medium">Status</th>
+                      <th className="text-left py-3 px-2 font-medium">Duration</th>
                       <th className="text-left py-3 px-2 font-medium">Created</th>
                       <th className="text-right py-3 px-2 font-medium">Action</th>
                     </tr>
@@ -107,6 +109,7 @@ export default function RunHistoryPage() {
                   <tbody>
                     {runs.map((run) => {
                       const datasetLabel = formatDatasetLabel(run.dataset_name, run.dataset_files);
+                      const durationLabel = formatRunDuration(run.started_at, run.finished_at);
                       return (
                         <tr key={run.id} className="border-b last:border-0">
                           <td className="py-3 px-2 font-mono text-xs">
@@ -147,6 +150,9 @@ export default function RunHistoryPage() {
                                 {run.progress}%
                               </span>
                             )}
+                          </td>
+                          <td className="py-3 px-2 text-muted-foreground">
+                            {durationLabel ?? "—"}
                           </td>
                           <td className="py-3 px-2 text-muted-foreground">
                             {formatDate(run.created_at)}

@@ -331,6 +331,8 @@ def _public_status(
         "params": _normalized_run_params(run),
         "dataset_name": resolved_dataset_name,
         "dataset_files": resolved_dataset_files,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "finished_at": run.finished_at.isoformat() if run.finished_at else None,
     }
     raw_error = getattr(run, "error", None)
     if raw_error:
@@ -1098,6 +1100,8 @@ async def run_result(
     payload.setdefault("params", _normalized_run_params(run))
     payload.setdefault("dataset_name", dataset_name)
     payload.setdefault("dataset_files", dataset_files)
+    payload.setdefault("started_at", run.started_at.isoformat() if run.started_at else None)
+    payload.setdefault("finished_at", run.finished_at.isoformat() if run.finished_at else None)
     return _attach_clone_ids_to_result_trees(payload)
 
 
