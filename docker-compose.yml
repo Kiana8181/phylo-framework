@@ -76,9 +76,23 @@ services:
       - ./.env
     environment:
       NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
-    depends_on: [api-prod]
+    depends_on:
+      api-prod:
+        condition: service_healthy
     ports:
       - "${WEB_PORT:-3000}:3000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     profiles: ["prod"]
 
   api:
@@ -111,7 +125,7 @@ services:
       - type: bind
         source: ${STORAGE_LOCAL_PATH:-runtime/storage}
         target: /runtime/storage
-    command: uvicorn apps.api.main:app --host 0.0.0.0 --port 8000 --reload
+    command: sh -lc "alembic upgrade head && exec uvicorn apps.api.main:app --host 0.0.0.0 --port 8000 --reload"
     profiles: ["dev"]
 
   api-prod:
@@ -144,7 +158,13 @@ services:
       - type: bind
         source: ${STORAGE_LOCAL_PATH:-runtime/storage}
         target: /runtime/storage
-    command: uvicorn apps.api.main:app --host 0.0.0.0 --port 8000
+    command: sh -lc "alembic upgrade head && exec uvicorn apps.api.main:app --host 0.0.0.0 --port 8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     profiles: ["prod"]
 
   dowser:
@@ -171,7 +191,13 @@ services:
         read_only: true
     expose:
       - "${METHOD_DOWSER_CONTAINER_PORT:-8001}"
-    command: ["R", "-q", "-e", "port <- as.integer(Sys.getenv('METHOD_DOWSER_CONTAINER_PORT', '8001')); pr <- plumber::plumb('/srv/plumber.R'); pr$$run(host='0.0.0.0', port=port)"]
+    command:
+      [
+        "R",
+        "-q",
+        "-e",
+        "port <- as.integer(Sys.getenv('METHOD_DOWSER_CONTAINER_PORT', '8001')); pr <- plumber::plumb('/srv/plumber.R'); pr$$run(host='0.0.0.0', port=port)",
+      ]
     profiles: ["dev", "prod"]
 
   gctree:
@@ -222,7 +248,13 @@ services:
         read_only: true
     expose:
       - "${METHOD_BREPPHYLO_CONTAINER_PORT:-8003}"
-    command: ["R", "-q", "-e", "port <- as.integer(Sys.getenv('METHOD_BREPPHYLO_CONTAINER_PORT', '8003')); pr <- plumber::plumb('/srv/plumber.R'); pr$$run(host='0.0.0.0', port=port)"]
+    command:
+      [
+        "R",
+        "-q",
+        "-e",
+        "port <- as.integer(Sys.getenv('METHOD_BREPPHYLO_CONTAINER_PORT', '8003')); pr <- plumber::plumb('/srv/plumber.R'); pr$$run(host='0.0.0.0', port=port)",
+      ]
     profiles: ["dev", "prod"]
 
   clonaltree:

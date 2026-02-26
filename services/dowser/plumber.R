@@ -357,12 +357,30 @@ parse_vec <- function(x) {
 # -------------------------------------------------
 run_handler_impl <- function(req, res) {
   library(jsonlite); library(readr); library(dowser); library(ape)
+  warnings <- character(0)
+  logs <- list()
+  add_log <- function(step, ok, out = "") {
+    logs[[length(logs) + 1]] <<- list(
+      step = as.character(step),
+      ok = isTRUE(ok),
+      out = as.character(out %||% "")
+    )
+  }
+  fail_local <- function(msg, status = 400, step = "dowser.error") {
+    if (!is.null(step) && nzchar(step)) add_log(step, FALSE, msg)
+    if (is.null(res$status) || res$status == 200) res$status <- status
+    list(
+      ok = FALSE,
+      error = as.character(msg),
+      logs = logs,
+      warnings = as.list(as.character(warnings))
+    )
+  }
 
   tryCatch({
     ct <- get_content_type(req)
     logf("[dowser] content-type: %s", ct)
-
-    warnings <- character(0)  # collect UI warnings
+    add_log("dowser.request.contentType", TRUE, sprintf("content-type=%s", ct))
 
     # ---- Parse, normalize params ----
     parse_params <- function(raw) {
@@ -409,10 +427,10 @@ run_handler_impl <- function(req, res) {
 
     # ---- JSON only: { file_path, params } ----
     if (!grepl("application/json", ct, fixed = TRUE)) {
-      res$status <- 415
-      return(list(
-        ok = FALSE,
-        error = "Unsupported content type. Use application/json with {\"file_path\": \"/path/to/file\", \"params\": {...}}."
+      return(fail_local(
+        "Unsupported content type. Use application/json with {\"file_path\": \"/path/to/file\", \"params\": {...}}.",
+        status = 415,
+        step = "dowser.request.validate"
       ))
     }
 
@@ -423,26 +441,52 @@ run_handler_impl <- function(req, res) {
       error = function(e) e
     )
     if (inherits(body, "error") || !is.list(body)) {
-      res$status <- 400
-      return(list(ok = FALSE, error = "Invalid JSON body. Expected an object with file_path and optional params."))
+      return(fail_local(
+        "Invalid JSON body. Expected an object with file_path and optional params.",
+        status = 400,
+        step = "dowser.request.parse"
+      ))
     }
 
     file_path <- body$file_path %||% NULL
     if (is.null(file_path) || !nzchar(file_path)) {
-      res$status <- 400
-      return(list(ok = FALSE, error = "file_path is required and must exist on the server"))
+      return(fail_local(
+        "file_path is required and must exist on the server",
+        status = 400,
+        step = "dowser.request.validate"
+      ))
     }
     if (!file.exists(file_path) || isTRUE(file.info(file_path)$isdir)) {
-      res$status <- 400
-      return(list(ok = FALSE, error = "file_path is required and must exist on the server"))
+      return(fail_local(
+        "file_path is required and must exist on the server",
+        status = 400,
+        step = "dowser.request.validate"
+      ))
     }
     if (file.access(file_path, 4) != 0) {
-      res$status <- 400
-      return(list(ok = FALSE, error = "file_path exists but is not readable on the server"))
+      return(fail_local(
+        "file_path exists but is not readable on the server",
+        status = 400,
+        step = "dowser.request.validate"
+      ))
     }
+    add_log("dowser.request.validate", TRUE, sprintf("Validated JSON request and file path: %s", file_path))
 
     p <- parse_params(jsonlite::toJSON(body$params %||% list()))
+    add_log(
+      "dowser.params.parse",
+      TRUE,
+      sprintf(
+        "Normalized params: tree_model=%s, minseq=%d, nproc=%d, apply_filters=%s.",
+        p$tree_model, p$minseq, p$nproc, if (isTRUE(p$apply_filters)) "true" else "false"
+      )
+    )
     db <- read_airr_from_path(file_path)
+    add_log(
+      "dowser.input.read",
+      TRUE,
+      sprintf("Loaded input table from %s with %d rows and %d columns.", file_path, nrow(db), ncol(db))
+    )
 
     # ---- Sanity & cleaning ----
     logf("[dowser] rows=%d cols=%d", nrow(db), ncol(db))
@@ -453,6 +497,11 @@ run_handler_impl <- function(req, res) {
     if ("clone_id"    %in% names(db)) db$clone_id    <- as.character(db$clone_id)
     db <- db[!is.na(db$sequence_id) & nzchar(db$sequence_id) &
                !is.na(db$clone_id)    & nzchar(db$clone_id), , drop=FALSE]
+    add_log(
+      "dowser.input.validate",
+      TRUE,
+      sprintf("Validated AIRR fields and retained %d rows after removing empty sequence_id/clone_id.", nrow(db))
+    )
 
     # --- label column existence & coercion ---
     if (!p$label_field %in% names(db)) {
@@ -521,13 +570,26 @@ run_handler_impl <- function(req, res) {
           db <- db[!drop_mask, , drop = FALSE]
           logf("[dowser] Dropped %d rows by removing %d mismatched clones.", dropped, n_clones_len_mismatch)
         } else if (p$len_policy == "error") {
-          res$status <- 400
-          return(list(ok=FALSE, error=sprintf(
-            "Unequal sequence/germline lengths for %d rows across %d clones (e.g., %s).",
-            n_len_mismatch, n_clones_len_mismatch, if (n_clones_len_mismatch) bad_clones[1] else "NA"
-          )))
+          return(fail_local(
+            sprintf(
+              "Unequal sequence/germline lengths for %d rows across %d clones (e.g., %s).",
+              n_len_mismatch, n_clones_len_mismatch, if (n_clones_len_mismatch) bad_clones[1] else "NA"
+            ),
+            status = 400,
+            step = "dowser.filters.lengthPolicy"
+          ))
         } # ignore => no action
       }
+      add_log(
+        "dowser.filters.apply",
+        TRUE,
+        sprintf(
+          "Applied filters with len_policy=%s; upper=%d, gap_rows=%d, noniupac_rows=%d, len_mismatch_rows=%d.",
+          p$len_policy, filter_stats$upper, filter_stats$gap_rows, filter_stats$noniupac_rows, n_len_mismatch
+        )
+      )
+    } else {
+      add_log("dowser.filters.apply", TRUE, "apply_filters=FALSE; skipped optional text/length filters.")
     }
 
     # ---- IgPhyML preflight (ALWAYS if igphyml chosen) ----
@@ -543,13 +605,13 @@ run_handler_impl <- function(req, res) {
           db <- db[keep, , drop=FALSE]
           logf("[dowser] IgPhyML: dropped %d rows with stop codons and/or out-of-frame.", dropped)
           if (nrow(db) == 0) {
-            res$status <- 400
-            return(list(
-              ok = FALSE,
-              error = sprintf(
+            return(fail_local(
+              sprintf(
                 "All sequences removed for IgPhyML: %d had stop codons and %d were out-of-frame.",
                 n_dropped_stops, n_bad_frame
-              )
+              ),
+              status = 400,
+              step = "dowser.igphyml.preflight"
             ))
           }
         } else if (p$ig_stop_policy == "fallback_ml") {
@@ -558,16 +620,24 @@ run_handler_impl <- function(req, res) {
           logf("[dowser] IgPhyML fallback -> ML due to stops/frame (stop=%d, frame=%d).",
                n_dropped_stops, n_bad_frame)
         } else { # "error"
-          res$status <- 400
-          return(list(
-            ok = FALSE,
-            error = sprintf(
+          return(fail_local(
+            sprintf(
               "IgPhyML blocked: %d sequences contain stop codons and %d are out-of-frame.",
               n_dropped_stops, n_bad_frame
-            )
+            ),
+            status = 400,
+            step = "dowser.igphyml.preflight"
           ))
         }
       }
+      add_log(
+        "dowser.igphyml.preflight",
+        TRUE,
+        sprintf(
+          "IgPhyML preflight complete; stop_rows=%d, frame_rows=%d, policy=%s, effective_model=%s.",
+          n_dropped_stops, n_bad_frame, p$ig_stop_policy, p$tree_model
+        )
+      )
     }
 
     # ---- Build clones & trees ----
@@ -581,9 +651,17 @@ run_handler_impl <- function(req, res) {
       minseq = p$minseq
     )
     if (nrow(clones) == 0) {
-      res$status <- 400
-      return(list(ok=FALSE, error=sprintf("No clones met the criteria (minseq=%d).", p$minseq)))
+      return(fail_local(
+        sprintf("No clones met the criteria (minseq=%d).", p$minseq),
+        status = 400,
+        step = "dowser.clones.format"
+      ))
     }
+    add_log(
+      "dowser.clones.format",
+      TRUE,
+      sprintf("Formatted clones successfully: %d clones (minseq=%d).", nrow(clones), p$minseq)
+    )
 
     build <- switch(p$tree_model,
       "ml"      = "pml",
@@ -600,20 +678,23 @@ run_handler_impl <- function(req, res) {
       resolved <- tryCatch(
         resolve_igphyml(user_exec = IG_EXEC_DEFAULT, user_motifs = IG_MOTIFS_DEFAULT, require_ok = TRUE),
         error = function(e) {
-          res$status <- 400
           return(structure(list(.error = TRUE, msg = conditionMessage(e)), class = "exec_error"))
         }
       )
 
       if (inherits(resolved, "exec_error")) {
-        return(list(ok = FALSE, error = resolved$msg))
+        return(fail_local(resolved$msg, status = 400, step = "dowser.igphyml.resolve"))
       }
       if (!isTRUE(resolved$ok)) {
-        res$status <- 400
-        return(list(ok = FALSE, error = resolved$error))
+        return(fail_local(resolved$error, status = 400, step = "dowser.igphyml.resolve"))
       }
 
       args$exec <- resolved$exec
+      add_log(
+        "dowser.igphyml.resolve",
+        TRUE,
+        sprintf("Resolved IgPhyML executable: %s", resolved$exec)
+      )
     }
 
     trees_tbl <- tryCatch(
@@ -621,29 +702,34 @@ run_handler_impl <- function(req, res) {
       error = function(e) {
         msg <- conditionMessage(e)
         if (grepl("stop codon|out[- ]of[- ]frame", msg, ignore.case = TRUE)) {
-          res$status <- 400
-          return(list(
-            ok = FALSE,
-            error = paste0(
+          return(fail_local(
+            paste0(
               "IgPhyML failed due to stop codons/frame issues. ",
               "Use 'ig_stop_policy' = 'drop_seqs' (recommended) or 'fallback_ml'."
-            )
+            ),
+            status = 400,
+            step = "dowser.trees.build"
           ))
         }
         if (grepl("Hotspot tables not found|IGPHYML_PATH", msg, ignore.case = TRUE)) {
-          res$status <- 400
-          return(list(
-            ok = FALSE,
-            error = paste0(
+          return(fail_local(
+            paste0(
               "IgPhyML hotspot motif tables not found. ",
               "Set IGPHYML_MOTIFS or $IGPHYML_PATH to the motifs directory."
-            )
+            ),
+            status = 400,
+            step = "dowser.trees.build"
           ))
         }
         stop(e)
       }
     )
     if (is.list(trees_tbl) && identical(trees_tbl$ok, FALSE)) return(trees_tbl)
+    add_log(
+      "dowser.trees.build",
+      TRUE,
+      sprintf("Constructed %d trees using model '%s'.", length(trees_tbl$trees), build)
+    )
 
     # ---- Outputs ----
     newicks <- lapply(trees_tbl$trees, to_newick)
@@ -668,6 +754,15 @@ run_handler_impl <- function(req, res) {
     } else {
       logf("[dowser][WARN] ggtree/ggplot2 not available; no PNG previews will be returned.")
     }
+    add_log(
+      "dowser.figures.render",
+      TRUE,
+      sprintf(
+        "Figure rendering complete; previews=%d, render_tag=%s.",
+        if (is.null(figures_b64)) 0 else length(figures_b64),
+        plot_label %||% "<none>"
+      )
+    )
 
     # Per-tree annotations (tip column optional) + extras
     trees_relabelled <- vector("list", length(trees_tbl$trees))
@@ -735,10 +830,24 @@ run_handler_impl <- function(req, res) {
     } else {
       logf("[dowser][WARN] ggtree/ggplot2 not available; no PNG previews will be returned.")
     }
+    add_log(
+      "dowser.figures.renderFinal",
+      TRUE,
+      sprintf(
+        "Final figure payload prepared; previews=%d, render_tag=%s.",
+        if (is.null(figures_b64)) 0 else length(figures_b64),
+        plot_label %||% "<none>"
+      )
+    )
 
     unknown_tips_per_tree <- if (!is.null(tip_col)) {
       vapply(annos, function(df) sum(df[[tip_col]] == p$unknown_value, na.rm=TRUE), integer(1))
     } else integer(length(annos))
+    add_log(
+      "dowser.annotations.build",
+      TRUE,
+      sprintf("Built annotations for %d trees with label_field='%s'.", length(annos), p$label_field)
+    )
 
     clones_meta <- list(
       clone_id = unname(as.list(as.character(clones$clone_id))),
@@ -845,22 +954,30 @@ run_handler_impl <- function(req, res) {
       figures = if (is.null(figures_b64)) NULL else list(phylogeny = unname(figures_b64)),
       stats = stats,
       warnings = warnings_json,
+      logs = logs,
       render = plot_label
     )
+    add_log(
+      "dowser.outputs.assemble",
+      TRUE,
+      sprintf("Prepared output payload: trees=%d, figures=%d.", length(newicks), if (is.null(figures_b64)) 0 else length(figures_b64))
+    )
+    result$logs <- logs
 
     if (!jsonvalidate::json_validate(
       jsonlite::toJSON(result, auto_unbox = TRUE, null = "null"),
       RESULT_SCHEMA_PATH, verbose = TRUE
     )) {
-      res$status <- 500
-      return(list(ok = FALSE, error = "Internal server error"))
+      return(fail_local("Internal server error", status = 500, step = "dowser.contract.validate"))
     }
 
+    add_log("dowser.contract.validate", TRUE, "Result payload validated against contract schema.")
+    result$logs <- logs
     return(result)
   }, error = function(e) {
     logf("[dowser][ERROR] %s", as.character(e))
-    if (is.null(res$status) || res$status == 200) res$status <- 500
-    list(ok = FALSE, error = conditionMessage(e))  
+    status_code <- if (is.null(res$status) || res$status == 200) 500 else res$status
+    fail_local(conditionMessage(e), status = status_code, step = "dowser.unhandled")
   })
 }
 

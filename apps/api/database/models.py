@@ -123,6 +123,7 @@ class Run(Base):
     )
     message = Column(Text, nullable=True)
     params = Column(JSONB, nullable=False, default={})
+    dataset_name = Column(String(255), nullable=True)
     result = Column(JSONB, nullable=True)
     error = Column(Text, nullable=True)
     created_at = Column(
