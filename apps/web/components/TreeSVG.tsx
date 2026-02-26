@@ -18,9 +18,13 @@ type Props = {
   colorBy?: string | null;
   unknownValue?: string;
   displayIdField?: string | null;
+  /** When set, tip nodes whose label/tooltip contains this text get highlighted. */
+  highlightText?: string | null;
 };
 
 type LNode = NewickNode & { parent?: LNode; x?: number; y?: number };
+
+const TREE_VIEWPORT_HEIGHT = 520;
 
 /** ---- Helpers ---- */
 
@@ -123,6 +127,29 @@ function buildTipTitle(
   return lines.join("\n");
 }
 
+function splitByHighlight(
+  text: string,
+  highlight: string
+): Array<{ text: string; highlight: boolean }> {
+  if (!highlight?.trim()) return [{ text, highlight: false }];
+  const needle = highlight.trim();
+  const lower = text.toLowerCase();
+  const needleLower = needle.toLowerCase();
+  const parts: Array<{ text: string; highlight: boolean }> = [];
+  let start = 0;
+  while (true) {
+    const i = lower.indexOf(needleLower, start);
+    if (i === -1) {
+      if (start < text.length) parts.push({ text: text.slice(start), highlight: false });
+      break;
+    }
+    if (i > start) parts.push({ text: text.slice(start, i), highlight: false });
+    parts.push({ text: text.slice(i, i + needle.length), highlight: true });
+    start = i + needle.length;
+  }
+  return parts.length ? parts : [{ text, highlight: false }];
+}
+
 function isBlackColor(value: string): boolean {
   const c = value.trim().toLowerCase();
   if (!c) return false;
@@ -153,6 +180,7 @@ export default function TreeSVG({
   colorBy,
   unknownValue,
   displayIdField,
+  highlightText,
 }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
 
@@ -340,14 +368,19 @@ export default function TreeSVG({
   }
 
   return (
-    <div className="w-full overflow-auto">
-      <svg
-        ref={svgRef}
-        width={width}
-        height={computedHeight}
-        className="rounded border bg-background text-foreground"
-        role="img"
+    <div className="space-y-3">
+      <div
+        className="w-full overflow-auto rounded border"
+        style={{ height: TREE_VIEWPORT_HEIGHT, maxHeight: TREE_VIEWPORT_HEIGHT }}
       >
+        <svg
+          ref={svgRef}
+          width={width}
+          height={computedHeight}
+          data-tree-zoom-target="true"
+          className="block bg-background text-foreground"
+          role="img"
+        >
         {/* branches */}
         <g stroke="currentColor" strokeWidth={strokeWidth} vectorEffect="non-scaling-stroke">
           {layout.edges.map((e, i) => (
@@ -372,9 +405,30 @@ export default function TreeSVG({
             }
 
             const title = buildTipTitle(label, anno, colorField, displayIdField || null);
+            const displayLabel =
+              (displayIdField && String(anno?.[displayIdField] ?? "").trim()) || label;
+            const needle = highlightText?.trim();
+            const matchesHighlight = Boolean(
+              needle &&
+                (title.toLowerCase().includes(needle.toLowerCase()) ||
+                  label.toLowerCase().includes(needle.toLowerCase()) ||
+                  displayLabel.toLowerCase().includes(needle.toLowerCase()))
+            );
+            const tipFill = matchesHighlight ? "#dc2626" : fill;
+            const tipStroke = matchesHighlight ? "#b91c1c" : undefined;
+            const tipStrokeWidth = matchesHighlight ? 2 : 0;
 
             return (
-              <circle key={i} cx={n.x!} cy={n.y!} r={3} fill={fill} style={{ cursor: "pointer" }}>
+              <circle
+                key={i}
+                cx={n.x!}
+                cy={n.y!}
+                r={3}
+                fill={tipFill}
+                stroke={tipStroke}
+                strokeWidth={tipStrokeWidth}
+                style={{ cursor: "pointer" }}
+              >
                 <title>{title}</title>
               </circle>
             );
@@ -389,6 +443,7 @@ export default function TreeSVG({
               const anno = annoByLabel[label];
               const title = buildTipTitle(label, anno, colorField, displayIdField || null);
               const displayLabel = (displayIdField && String(anno?.[displayIdField] ?? "").trim()) || label;
+              const labelParts = splitByHighlight(displayLabel, highlightText ?? "");
               return (
                 <g key={i}>
                   <line
@@ -402,7 +457,15 @@ export default function TreeSVG({
                     vectorEffect="non-scaling-stroke"
                   />
                   <text x={Math.round(layout.labelX)} y={n.y!} dominantBaseline="middle">
-                    {displayLabel}
+                    {labelParts.map((seg, j) =>
+                      seg.highlight ? (
+                        <tspan key={j} fill="#dc2626" fontWeight="bold">
+                          {seg.text}
+                        </tspan>
+                      ) : (
+                        <tspan key={j}>{seg.text}</tspan>
+                      )
+                    )}
                     <title>{title}</title>
                   </text>
                 </g>
@@ -410,7 +473,8 @@ export default function TreeSVG({
             })}
           </g>
         )}
-      </svg>
+        </svg>
+      </div>
 
       <div className="mt-3 flex flex-wrap gap-2">
         <button onClick={downloadPNG} className="rounded border px-3 py-1 text-sm">

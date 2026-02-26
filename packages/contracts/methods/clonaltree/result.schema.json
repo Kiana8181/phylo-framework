@@ -70,12 +70,52 @@
     },
     "clones": {
       "type": "object",
-      "description": "Lightweight clone summaries aligned with tree order where possible.",
+      "description": "Clone summaries aligned 1:1 with trees (same order and count).",
       "properties": {
         "clone_id": { "type": "array", "items": { "type": "string" } },
         "abundance": { "type": "array", "items": { "type": "number" } },
         "seqs": { "type": "array", "items": { "type": "integer" } }
       },
+      "additionalProperties": true
+    },
+    "clone_catalog": {
+      "type": "object",
+      "description": "Optional full clone catalog from repertoire_two_levels_info.tsv.",
+      "properties": {
+        "clone_id": { "type": "array", "items": { "type": "string" } },
+        "abundance": { "type": "array", "items": { "type": "number" } },
+        "seqs": { "type": "array", "items": { "type": "integer" } }
+      },
+      "additionalProperties": true
+    },
+    "tables": {
+      "type": "object",
+      "description": "Optional structured table outputs.",
+      "properties": {
+        "repertoire_two_levels_info": {
+          "type": "object",
+          "properties": {
+            "filename": { "type": "string" },
+            "format": { "type": "string" },
+            "columns": { "type": "array", "items": { "type": "string" } },
+            "rows": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            },
+            "total_rows": { "type": "integer" },
+            "truncated": { "type": "boolean" }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "provenance": {
+      "type": "object",
+      "description": "Run provenance (pinned submodule ref, MUSCLE version, container image ref/digest).",
       "additionalProperties": true
     },
     "stats": {
@@ -96,7 +136,9 @@
         "n_clones": { "type": "integer" },
         "n_trees": { "type": "integer" },
         "total_seqs": { "type": "integer" },
-        "input_basename": { "type": "string" }
+        "input_basename": { "type": "string" },
+        "clonotype_method": { "type": "string" },
+        "clonotype_similarity_threshold": { "type": "number" }
       },
       "additionalProperties": true
     },

@@ -9,14 +9,14 @@
     "abundance_threshold": {
       "type": "integer",
       "title": "Unique sequence abundance threshold",
-      "description": "Minimum count for a unique sequence to be retained during AIRR formatting (format_labeling_imgt_airr.py -t).",
+      "description": "Minimum count retained during AIRR formatting (format_labeling_imgt_airr.py -t).",
       "minimum": 1,
       "default": 3
     },
     "clone_cdr3_similarity": {
       "type": "number",
-      "title": "Clone CDR3 similarity",
-      "description": "CDR3 amino-acid similarity threshold (0–1) for GTM clone grouping (initial_clustering_f.py -s).",
+      "title": "Initial clone CDR3 threshold",
+      "description": "Initial clustering threshold (initial_clustering.py -t).",
       "minimum": 0,
       "maximum": 1,
       "default": 0.7
@@ -24,33 +24,97 @@
     "top_clones": {
       "type": "integer",
       "title": "Top clones for trees",
-      "description": "Number of the most abundant clones to align and build trees for (intraclonal_study_input_creator.py -s).",
+      "description": "Number of top clones to analyze (top_clones.py -s / setting NUMBER_TOP_CLONE).",
       "minimum": 1,
       "default": 5
     },
     "clonotypes_per_clone": {
       "type": "string",
       "title": "Clonotypes per clone",
-      "description": "Comma/space-separated clonotype counts per clone to align (e.g. \"30, 200\" or \"all\"). Each value produces one tree per selected clone.",
+      "description": "Comma/space-separated clonotype counts per selected clone (e.g. \"30, 200\" or \"all\").",
       "default": "30, 200"
     },
     "use_refinement": {
       "type": "boolean",
       "title": "Run refinement step",
-      "description": "Apply silhouette-based refinement before clonotype building (refinement.py).",
+      "description": "Run refinement.py before two-level clonotype grouping.",
       "default": true
+    },
+    "v_distance": {
+      "type": "integer",
+      "title": "V distance method",
+      "description": "Refinement V-distance mode: 1=Binary, 2=Levenshtein, 3=GIANA, 4=K-mers.",
+      "enum": [1, 2, 3, 4],
+      "default": 1
+    },
+    "j_distance": {
+      "type": "integer",
+      "title": "J distance method",
+      "description": "Refinement J-distance mode: 1=Binary, 2=Levenshtein, 3=GIANA, 4=K-mers.",
+      "enum": [1, 2, 3, 4],
+      "default": 2
+    },
+    "cdr3_distance": {
+      "type": "integer",
+      "title": "CDR3 distance method",
+      "description": "Refinement CDR3-distance mode: 1=Binary, 2=Levenshtein, 3=GIANA, 4=K-mers.",
+      "enum": [1, 2, 3, 4],
+      "default": 2
+    },
+    "combine_distance": {
+      "type": "integer",
+      "title": "Distance combine method",
+      "description": "Refinement combine mode: 1=Mean, 2=Weighted Mean, 3=Harmonic Mean.",
+      "enum": [1, 2, 3],
+      "default": 1
+    },
+    "merge_singleton": {
+      "type": "boolean",
+      "title": "Merge singleton clones",
+      "description": "Allow refinement to merge singleton clusters (setting MERGE_SINGLETON).",
+      "default": true
+    },
+    "clonotype_method": {
+      "type": "string",
+      "title": "Clonotype definition method",
+      "description": "Two-level clonotype method: L1, L2, L3, L4, or L5.",
+      "enum": ["L1", "L2", "L3", "L4", "L5"],
+      "default": "L3"
+    },
+    "clonotype_similarity_threshold": {
+      "type": "number",
+      "title": "Clonotype similarity threshold",
+      "description": "Similarity threshold used by methods L4 and L5.",
+      "minimum": 0,
+      "maximum": 1,
+      "default": 0.8
     },
     "tree_use_abundance": {
       "type": "boolean",
       "title": "Weight trees by abundance",
-      "description": "Let clonalTree weight nodes by abundance (-a 0 enables abundance weighting).",
+      "description": "clonal_tree.py -a 0 enables abundance weighting.",
       "default": true
     },
     "tree_revision": {
       "type": "boolean",
       "title": "Enable tree revision",
-      "description": "Allow clonalTree to revise/optimise the MST (-r 0 enables revision).",
+      "description": "clonal_tree.py -r 0 enables revision.",
       "default": true
+    },
+    "number_top_clone": {
+      "type": "integer",
+      "title": "Deprecated top clone alias",
+      "description": "Deprecated alias for top_clones.",
+      "minimum": 1,
+      "deprecated": true
+    },
+    "initial_clustering_threshold": {
+      "type": "number",
+      "title": "Deprecated clustering threshold alias",
+      "description": "Deprecated alias for clone_cdr3_similarity.",
+      "minimum": 0,
+      "maximum": 1,
+      "deprecated": true
     }
   },
   "required": [

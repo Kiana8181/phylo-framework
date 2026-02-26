@@ -11,7 +11,7 @@
   "scripts": {
     "build": "npm -w @phylo/contracts run build && npm -w web run build",
     "dev:web": "node --env-file=.env ./scripts/dev-web.mjs",
-    "dev:api": "bash ./scripts/dev-api.sh",
+    "dev:api": "node --env-file=.env ./scripts/dev-api.mjs",
     "lint": "npm -w web run lint",
     "phylo:run": "node ./scripts/select-mode.mjs",
     "phylo:dev:docker": "bash ./scripts/dev-with-docker.sh",

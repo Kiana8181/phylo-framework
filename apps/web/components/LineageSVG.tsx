@@ -165,6 +165,26 @@ function truncateLabel(label: string, maxChars: number): string {
   return `${label.slice(0, maxChars - 1).trimEnd()}…`;
 }
 
+function splitByHighlight(text: string, highlight: string): Array<{ text: string; highlight: boolean }> {
+  if (!highlight || !highlight.trim()) return [{ text, highlight: false }];
+  const parts: Array<{ text: string; highlight: boolean }> = [];
+  const needle = highlight.trim();
+  const lower = text.toLowerCase();
+  const needleLower = needle.toLowerCase();
+  let start = 0;
+  while (true) {
+    const i = lower.indexOf(needleLower, start);
+    if (i === -1) {
+      if (start < text.length) parts.push({ text: text.slice(start), highlight: false });
+      break;
+    }
+    if (i > start) parts.push({ text: text.slice(start, i), highlight: false });
+    parts.push({ text: text.slice(i, i + needle.length), highlight: true });
+    start = i + needle.length;
+  }
+  return parts.length ? parts : [{ text, highlight: false }];
+}
+
 function buildLayout(
   lineagePlot: LineagePlot,
   nodeAttributes: Record<string, NodeAttrs> | undefined,
@@ -355,6 +375,7 @@ export default function LineageSVG({
   showLabels = true,
   filename = "tree",
   newickText,
+  highlightText,
 }: {
   lineagePlot: LineagePlot;
   nodeAttributes?: Record<string, NodeAttrs>;
@@ -362,6 +383,7 @@ export default function LineageSVG({
   showLabels?: boolean;
   filename?: string;
   newickText?: string | null;
+  highlightText?: string | null;
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
@@ -466,6 +488,7 @@ export default function LineageSVG({
           ref={svgRef}
           width={layout.svgWidth}
           height={layout.svgHeight}
+          data-tree-zoom-target="true"
           className="block bg-background text-foreground"
           role="img"
         >
@@ -484,6 +507,20 @@ export default function LineageSVG({
           <g>
             {layout.nodes.map((node) => {
               const hovered = hoveredNodeId === node.id;
+              const needle = highlightText?.trim();
+              const matchesHighlight = Boolean(
+                needle &&
+                  (node.title.toLowerCase().includes(needle.toLowerCase()) ||
+                    node.displayLabel.toLowerCase().includes(needle.toLowerCase()) ||
+                    node.label.toLowerCase().includes(needle.toLowerCase()))
+              );
+              const circleFill = matchesHighlight ? "#dc2626" : node.color;
+              const circleStroke = matchesHighlight
+                ? "#b91c1c"
+                : hovered
+                  ? "#0f172a"
+                  : "#111827";
+              const circleStrokeWidth = matchesHighlight ? 2.5 : hovered ? 2.6 : 1.1;
               return (
                 <g
                   key={node.id}
@@ -494,10 +531,11 @@ export default function LineageSVG({
                     cx={node.x}
                     cy={node.y}
                     r={node.radius}
-                    fill={node.color}
-                    stroke={hovered ? "#0f172a" : "#111827"}
-                    strokeWidth={hovered ? 2.6 : 1.1}
-                    opacity={hovered ? 1 : 0.95}
+                    fill={circleFill}
+                    stroke={circleStroke}
+                    strokeWidth={circleStrokeWidth}
+                    opacity={hovered || matchesHighlight ? 1 : 0.95}
+                    style={{ cursor: "pointer" }}
                   >
                     <title>{node.title}</title>
                   </circle>
@@ -520,7 +558,18 @@ export default function LineageSVG({
                         fontSize={LABEL_FONT_SIZE}
                         fill="currentColor"
                       >
-                        {truncateLabel(node.displayLabel, layout.maxLabelChars)}
+                        {splitByHighlight(
+                          truncateLabel(node.displayLabel, layout.maxLabelChars),
+                          highlightText ?? ""
+                        ).map((seg, i) =>
+                          seg.highlight ? (
+                            <tspan key={i} fill="#dc2626" fontWeight="bold">
+                              {seg.text}
+                            </tspan>
+                          ) : (
+                            <tspan key={i}>{seg.text}</tspan>
+                          )
+                        )}
                         <title>{node.title}</title>
                       </text>
                     </g>
