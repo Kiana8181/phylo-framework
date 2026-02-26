@@ -108,43 +108,44 @@ async def login(
     db: AsyncSession = Depends(get_db),
 ):
     """Login with username/password."""
-    user_repo = UserRepository(db)
-    
-    # Find user by email
-    user = await user_repo.get_by_email(credentials.email)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password",
+    try:
+        user_repo = UserRepository(db)
+        user = await user_repo.get_by_email(credentials.email)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect email or password",
+            )
+        if not verify_password(credentials.password, user.password_hash):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect email or password",
+            )
+        if not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="User account is inactive",
+            )
+        access_token = create_access_token(data={"sub": str(user.id)})
+        refresh_token = create_refresh_token(data={"sub": str(user.id)})
+        return TokenResponse(
+            access_token=access_token,
+            refresh_token=refresh_token,
+            user={
+                "id": str(user.id),
+                "email": user.email,
+                "username": user.username,
+            },
         )
-    
-    # Verify password
-    if not verify_password(credentials.password, user.password_hash):
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Login failed: {e!s}",
         )
-    
-    # Check if user is active
-    if not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="User account is inactive",
-        )
-    
-    # Create tokens
-    access_token = create_access_token(data={"sub": str(user.id)})
-    refresh_token = create_refresh_token(data={"sub": str(user.id)})
-    
-    return TokenResponse(
-        access_token=access_token,
-        refresh_token=refresh_token,
-        user={
-            "id": str(user.id),
-            "email": user.email,
-            "username": user.username,
-        },
-    )
 
 
 @router.get("/google")

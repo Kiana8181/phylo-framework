@@ -44,19 +44,22 @@ EMAIL_FROM = os.getenv("EMAIL_FROM", "Phylo Runner <onboarding@resend.dev>")
 
 # Database configuration
 def get_database_url() -> str:
-    """Build database URL from environment variables or use defaults."""
+    """Build database URL from environment variables or use defaults. Always uses async driver."""
     db_url = os.getenv("DATABASE_URL")
     if db_url:
+        # Ensure async driver for async engine (postgresql:// -> postgresql+asyncpg://)
+        if db_url.startswith("postgresql://") and "+asyncpg" not in db_url:
+            db_url = db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
         return db_url
-    
-    # Build from individual components
-    postgres_user = os.getenv("POSTGRES_USER", "phylo_user")
-    postgres_password = os.getenv("POSTGRES_PASSWORD", "phylo_pass")
+
     # Use 127.0.0.1 instead of localhost on Windows to avoid IPv6 issues
+    postgres_user = os.getenv("POSTGRES_USER", "phylo_user")
+    
+    postgres_password = os.getenv("POSTGRES_PASSWORD", "phylo_pass")
     postgres_host = os.getenv("POSTGRES_HOST", "127.0.0.1")
     postgres_port = os.getenv("POSTGRES_PORT", "5432")
     postgres_db = os.getenv("POSTGRES_DB", "phylo_db")
-    
     return f"postgresql+asyncpg://{postgres_user}:{postgres_password}@{postgres_host}:{postgres_port}/{postgres_db}"
+
 
 DATABASE_URL = get_database_url()

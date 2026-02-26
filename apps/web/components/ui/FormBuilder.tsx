@@ -22,7 +22,7 @@ type JSONSchema = {
   type?: string;
   title?: string;
   description?: string;
-  enum?: string[];
+  enum?: Array<string | number | boolean>;
   default?: unknown;
   properties?: Record<string, JSONSchema>;
   required?: string[];
@@ -40,6 +40,57 @@ type JSONSchema = {
   };
 };
 
+type EnumPrimitive = string | number | boolean;
+
+function enumValuesFromSchema(def: JSONSchema): EnumPrimitive[] {
+  if (!Array.isArray(def.enum)) return [];
+  return def.enum.filter(
+    (value): value is EnumPrimitive =>
+      typeof value === "string" || typeof value === "number" || typeof value === "boolean"
+  );
+}
+
+function enumToken(value: EnumPrimitive): string {
+  return `${typeof value}:${String(value)}`;
+}
+
+function enumFromToken(token: string, values: EnumPrimitive[]): EnumPrimitive | undefined {
+  return values.find((value) => enumToken(value) === token);
+}
+
+function coerceEnumInput(value: unknown, values: EnumPrimitive[]): unknown {
+  if (value == null) return value;
+  if (values.some((candidate) => candidate === value)) return value;
+  if (typeof value !== "string") return value;
+
+  const fromToken = enumFromToken(value, values);
+  if (fromToken !== undefined) return fromToken;
+
+  const hasNumber = values.some((candidate) => typeof candidate === "number");
+  if (hasNumber && value.trim() !== "") {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) {
+      const match = values.find((candidate) => typeof candidate === "number" && candidate === numeric);
+      if (match !== undefined) return match;
+    }
+  }
+
+  const hasBoolean = values.some((candidate) => typeof candidate === "boolean");
+  if (hasBoolean) {
+    const lowered = value.trim().toLowerCase();
+    if (lowered === "true" || lowered === "false") {
+      const boolValue = lowered === "true";
+      const match = values.find((candidate) => typeof candidate === "boolean" && candidate === boolValue);
+      if (match !== undefined) return match;
+    }
+  }
+
+  const stringMatch = values.find((candidate) => typeof candidate === "string" && candidate === value);
+  if (stringMatch !== undefined) return stringMatch;
+
+  return value;
+}
+
 function zodFromJsonSchema(schema: JSONSchema) {
   const props = schema.properties ?? {};
   const required = new Set(schema.required ?? []);
@@ -47,9 +98,15 @@ function zodFromJsonSchema(schema: JSONSchema) {
 
   for (const [key, def] of Object.entries(props)) {
     let zt: z.ZodTypeAny;
+    const enumValues = enumValuesFromSchema(def);
 
-    if (def.enum && def.enum.length) {
-      zt = z.enum(def.enum as [string, ...string[]]);
+    if (enumValues.length) {
+      const literalSchemas = enumValues.map((value) => z.literal(value));
+      const enumSchema =
+        literalSchemas.length === 1
+          ? literalSchemas[0]
+          : z.union(literalSchemas as [typeof literalSchemas[0], typeof literalSchemas[0], ...typeof literalSchemas]);
+      zt = z.preprocess((value) => coerceEnumInput(value, enumValues), enumSchema);
     } else if (def.type === "number" || def.type === "integer") {
       zt = z.preprocess(
         (v) => (v === "" || v == null ? undefined : Number(v)),
@@ -174,6 +231,7 @@ export default function FormBuilder({
     const def = props[name]!;
     const type = def?.enum ? "enum" : def?.type;
     const placeholder = placeholders[name];
+    const enumValues = enumValuesFromSchema(def);
 
     return (
       <div key={name} className="grid gap-2">
@@ -211,19 +269,26 @@ export default function FormBuilder({
               );
             }
             if (type === "enum") {
+              const selected =
+                enumValues.find((value) => value === field.value) !== undefined
+                  ? enumToken(field.value as EnumPrimitive)
+                  : undefined;
               return (
                 <Select
-                  value={(field.value ?? undefined) as string | undefined}
-                  onValueChange={field.onChange}
+                  value={selected}
+                  onValueChange={(token) => {
+                    const parsed = enumFromToken(token, enumValues);
+                    field.onChange(parsed ?? token);
+                  }}
                   disabled={disabled}
                 >
                   <SelectTrigger className="w-full">
                     <SelectValue placeholder="Select" />
                   </SelectTrigger>
                   <SelectContent>
-                    {(def.enum as string[]).map((v) => (
-                      <SelectItem key={v} value={v}>
-                        {v}
+                    {enumValues.map((value) => (
+                      <SelectItem key={enumToken(value)} value={enumToken(value)}>
+                        {String(value)}
                       </SelectItem>
                     ))}
                   </SelectContent>

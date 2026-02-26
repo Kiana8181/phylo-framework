@@ -103,6 +103,12 @@ class Run(Base):
         nullable=True,  # Nullable for backward compatibility
         index=True
     )
+    input_file_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("files.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     method_id = Column(String(50), nullable=False, index=True)
     status = Column(
         Enum(RunStatus, native_enum=False),
@@ -117,6 +123,7 @@ class Run(Base):
     )
     message = Column(Text, nullable=True)
     params = Column(JSONB, nullable=False, default={})
+    dataset_name = Column(String(255), nullable=True)
     result = Column(JSONB, nullable=True)
     error = Column(Text, nullable=True)
     created_at = Column(
@@ -131,7 +138,13 @@ class Run(Base):
 
     # Relationships
     user = relationship("User", back_populates="runs")
-    files = relationship("File", back_populates="run", cascade="all, delete-orphan")
+    # Use run_id on File (not input_file_id) for "files attached to this run"
+    files = relationship(
+        "File",
+        back_populates="run",
+        foreign_keys="File.run_id",
+        cascade="all, delete-orphan",
+    )
     jobs = relationship("JobQueue", back_populates="run", cascade="all, delete-orphan")
     trees = relationship("RunTree", back_populates="run", cascade="all, delete-orphan")
 
@@ -180,7 +193,7 @@ class File(Base):
 
     # Relationships
     user = relationship("User", back_populates="files")
-    run = relationship("Run", back_populates="files")
+    run = relationship("Run", back_populates="files", foreign_keys="File.run_id")
 
     __table_args__ = (
         Index("idx_files_run_id", "run_id"),

@@ -103,6 +103,17 @@ resolve_storage_abs(){
   fi
 }
 
+ensure_clonotype_submodule(){
+  local marker="$CLONAL_DIR/base-codes/main_pipeline.py"
+  if [[ -f "$marker" ]]; then
+    return 0
+  fi
+  echo "${BLU}==> Initializing clonaltree submodule${CLR}"
+  git -C "$ROOT" submodule update --init --recursive services/clonaltree/base-codes || \
+    die "Failed to initialize services/clonaltree/base-codes submodule"
+  [[ -f "$marker" ]] || die "Missing clonaltree submodule files. Run: git submodule update --init --recursive"
+}
+
 relpath_from_dir(){
   local target="$1"; local base="$2"
   python3 - <<PY
@@ -147,36 +158,43 @@ muscle_major(){
   echo "${major:-}:::${raw:-}"
 }
 
-install_muscle3(){
-  local url="https://drive5.com/muscle/downloads3.8.31/muscle3.8.31_i86linux64.tar.gz"
-  local tmp tgz bin
+install_muscle5(){
+  local version="5.3"
+  local os_name arch asset url tmp dst
+  os_name="$(uname -s)"
+  arch="$(uname -m)"
+  case "${os_name}:${arch}" in
+    Linux:x86_64|Linux:amd64) asset="muscle-linux-x86.v${version}" ;;
+    Linux:aarch64|Linux:arm64) asset="muscle-aarch64.v${version}" ;;
+    Darwin:x86_64) asset="muscle-osx-x86.v${version}" ;;
+    Darwin:arm64) asset="muscle-osx-arm64.v${version}" ;;
+    *) die "Unsupported platform for MUSCLE v5 bootstrap: ${os_name}/${arch}" ;;
+  esac
+  url="https://github.com/rcedgar/muscle/releases/download/v${version}/${asset}"
   tmp="$(mktemp -d)"
-  tgz="$tmp/muscle3.tgz"
-  echo "${BLU}==> Installing MUSCLE v3.8.31 into .venv/bin${CLR}"
-  curl -L -o "$tgz" "$url"
-  tar -xzf "$tgz" -C "$tmp"
-  bin="$(find "$tmp" -type f -name 'muscle3.8.31_i86linux64' | head -n 1)"
-  [[ -n "$bin" ]] || die "Failed to unpack MUSCLE v3.8.31 binary"
-  install -m 0755 "$bin" "$ROOT/.venv/bin/muscle"
+  dst="$ROOT/.venv/bin/muscle"
+  echo "${BLU}==> Installing MUSCLE v${version} into .venv/bin${CLR}"
+  curl -L -o "$dst" "$url"
+  chmod 0755 "$dst"
   rm -rf "$tmp"
-  echo "${GRN}MUSCLE v3.8.31 installed at $ROOT/.venv/bin/muscle${CLR}"
+  echo "${GRN}MUSCLE v${version} installed at $ROOT/.venv/bin/muscle${CLR}"
 }
 
-ensure_muscle_v3(){
+ensure_muscle_v5(){
   if command -v muscle >/dev/null 2>&1; then
     local parsed major out
     parsed="$(muscle_major)"
     major="${parsed%%:::*}"
     out="${parsed#*:::}"
-    if [[ -n "$major" && "$major" -lt 5 ]]; then
+    if [[ -n "$major" && "$major" -ge 5 ]]; then
       echo "${GRN}MUSCLE available:${CLR} ${out}"
       return 0
     fi
-    echo "${YLW}WARN:${CLR} MUSCLE >=5 or unknown version detected (${out:-unknown}); replacing with v3.8.31"
+    echo "${YLW}WARN:${CLR} MUSCLE <5 or unknown version detected (${out:-unknown}); replacing with v5"
   else
-    echo "${YLW}WARN:${CLR} MUSCLE not found on PATH; installing v3.8.31"
+    echo "${YLW}WARN:${CLR} MUSCLE not found on PATH; installing v5"
   fi
-  install_muscle3
+  install_muscle5
 }
 
 ensure_gctree_sitecustomize_on_pythonpath(){
@@ -189,9 +207,10 @@ ensure_gctree_sitecustomize_on_pythonpath(){
 }
 
 echo "${BLU}==> Checking prerequisites${CLR}"
-need_cmd Rscript; need_cmd node; need_cmd npm; need_cmd python3; need_cmd curl; need_cmd docker
+need_cmd Rscript; need_cmd node; need_cmd npm; need_cmd python3; need_cmd curl; need_cmd docker; need_cmd git
 
 cd "$ROOT"
+ensure_clonotype_submodule
 
 echo "${BLU}==> Syncing method-service env from config${CLR}"
 node "$ROOT/scripts/method-services.mjs" sync-env >/dev/null
@@ -275,8 +294,8 @@ python -m pip install -r "$ROOT/apps/api/requirements.txt"
 python -m pip install -r "$GCTREE_DIR/requirements.txt"
 python -m pip install -r "$CLONAL_DIR/requirements.txt"
 
-echo "${BLU}==> Ensuring MUSCLE v3.x is available for ClonalTree${CLR}"
-ensure_muscle_v3
+echo "${BLU}==> Ensuring MUSCLE v5.x is available for ClonalTree${CLR}"
+ensure_muscle_v5
 
 echo "${BLU}==> Enabling GCtree sitecustomize patch via PYTHONPATH${CLR}"
 ensure_gctree_sitecustomize_on_pythonpath

@@ -11,12 +11,22 @@ export type MethodSpec = {
 
 export type CreateRunResponse = { run_id: string };
 
+export type RunParams = Record<string, unknown>;
+
+export type RunDatasetMeta = {
+  dataset_name?: string | null;
+  dataset_files?: string[];
+};
+
 export type RunSummary = {
   id: string;
   method_id: string;
   status: string;
   progress?: number;
   message?: string | null;
+  params?: RunParams;
+  dataset_name?: string | null;
+  dataset_files?: string[];
   created_at: string | null;
   started_at?: string | null;
   finished_at?: string | null;
@@ -39,9 +49,21 @@ export type FilesListResponse = {
 };
 
 export type RunStatus = {
-  status: "PENDING" | "RUNNING" | "DONE" | "ERROR";
+  run_id?: string;
+  status: "PENDING" | "RUNNING" | "DONE" | "ERROR" | "QUEUED" | "CANCELLED";
   progress?: number;
   message?: string;
+  method_id?: string;
+  params?: RunParams;
+  dataset_name?: string | null;
+  dataset_files?: string[];
+  started_at?: string | null;
+  finished_at?: string | null;
+  error?: {
+    code?: string;
+    message?: string;
+    details?: Record<string, unknown>;
+  };
 };
 
 export type FigurePayload = {
@@ -93,6 +115,7 @@ export type RunTree = {
   id: string;
   newick: string;
   original_newick?: string;
+  clone_id?: string;
   has_lineage_plot: boolean;
   has_service_image: boolean;
   visualizations?: {
@@ -108,6 +131,7 @@ export type RunTreeListItem = {
   treeIndex: number;
   hasLineagePlot: boolean;
   hasServiceImage: boolean;
+  cloneId?: string | null;
 };
 
 export type RunTreesListResponse = {
@@ -140,16 +164,63 @@ export type RunWarning =
       details?: any;
     };
 
+export type RunOutputTable = {
+  filename: string;
+  format: string;
+  columns: string[];
+  rows: Array<Record<string, any>>;
+  total_rows?: number;
+  truncated?: boolean;
+  [key: string]: any;
+};
+
+export type RunTables = {
+  repertoire_two_levels_info?: RunOutputTable;
+  [key: string]: any;
+};
+
+export type RunProvenance = {
+  clonotype_submodule?: {
+    tag?: string | null;
+    commit?: string | null;
+    ref?: string | null;
+    [key: string]: any;
+  };
+  muscle?: {
+    major?: number | null;
+    version_raw?: string | null;
+    [key: string]: any;
+  };
+  container?: {
+    image_ref?: string | null;
+    image_digest?: string | null;
+    [key: string]: any;
+  };
+  [key: string]: any;
+};
+
 export type RunResult = {
   ok: boolean;
   trees: Array<RunTree | string>;
   clones: any;
+  clone_catalog?: any;
   stats: any;
+  node_abundances?: Array<Record<string, number>>;
   annotations?: Array<Array<Record<string, any>> | null>;
   figures?: FigurePayload;
+  tables?: RunTables;
+  provenance?: RunProvenance;
   warnings?: RunWarning[];
   render?: string | null;
   logs?: RunLogEntry[];
   artifact_zip_b64?: any;
   artifact_name?: string;
+} & {
+  run_id?: string;
+  method_id?: string;
+  params?: RunParams;
+  dataset_name?: string | null;
+  dataset_files?: string[];
+  started_at?: string | null;
+  finished_at?: string | null;
 };
