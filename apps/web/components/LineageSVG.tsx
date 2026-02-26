@@ -488,6 +488,7 @@ export default function LineageSVG({
           ref={svgRef}
           width={layout.svgWidth}
           height={layout.svgHeight}
+          data-tree-zoom-target="true"
           className="block bg-background text-foreground"
           role="img"
         >
@@ -534,6 +535,7 @@ export default function LineageSVG({
                     stroke={circleStroke}
                     strokeWidth={circleStrokeWidth}
                     opacity={hovered || matchesHighlight ? 1 : 0.95}
+                    style={{ cursor: "pointer" }}
                   >
                     <title>{node.title}</title>
                   </circle>

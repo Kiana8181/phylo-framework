@@ -14,6 +14,7 @@ class RunTreeListItem(TypedDict):
     treeIndex: int
     hasLineagePlot: bool
     hasServiceImage: bool
+    cloneId: str | None
 
 
 class RunTreePayload(TypedDict):
@@ -77,6 +78,7 @@ class RunTreeRepository:
                     "treeIndex": int(tree_index),
                     "hasLineagePlot": bool(has_lineage_plot),
                     "hasServiceImage": bool(has_service_image),
+                    "cloneId": None,
                 }
             )
         return out

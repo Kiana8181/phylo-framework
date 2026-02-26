@@ -174,13 +174,165 @@ def _structured_error_payload(
     return {"ok": False, "error": {"code": code, "message": message, "details": details}}
 
 
-def _public_status(run, include_run_id: bool = False) -> dict:
+def _extract_error_message(value: Any) -> str | None:
+    if isinstance(value, str):
+        txt = value.strip()
+        return txt or None
+    if isinstance(value, dict):
+        msg = value.get("message")
+        if isinstance(msg, str) and msg.strip():
+            return msg.strip()
+        code = value.get("code")
+        if isinstance(code, str) and code.strip():
+            return code.strip()
+    return None
+
+
+def _normalize_failed_result_payload(
+    raw_payload: Any,
+    *,
+    status_code: int | None = None,
+    fallback_message: str | None = None,
+) -> tuple[dict[str, Any], str]:
+    payload = dict(raw_payload) if isinstance(raw_payload, dict) else {}
+    payload["ok"] = False
+
+    error_message = _extract_error_message(payload.get("error"))
+    if not error_message:
+        error_message = _extract_error_message(payload.get("message"))
+    if not error_message and fallback_message:
+        cleaned = fallback_message.strip()
+        if cleaned:
+            error_message = cleaned
+    if not error_message and status_code is not None:
+        error_message = f"Method service returned HTTP {status_code}."
+    if not error_message:
+        error_message = "Method service execution failed."
+
+    payload.setdefault("error", error_message)
+    if not isinstance(payload.get("logs"), list):
+        payload["logs"] = []
+    return payload, error_message
+
+
+async def _set_failed_run_with_payload(
+    run_repo: RunRepository,
+    run_id: UUID,
+    *,
+    error_message: str,
+    result_payload: dict[str, Any] | None = None,
+) -> None:
+    payload, normalized_error = _normalize_failed_result_payload(
+        result_payload,
+        fallback_message=error_message,
+    )
+    await run_repo.update(
+        run_id,
+        status=RunStatus.ERROR,
+        error=normalized_error,
+        message=normalized_error,
+        progress=100,
+        result=payload,
+        finished_at=datetime.utcnow(),
+    )
+
+
+def _normalized_run_params(run: Run) -> dict[str, Any]:
+    raw = getattr(run, "params", None)
+    return raw if isinstance(raw, dict) else {}
+
+
+def _clone_ids_from_result_payload(payload: Any) -> list[str]:
+    if not isinstance(payload, dict):
+        return []
+    clones = payload.get("clones")
+    if not isinstance(clones, dict):
+        return []
+    raw_clone_ids = clones.get("clone_id")
+    if not isinstance(raw_clone_ids, list):
+        return []
+
+    out: list[str] = []
+    for clone_id in raw_clone_ids:
+        clone_text = str(clone_id).strip()
+        out.append(clone_text if clone_text else "")
+    return out
+
+
+def _attach_clone_ids_to_result_trees(payload: dict[str, Any]) -> dict[str, Any]:
+    trees = payload.get("trees")
+    if not isinstance(trees, list):
+        return payload
+
+    clone_ids = _clone_ids_from_result_payload(payload)
+    if not clone_ids:
+        return payload
+
+    for idx, tree in enumerate(trees):
+        if not isinstance(tree, dict):
+            continue
+        if idx >= len(clone_ids):
+            continue
+        clone_id = clone_ids[idx]
+        if not clone_id:
+            continue
+        tree.setdefault("clone_id", clone_id)
+    return payload
+
+
+async def _resolve_dataset_meta(run: Run, file_repo: FileRepository) -> tuple[str | None, list[str]]:
+    names: list[str] = []
+
+    def add_name(raw: Any) -> None:
+        if not isinstance(raw, str):
+            return
+        cleaned = raw.strip()
+        if cleaned and cleaned not in names:
+            names.append(cleaned)
+
+    add_name(getattr(run, "dataset_name", None))
+
+    input_file_id = getattr(run, "input_file_id", None)
+    if input_file_id is not None:
+        linked_input = await file_repo.get_by_id(input_file_id)
+        if linked_input is not None:
+            add_name(getattr(linked_input, "original_filename", None))
+
+    run_files = await file_repo.get_by_run(run.id)
+    for file_row in run_files:
+        add_name(getattr(file_row, "original_filename", None))
+
+    dataset_name = names[0] if names else None
+    return dataset_name, names
+
+
+def _public_status(
+    run: Run,
+    *,
+    include_run_id: bool = False,
+    dataset_name: str | None = None,
+    dataset_files: list[str] | None = None,
+) -> dict[str, Any]:
     """Convert Run model to public status dict."""
+    resolved_dataset_name = dataset_name
+    if resolved_dataset_name is None:
+        raw_dataset_name = getattr(run, "dataset_name", None)
+        resolved_dataset_name = raw_dataset_name if isinstance(raw_dataset_name, str) else None
+
+    resolved_dataset_files = dataset_files if dataset_files is not None else []
+    if not resolved_dataset_files and resolved_dataset_name:
+        resolved_dataset_files = [resolved_dataset_name]
+
     out = {
         "status": run.status.value if hasattr(run.status, "value") else str(run.status),
         "progress": run.progress,
         "message": run.message,
         "method_id": run.method_id,
+        "params": _normalized_run_params(run),
+        "dataset_name": resolved_dataset_name,
+        "dataset_files": resolved_dataset_files,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "finished_at": run.finished_at.isoformat() if run.finished_at else None,
     }
     raw_error = getattr(run, "error", None)
     if raw_error:
@@ -301,7 +453,22 @@ async def _execute_method_async(
         try:
             async with AsyncSessionLocal() as db:
                 run_repo = RunRepository(db)
-                await run_repo.set_error(run_id, f"Run failed: {e!s}")
+                await _set_failed_run_with_payload(
+                    run_repo,
+                    run_id,
+                    error_message=f"Run failed: {e!s}",
+                    result_payload={
+                        "ok": False,
+                        "error": f"Run failed: {e!s}",
+                        "logs": [
+                            {
+                                "step": "api.worker.unhandled",
+                                "ok": False,
+                                "out": str(e),
+                            }
+                        ],
+                    },
+                )
                 await db.commit()
         except Exception:
             pass
@@ -516,15 +683,33 @@ async def _execute_method_async_impl(
                     response = await client.post(url, json=payload)
 
                     if response.status_code >= 400:
-                        err_msg = None
+                        raw_payload: Any = None
                         try:
-                            j = response.json()
-                            if isinstance(j, dict):
-                                err_msg = j.get("error") or j.get("message")
+                            raw_payload = response.json()
                         except Exception:
-                            pass
-                        err_msg = err_msg or response.text or f"{response.status_code} {response.reason_phrase}"
-                        await run_repo.set_error(run_id, err_msg)
+                            raw_payload = None
+
+                        fallback = response.text or f"{response.status_code} {response.reason_phrase}"
+                        failed_payload, err_msg = _normalize_failed_result_payload(
+                            raw_payload,
+                            status_code=response.status_code,
+                            fallback_message=fallback,
+                        )
+                        logs = failed_payload.get("logs")
+                        if isinstance(logs, list):
+                            logs.append(
+                                {
+                                    "step": "api.method.http",
+                                    "ok": False,
+                                    "out": f"HTTP {response.status_code} from method service endpoint {url}",
+                                }
+                            )
+                        await _set_failed_run_with_payload(
+                            run_repo,
+                            run_id,
+                            error_message=err_msg,
+                            result_payload=failed_payload,
+                        )
                         await db.commit()
                         return
 
@@ -544,15 +729,43 @@ async def _execute_method_async_impl(
                     "Could not connect to the method service. "
                     "Make sure the service is running and METHOD_*_URL (e.g. METHOD_GCTREE_URL) is set correctly."
                 )
-                await run_repo.set_error(
+                detail = friendly + "\n\nTechnical detail: " + str(e)
+                await _set_failed_run_with_payload(
+                    run_repo,
                     run_id,
-                    friendly + "\n\nTechnical detail: " + str(e),
+                    error_message=detail,
+                    result_payload={
+                        "ok": False,
+                        "error": detail,
+                        "logs": [
+                            {
+                                "step": "api.method.connect",
+                                "ok": False,
+                                "out": str(e),
+                            }
+                        ],
+                    },
                 )
                 await db.commit()
             except Exception as e:
                 msg = str(e)
                 error_detail = f"{msg}\n{traceback.format_exc()}"
-                await run_repo.set_error(run_id, error_detail)
+                await _set_failed_run_with_payload(
+                    run_repo,
+                    run_id,
+                    error_message=msg or "Run failed",
+                    result_payload={
+                        "ok": False,
+                        "error": msg or "Run failed",
+                        "logs": [
+                            {
+                                "step": "api.method.unhandled",
+                                "ok": False,
+                                "out": error_detail,
+                            }
+                        ],
+                    },
+                )
                 await db.commit()
         finally:
             stop_progress.set()
@@ -567,12 +780,17 @@ async def _execute_method_async_impl(
 
 def _run_summary(run) -> dict:
     """Build a run summary for list responses."""
+    raw_dataset_name = getattr(run, "dataset_name", None)
+    dataset_name = raw_dataset_name if isinstance(raw_dataset_name, str) else None
     return {
         "id": str(run.id),
         "method_id": run.method_id,
         "status": run.status.value if hasattr(run.status, "value") else str(run.status),
         "progress": run.progress,
         "message": run.message,
+        "params": _normalized_run_params(run),
+        "dataset_name": dataset_name,
+        "dataset_files": [dataset_name] if dataset_name else [],
         "created_at": run.created_at.isoformat() if run.created_at else None,
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "finished_at": run.finished_at.isoformat() if run.finished_at else None,
@@ -666,6 +884,7 @@ async def create_run(
         params=p,
         user_id=user_id,
         input_file_id=existing_file.id if existing_file else None,
+        dataset_name=existing_file.original_filename if existing_file else None,
     )
 
     file_path = None
@@ -726,7 +945,11 @@ async def create_run(
                 mime_type=file.content_type,
                 run_id=run.id,
             )
-            await run_repo.update(run.id, input_file_id=file_record.id)
+            await run_repo.update(
+                run.id,
+                input_file_id=file_record.id,
+                dataset_name=file_record.original_filename,
+            )
 
             # Update run with file path (for method service compatibility)
             # Method services expect file_path, so we'll pass storage_path
@@ -760,11 +983,18 @@ async def get_current_run(
         raise HTTPException(status_code=401, detail="Authentication required")
 
     run_repo = RunRepository(db)
+    file_repo = FileRepository(db)
     active = await run_repo.get_active_run_for_user(current_user.id)
     if not active:
         return {"run_id": None, "status": None, "progress": None, "message": None}
 
-    return _public_status(active, include_run_id=True)
+    dataset_name, dataset_files = await _resolve_dataset_meta(active, file_repo)
+    return _public_status(
+        active,
+        include_run_id=True,
+        dataset_name=dataset_name,
+        dataset_files=dataset_files,
+    )
 
 
 # Declare same-dataset before other /{run_id}/... routes so the path "same-dataset" is matched
@@ -814,9 +1044,11 @@ async def run_status(
 ):
     """Get run status."""
     run_repo = RunRepository(db)
+    file_repo = FileRepository(db)
     run = await _load_run_with_access(run_id, current_user=current_user, run_repo=run_repo)
 
-    return _public_status(run)
+    dataset_name, dataset_files = await _resolve_dataset_meta(run, file_repo)
+    return _public_status(run, dataset_name=dataset_name, dataset_files=dataset_files)
 
 
 @router.get("/{run_id}/result")
@@ -827,12 +1059,50 @@ async def run_result(
 ):
     """Get run result."""
     run_repo = RunRepository(db)
+    file_repo = FileRepository(db)
     run = await _load_run_with_access(run_id, current_user=current_user, run_repo=run_repo)
 
-    if run.status != RunStatus.DONE:
+    if run.status not in (RunStatus.DONE, RunStatus.ERROR, RunStatus.CANCELLED):
         raise HTTPException(409, "Run not finished")
 
-    return run.result or {"ok": False}
+    dataset_name, dataset_files = await _resolve_dataset_meta(run, file_repo)
+    if isinstance(run.result, dict):
+        base_result = dict(run.result)
+    else:
+        base_result = {"ok": run.status == RunStatus.DONE}
+
+    if run.status in (RunStatus.ERROR, RunStatus.CANCELLED):
+        raw_error = getattr(run, "error", None)
+        parsed_error_payload: dict[str, Any] | None = None
+        if isinstance(raw_error, str) and raw_error.strip():
+            try:
+                maybe_json = json.loads(raw_error)
+                if isinstance(maybe_json, dict):
+                    parsed_error_payload = maybe_json
+            except Exception:
+                parsed_error_payload = None
+
+        if parsed_error_payload is not None:
+            if "error" in parsed_error_payload:
+                base_result.setdefault("error", parsed_error_payload.get("error"))
+            if isinstance(parsed_error_payload.get("logs"), list):
+                base_result.setdefault("logs", parsed_error_payload.get("logs"))
+
+        if "error" not in base_result:
+            base_result["error"] = run.message or "Run failed"
+        base_result["ok"] = False
+        if not isinstance(base_result.get("logs"), list):
+            base_result["logs"] = []
+
+    payload = dict(base_result)
+    payload.setdefault("run_id", str(run.id))
+    payload.setdefault("method_id", run.method_id)
+    payload.setdefault("params", _normalized_run_params(run))
+    payload.setdefault("dataset_name", dataset_name)
+    payload.setdefault("dataset_files", dataset_files)
+    payload.setdefault("started_at", run.started_at.isoformat() if run.started_at else None)
+    payload.setdefault("finished_at", run.finished_at.isoformat() if run.finished_at else None)
+    return _attach_clone_ids_to_result_trees(payload)
 
 
 @router.get("/{run_id}/trees")
@@ -848,7 +1118,17 @@ async def list_run_trees(
         raise HTTPException(409, "Run not finished")
 
     tree_repo = RunTreeRepository(db)
-    return {"trees": await tree_repo.list_for_run(run.id)}
+    trees = await tree_repo.list_for_run(run.id)
+    clone_ids = _clone_ids_from_result_payload(run.result)
+    if clone_ids:
+        for tree in trees:
+            tree_index = int(tree.get("treeIndex", -1))
+            if tree_index < 0 or tree_index >= len(clone_ids):
+                continue
+            clone_id = clone_ids[tree_index]
+            if clone_id:
+                tree["cloneId"] = clone_id
+    return {"trees": trees}
 
 
 @router.get("/{run_id}/trees/{tree_id}")

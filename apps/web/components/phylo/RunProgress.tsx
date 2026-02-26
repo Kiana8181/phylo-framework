@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { AlertCircle, ChevronDown, ChevronRight } from "lucide-react";
+import { formatRunDuration } from "@/lib/runDuration";
 
 const MAX_INLINE_ERROR = 200;
 
@@ -24,6 +25,8 @@ export default function RunProgress({
   status,
   progress,
   message,
+  startedAt,
+  finishedAt,
   statusError,
   onDismiss,
 }: {
@@ -31,6 +34,8 @@ export default function RunProgress({
   status?: string;
   progress: number;
   message?: string;
+  startedAt?: string | null;
+  finishedAt?: string | null;
   statusError?: unknown;
   onDismiss?: () => void;
 }) {
@@ -55,6 +60,7 @@ export default function RunProgress({
 
   const badge = getStatusBadge(status, isStatusError);
   const label = getStatusLabel(status, isStatusError);
+  const durationLabel = formatRunDuration(startedAt, finishedAt);
 
   return (
     <Card className="p-4 space-y-3">
@@ -66,6 +72,11 @@ export default function RunProgress({
           <span className={`text-xs px-2 py-0.5 rounded border shrink-0 ${badge}`}>
             {label}
           </span>
+          {durationLabel && !isStatusError && (
+            <span className="text-xs px-2 py-0.5 rounded border shrink-0 bg-muted text-muted-foreground">
+              Duration: {durationLabel}
+            </span>
+          )}
           {onDismiss && (
             <Button variant="ghost" size="sm" onClick={onDismiss} className="shrink-0">
               Dismiss

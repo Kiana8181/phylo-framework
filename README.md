@@ -34,7 +34,20 @@ A one-page UI to run phylogeny/lineage tree methods behind a simple orchestrator
 
 ## Quick Start
 
-1. **Install Node & workspace deps (root)** and **API Python deps**:
+1. **Clone with submodules** (required for ClonalTree base code):
+
+```bash
+git clone --recurse-submodules <repo-url>
+cd phylo-framework
+```
+
+If you already cloned without submodules:
+
+```bash
+git submodule update --init --recursive
+```
+
+2. **Install Node & workspace deps (root)** and **API Python deps**:
 
 ```bash
 # Node deps (root — installs workspaces too)
@@ -47,13 +60,13 @@ python -m pip install -U pip
 pip install -r apps/api/requirements.txt
 ```
 
-2. **Make helper scripts executable** (they are expected at the repo root):
+3. **Make helper scripts executable** (they are expected at the repo root):
 
 ```bash
 chmod +x ./run.sh ./scripts/dev-with-docker.sh ./scripts/dev-with-local-r.sh
 ```
 
-3. **Run the interactive menu** (uses Inquirer under the hood):
+4. **Run the interactive menu** (uses Inquirer under the hood):
 
 ```bash
 ./run.sh
@@ -195,14 +208,14 @@ Ports and service endpoints come from one config file and sync into one root env
 - **Config source:** `config/method-services.json`
 - **Runtime env source:** `.env` (repo root)
 
-| Command | Description |
-|--------|-------------|
-| `npm run services:sync-env` | Generate/update `METHOD_*` vars in root `.env` from `config/method-services.json` |
-| `npm run services:list` | List service IDs, host/container ports, and local/docker URLs |
-| `npm run services:start` | Build + start all method services in Docker |
-| `npm run services:start -- gctree dowser` | Build + start only selected method services |
-| `npm run services:stop` | Stop all managed method containers |
-| `npm run services:stop -- gctree` | Stop one managed method container |
+| Command                                   | Description                                                                       |
+| ----------------------------------------- | --------------------------------------------------------------------------------- |
+| `npm run services:sync-env`               | Generate/update `METHOD_*` vars in root `.env` from `config/method-services.json` |
+| `npm run services:list`                   | List service IDs, host/container ports, and local/docker URLs                     |
+| `npm run services:start`                  | Build + start all method services in Docker                                       |
+| `npm run services:start -- gctree dowser` | Build + start only selected method services                                       |
+| `npm run services:stop`                   | Stop all managed method containers                                                |
+| `npm run services:stop -- gctree`         | Stop one managed method container                                                 |
 
 Generated keys include both local and compose-network URLs:
 
@@ -246,12 +259,19 @@ npm -w @phylo/contracts run build
 ### 3) Start PostgreSQL and run migrations
 
 ```bash
-docker compose --profile dev up -d postgres
+set -a; source .env; set +a
 source .venv/bin/activate
+docker compose --profile dev up -d postgres
 npm run db:migrate
 ```
 
 ### 4) Start method services (pick one approach)
+
+Before starting services, ensure submodules are initialized:
+
+```bash
+git submodule update --init --recursive
+```
 
 #### A) Docker methods (uses `method-services.mjs` + config)
 
@@ -261,14 +281,21 @@ npm run services:start
 
 #### B) Local methods
 
-Use ports from root `.env` (`METHOD_*_HOST_PORT`) and make sure API sends a host-readable prefix:
+Use ports from root `.env` (`METHOD_*_HOST_PORT`).
+In each terminal where you run a local method, run this bootstrap first:
 
 ```bash
 # from repo root
 set -a; source .env; set +a
-export CONTRACTS_DIR="$(pwd)/${CONTRACTS_DIR:-packages/contracts}"
-export METHOD_SERVICE_FILE_PREFIX="$(pwd)/${STORAGE_LOCAL_PATH:-runtime/storage}"
-mkdir -p "$METHOD_SERVICE_FILE_PREFIX"
+export CONTRACTS_DIR="$(python3 -c 'import os; p=os.environ.get("CONTRACTS_DIR","packages/contracts"); print(p if os.path.isabs(p) else os.path.realpath(p))')"
+export STORAGE_ABS="$(python3 -c 'import os; p=os.environ.get("STORAGE_LOCAL_PATH","runtime/storage"); print(p if os.path.isabs(p) else os.path.realpath(p))')"
+mkdir -p "$STORAGE_ABS"
+export STRICT_CONTRACT_ROUTES="${STRICT_CONTRACT_ROUTES:-true}"
+export METHOD_SERVICE_FILE_PREFIX="$STORAGE_ABS"
+export HOST_RUNTIME_SHARED_ROOT="$STORAGE_ABS"
+export IGPHYML_BIN="${IGPHYML_BIN:-/usr/local/share/igphyml/src/igphyml}"
+export IGPHYML_MOTIFS="${IGPHYML_MOTIFS:-/usr/local/share/igphyml/src/motifs}"
+export IGPHYML_PATH="${IGPHYML_PATH:-$IGPHYML_MOTIFS}"
 ```
 
 Run each local service in its own terminal (you can run only one if you want):
@@ -277,18 +304,21 @@ Run each local service in its own terminal (you can run only one if you want):
 
 ```bash
 set -a; source .env; set +a
-export CONTRACTS_DIR="$(pwd)/${CONTRACTS_DIR:-packages/contracts}"
+export CONTRACTS_DIR="$(python3 -c 'import os; p=os.environ.get("CONTRACTS_DIR","packages/contracts"); print(p if os.path.isabs(p) else os.path.realpath(p))')"
 export STRICT_CONTRACT_ROUTES="${STRICT_CONTRACT_ROUTES:-true}"
-Rscript --vanilla -e "setwd('services/dowser'); pr <- plumber::plumb('plumber.R'); pr\$run(host='0.0.0.0', port=${METHOD_DOWSER_HOST_PORT})"
+export IGPHYML_BIN="${IGPHYML_BIN:-/usr/local/share/igphyml/src/igphyml}"
+export IGPHYML_MOTIFS="${IGPHYML_MOTIFS:-/usr/local/share/igphyml/src/motifs}"
+export IGPHYML_PATH="${IGPHYML_PATH:-$IGPHYML_MOTIFS}"
+Rscript --vanilla -e "setwd('services/dowser'); Sys.setenv(CONTRACTS_DIR='${CONTRACTS_DIR}', STRICT_CONTRACT_ROUTES='${STRICT_CONTRACT_ROUTES}', IGPHYML_BIN='${IGPHYML_BIN}', IGPHYML_MOTIFS='${IGPHYML_MOTIFS}', IGPHYML_PATH='${IGPHYML_PATH}'); pr <- plumber::plumb('plumber.R'); pr\$run(host='0.0.0.0', port=${METHOD_DOWSER_HOST_PORT})"
 ```
 
-Notice: if you use `tree_model=igphyml`, configure `IGPHYML_BIN` and motif path vars (`IGPHYML_MOTIFS` or `IGPHYML_PATH`).
+Notice: if `tree_model=igphyml`, `IGPHYML_BIN` must be executable and motifs must exist in `IGPHYML_MOTIFS`/`IGPHYML_PATH`.
 
 **GCtree (local Python)**
 
 ```bash
 set -a; source .env; set +a
-export CONTRACTS_DIR="$(pwd)/${CONTRACTS_DIR:-packages/contracts}"
+export CONTRACTS_DIR="$(python3 -c 'import os; p=os.environ.get("CONTRACTS_DIR","packages/contracts"); print(p if os.path.isabs(p) else os.path.realpath(p))')"
 export STRICT_CONTRACT_ROUTES="${STRICT_CONTRACT_ROUTES:-true}"
 source .venv/bin/activate
 pip install -r services/gctree/requirements.txt
@@ -307,9 +337,12 @@ Notice: `gctree`, `deduplicate`, and `mkconfig` CLIs must be on `PATH` (installe
 
 ```bash
 set -a; source .env; set +a
-export CONTRACTS_DIR="$(pwd)/${CONTRACTS_DIR:-packages/contracts}"
+export CONTRACTS_DIR="$(python3 -c 'import os; p=os.environ.get("CONTRACTS_DIR","packages/contracts"); print(p if os.path.isabs(p) else os.path.realpath(p))')"
 export STRICT_CONTRACT_ROUTES="${STRICT_CONTRACT_ROUTES:-true}"
-Rscript --vanilla -e "setwd('services/brepphylo'); pr <- plumber::plumb('plumber.R'); pr\$run(host='0.0.0.0', port=${METHOD_BREPPHYLO_HOST_PORT})"
+export IGPHYML_BIN="${IGPHYML_BIN:-/usr/local/share/igphyml/src/igphyml}"
+export IGPHYML_MOTIFS="${IGPHYML_MOTIFS:-/usr/local/share/igphyml/src/motifs}"
+export IGPHYML_PATH="${IGPHYML_PATH:-$IGPHYML_MOTIFS}"
+Rscript --vanilla -e "setwd('services/brepphylo'); Sys.setenv(CONTRACTS_DIR='${CONTRACTS_DIR}', STRICT_CONTRACT_ROUTES='${STRICT_CONTRACT_ROUTES}', IGPHYML_BIN='${IGPHYML_BIN}', IGPHYML_MOTIFS='${IGPHYML_MOTIFS}', IGPHYML_PATH='${IGPHYML_PATH}'); pr <- plumber::plumb('plumber.R'); pr\$run(host='0.0.0.0', port=${METHOD_BREPPHYLO_HOST_PORT})"
 ```
 
 Notice: default `tree_type=dnapars` expects `dnapars` on `PATH` (or `DNAPARS_PATH`). If using `tree_type=igphyml`, set `IGPHYML_BIN` and motifs (`IGPHYML_MOTIFS` or `IGPHYML_PATH`).
@@ -318,7 +351,7 @@ Notice: default `tree_type=dnapars` expects `dnapars` on `PATH` (or `DNAPARS_PAT
 
 ```bash
 set -a; source .env; set +a
-export CONTRACTS_DIR="$(pwd)/${CONTRACTS_DIR:-packages/contracts}"
+export CONTRACTS_DIR="$(python3 -c 'import os; p=os.environ.get("CONTRACTS_DIR","packages/contracts"); print(p if os.path.isabs(p) else os.path.realpath(p))')"
 export STRICT_CONTRACT_ROUTES="${STRICT_CONTRACT_ROUTES:-true}"
 source .venv/bin/activate
 pip install -r services/clonaltree/requirements.txt
@@ -330,9 +363,9 @@ pip install -r services/clonaltree/requirements.txt
 )
 ```
 
-Notice: ClonalTree requires **MUSCLE v3.x**.  
-If you start via `./run.sh` -> `Dev -> Local R` (or `scripts/dev-with-local-r.sh`), MUSCLE v3.8.31 is auto-installed/checked.  
-If you start ClonalTree manually, ensure `muscle -version` reports major version `< 5`; otherwise `/run` fails with `MUSCLE v3 is required`.
+Notice: ClonalTree requires **MUSCLE v5.x**.  
+If you start via `./run.sh` -> `Dev -> Local R` (or `scripts/dev-with-local-r.sh`), MUSCLE v5 is auto-installed/checked.  
+If you start ClonalTree manually, ensure `muscle -version` reports major version `>= 5`; otherwise `/run` fails with a version error.
 
 ### 5) Start API
 
@@ -340,11 +373,15 @@ If you start ClonalTree manually, ensure `muscle -version` reports major version
 set -a; source .env; set +a
 source .venv/bin/activate
 
-# If methods run in Docker:
-# export METHOD_SERVICE_FILE_PREFIX=/runtime/storage
-#
-# If methods run locally:
-# export METHOD_SERVICE_FILE_PREFIX="$(pwd)/${STORAGE_LOCAL_PATH:-runtime/storage}"
+# Local methods: API must send host paths
+export STORAGE_ABS="$(python3 -c 'import os; p=os.environ.get("STORAGE_LOCAL_PATH","runtime/storage"); print(p if os.path.isabs(p) else os.path.realpath(p))')"
+mkdir -p "$STORAGE_ABS"
+export METHOD_SERVICE_FILE_PREFIX="$STORAGE_ABS"
+export HOST_RUNTIME_SHARED_ROOT="$STORAGE_ABS"
+
+# Docker methods: API sends container path but still stages files on host
+# export METHOD_SERVICE_FILE_PREFIX="/runtime/storage"
+# export HOST_RUNTIME_SHARED_ROOT="$STORAGE_ABS"
 
 npm run dev:api
 ```
@@ -371,7 +408,8 @@ All runtime configuration should live in root `.env`.
 - `DATABASE_URL` — optional explicit DB URL override
 - `STORAGE_LOCAL_PATH` — host-side storage directory
 - `STORAGE_LOCAL_URL` — API URL prefix for local storage
-- `METHOD_SERVICE_FILE_PREFIX` — path prefix that method services use to read uploaded files
+- `HOST_RUNTIME_SHARED_ROOT` — host absolute storage root that API uses to stage/map method inputs
+- `METHOD_SERVICE_FILE_PREFIX` — prefix API rewrites file paths to when calling method services (`/runtime/storage` for Docker methods, host absolute path for local methods)
 - `METHOD_<ID>_URL` — host URL for each method service
 - `METHOD_<ID>_URL_DOCKER` — compose-network URL for each method service
 - `METHOD_<ID>_HOST_PORT` / `METHOD_<ID>_CONTAINER_PORT` — generated service ports
