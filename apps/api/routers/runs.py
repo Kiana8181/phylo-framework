@@ -26,7 +26,11 @@ from apps.api.config import (
 from apps.api.database import get_db
 from apps.api.database.models import ACTIVE_RUN_STATUSES, Run, RunStatus, StorageType, User
 from apps.api.preprocess.method_capabilities import extension_from_path, is_native_accept
-from apps.api.preprocess.prepare_input import PreprocessError, prepare_input_for_method
+from apps.api.preprocess.prepare_input import (
+    PreprocessError,
+    prepare_input_for_method,
+    should_apply_column_mapping,
+)
 from apps.api.repositories.file_repository import FileRepository
 from apps.api.repositories.run_repository import RunRepository
 from apps.api.repositories.run_tree_repository import RunTreeRepository
@@ -530,7 +534,9 @@ async def _execute_method_async_impl(
                 except Exception:
                     native_ok = False
 
-                if native_ok:
+                force_preprocess = should_apply_column_mapping(method_id, input_ext, params or {})
+
+                if native_ok and not force_preprocess:
                     existing_shared = await asyncio.to_thread(
                         _resolve_storage_path_under_shared_mount, original_storage_path
                     )

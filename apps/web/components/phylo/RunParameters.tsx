@@ -17,6 +17,63 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function fileExtension(name: string | null | undefined): string {
+  if (!name) return "";
+  const idx = name.lastIndexOf(".");
+  if (idx < 0 || idx === name.length - 1) return "";
+  return name.slice(idx + 1).toLowerCase();
+}
+
+function isTabularExt(ext: string): boolean {
+  return ext === "csv" || ext === "tsv" || ext === "tab";
+}
+
+function stripGctreeMappingControls(schema: Record<string, any>): Record<string, any> {
+  const cloned = JSON.parse(JSON.stringify(schema ?? {}));
+  const props = (cloned.properties ?? {}) as Record<string, any>;
+  delete props.doMapping;
+  delete props.column_map;
+  cloned.properties = props;
+
+  const hints = (cloned.uiHints ?? {}) as Record<string, any>;
+  const isMappingField = (key: string) =>
+    key === "doMapping" || key === "column_map" || key.startsWith("column_map.");
+
+  if (Array.isArray(hints.order)) {
+    hints.order = hints.order.filter((key: string) => !isMappingField(key));
+  }
+
+  if (hints.placeholders && typeof hints.placeholders === "object") {
+    Object.keys(hints.placeholders).forEach((key) => {
+      if (isMappingField(key)) delete hints.placeholders[key];
+    });
+  }
+
+  if (hints.visibility && typeof hints.visibility === "object") {
+    Object.keys(hints.visibility).forEach((key) => {
+      if (isMappingField(key)) delete hints.visibility[key];
+    });
+  }
+
+  if (Array.isArray(hints.sections)) {
+    hints.sections = hints.sections
+      .map((section: Record<string, any>) => {
+        if (!Array.isArray(section?.fields)) return section;
+        return {
+          ...section,
+          fields: section.fields.filter((field: string) => !isMappingField(field)),
+        };
+      })
+      .filter((section: Record<string, any>) => {
+        const fields = section?.fields;
+        return !Array.isArray(fields) || fields.length > 0;
+      });
+  }
+
+  cloned.uiHints = hints;
+  return cloned;
+}
+
 export default function RunParameters({
   spec,
   files,
@@ -42,11 +99,19 @@ export default function RunParameters({
   const requiresFile =
     spec.uiHints?.requiresFile === true || (spec?.accepts?.length ?? 0) > 0;
   const hasFile = !!(selectedFileId || (files?.length ?? 0) > 0);
-  const canSubmit = !requiresFile || hasFile;
+  const selectedInputName = selectedFileDisplay?.name ?? files?.[0]?.name ?? null;
+  const selectedInputExt = fileExtension(selectedInputName);
+  const showGctreeMapping = spec.id !== "gctree" ? true : isTabularExt(selectedInputExt);
 
   const schemaMemo = useMemo(
-    () => ({ ...(spec.paramSchema ?? {}), uiHints: spec.uiHints }),
-    [spec.id, spec.paramSchema, spec.uiHints]
+    () => {
+      const base = { ...(spec.paramSchema ?? {}), uiHints: spec.uiHints };
+      if (spec.id === "gctree" && !showGctreeMapping) {
+        return stripGctreeMappingControls(base);
+      }
+      return base;
+    },
+    [spec.id, spec.paramSchema, spec.uiHints, showGctreeMapping]
   );
 
   async function handleSubmit(values: Record<string, any>) {

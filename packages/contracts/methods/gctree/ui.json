@@ -6,6 +6,10 @@
     "If you want to compare across methods, upload a format accepted by all desired methods."
   ],
   "order": [
+    "doMapping",
+    "column_map.sequence_id",
+    "column_map.sequence_alignment",
+
     "root",
     "frame",
     "pipeline",
@@ -27,7 +31,26 @@
     "color_palette",
     "color_scale"
   ],
+  "sections": [
+    {
+      "id": "inputMapping",
+      "label": "Input Mapping",
+      "order": 0,
+      "fields": [
+        "doMapping",
+        "column_map.sequence_id",
+        "column_map.sequence_alignment"
+      ]
+    }
+  ],
+  "placeholders": {
+    "column_map.sequence_id": "e.g. sequence_id",
+    "column_map.sequence_alignment": "e.g. sequence_alignment"
+  },
   "visibility": {
+    "column_map.sequence_id": { "when": { "doMapping": true } },
+    "column_map.sequence_alignment": { "when": { "doMapping": true } },
+
     "color_mode": { "when": { "apply_coloring_settings": true } },
     "color_feature": { "when": { "apply_coloring_settings": true } },
     "color_palette": { "when": { "apply_coloring_settings": true } },
