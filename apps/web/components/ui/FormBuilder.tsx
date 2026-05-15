@@ -41,6 +41,12 @@ type JSONSchema = {
 };
 
 type EnumPrimitive = string | number | boolean;
+type FormValues = Record<string, any>;
+
+type LeafField = {
+  path: string;
+  def: JSONSchema;
+};
 
 function enumValuesFromSchema(def: JSONSchema): EnumPrimitive[] {
   if (!Array.isArray(def.enum)) return [];
@@ -91,16 +97,55 @@ function coerceEnumInput(value: unknown, values: EnumPrimitive[]): unknown {
   return value;
 }
 
-function zodFromJsonSchema(schema: JSONSchema) {
+function asObject(value: unknown): Record<string, any> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, any>;
+}
+
+function getNestedValue(source: unknown, path: string): unknown {
+  if (!path) return source;
+  const tokens = path.split(".");
+  let current: any = source;
+  for (const token of tokens) {
+    if (!current || typeof current !== "object" || Array.isArray(current)) {
+      return undefined;
+    }
+    current = current[token];
+  }
+  return current;
+}
+
+function collectLeafFields(schema: JSONSchema, prefix = ""): LeafField[] {
+  const props = schema.properties ?? {};
+  const out: LeafField[] = [];
+
+  for (const [key, def] of Object.entries(props)) {
+    const path = prefix ? `${prefix}.${key}` : key;
+    const nestedProps = def?.properties ?? {};
+    const isObject = def?.type === "object" || Object.keys(nestedProps).length > 0;
+    if (isObject && Object.keys(nestedProps).length > 0) {
+      out.push(...collectLeafFields(def, path));
+      continue;
+    }
+    out.push({ path, def });
+  }
+  return out;
+}
+
+function zodFromJsonSchema(schema: JSONSchema): z.ZodType<FormValues, FormValues> {
   const props = schema.properties ?? {};
   const required = new Set(schema.required ?? []);
   const shape: Record<string, z.ZodTypeAny> = {};
 
   for (const [key, def] of Object.entries(props)) {
     let zt: z.ZodTypeAny;
+    const nestedProps = def?.properties ?? {};
+    const isObject = def?.type === "object" || Object.keys(nestedProps).length > 0;
     const enumValues = enumValuesFromSchema(def);
 
-    if (enumValues.length) {
+    if (isObject && Object.keys(nestedProps).length > 0) {
+      zt = zodFromJsonSchema(def);
+    } else if (enumValues.length) {
       const literalSchemas = enumValues.map((value) => z.literal(value));
       const enumSchema =
         literalSchemas.length === 1
@@ -122,38 +167,38 @@ function zodFromJsonSchema(schema: JSONSchema) {
     shape[key] = zt;
   }
 
-  return z.object(shape);
+  return z.object(shape) as z.ZodType<FormValues, FormValues>;
 }
 
-function defaultsFromSchema(
-  schema: JSONSchema,
-  overrides?: Record<string, any>
-) {
+function defaultForField(
+  def: JSONSchema,
+  hasOverride: boolean,
+  overrideValue: unknown
+): unknown {
+  const nestedProps = def?.properties ?? {};
+  const isObject = def?.type === "object" || Object.keys(nestedProps).length > 0;
+
+  if (isObject && Object.keys(nestedProps).length > 0) {
+    const nestedOverride = asObject(overrideValue) ?? undefined;
+    return defaultsFromSchema(def, nestedOverride);
+  }
+
+  if (hasOverride) return overrideValue;
+  if ("default" in (def || {})) return (def as any).default;
+  if (def?.enum) return undefined;
+  if (def?.type === "boolean") return false;
+  if (def?.type === "number" || def?.type === "integer") return undefined;
+  return "";
+}
+
+function defaultsFromSchema(schema: JSONSchema, overrides?: Record<string, any>) {
   const props = schema.properties ?? {};
   const out: Record<string, any> = {};
 
   for (const [k, def] of Object.entries(props)) {
-    if (overrides && k in overrides) {
-      out[k] = overrides[k];
-      continue;
-    }
-    if ("default" in (def || {})) {
-      out[k] = (def as any).default;
-      continue;
-    }
-    if (def?.enum) {
-      out[k] = undefined;
-      continue;
-    }
-    if (def?.type === "boolean") {
-      out[k] = false;
-      continue;
-    }
-    if (def?.type === "number" || def?.type === "integer") {
-      out[k] = undefined;
-      continue;
-    }
-    out[k] = "";
+    const hasOverride = Boolean(overrides && Object.prototype.hasOwnProperty.call(overrides, k));
+    const overrideValue = hasOverride ? overrides?.[k] : undefined;
+    out[k] = defaultForField(def, hasOverride, overrideValue);
   }
 
   return out;
@@ -167,8 +212,8 @@ export default function FormBuilder({
   disabled: formDisabled = false,
 }: {
   schema: JSONSchema;
-  defaults?: Record<string, any>;
-  onSubmit: (values: Record<string, any>) => void;
+  defaults?: FormValues;
+  onSubmit: (values: FormValues) => void;
   footer?: ReactNode;
   disabled?: boolean;
 }) {
@@ -177,8 +222,14 @@ export default function FormBuilder({
     () => defaultsFromSchema(schema, defaults),
     [schema, defaults]
   );
+  const leafFields = useMemo(() => collectLeafFields(schema), [schema]);
+  const fieldMap = useMemo(() => {
+    const map = new Map<string, JSONSchema>();
+    leafFields.forEach((item) => map.set(item.path, item.def));
+    return map;
+  }, [leafFields]);
 
-  const { control, handleSubmit, reset, formState } = useForm({
+  const { control, handleSubmit, reset, formState } = useForm<FormValues>({
     resolver: zodResolver(zodSchema),
     defaultValues: formDefaults,
   });
@@ -186,15 +237,27 @@ export default function FormBuilder({
   const disabled = formState.isSubmitting || formDisabled;
 
   const values = useWatch({ control });
-  const props = schema.properties ?? {};
-  const order = schema.uiHints?.order ?? Object.keys(props);
-  const placeholders = schema.uiHints?.placeholders ?? {};
-  const visibility = schema.uiHints?.visibility ?? {};
+  const placeholders = useMemo(
+    () => schema.uiHints?.placeholders ?? {},
+    [schema.uiHints?.placeholders]
+  );
+  const visibility = useMemo(
+    () => schema.uiHints?.visibility ?? {},
+    [schema.uiHints?.visibility]
+  );
 
-  // helper: evaluate a visibility condition against current values
+  const order = useMemo(() => {
+    const explicit = Array.isArray(schema.uiHints?.order) ? schema.uiHints?.order : [];
+    const filteredExplicit = explicit.filter((name) => fieldMap.has(name));
+    const remaining = leafFields
+      .map((item) => item.path)
+      .filter((name) => !filteredExplicit.includes(name));
+    return [...filteredExplicit, ...remaining];
+  }, [schema.uiHints?.order, fieldMap, leafFields]);
+
   const testWhen = (cond: Record<string, any>) =>
     Object.entries(cond).every(([k, expected]) => {
-      const v = (values as any)[k];
+      const v = getNestedValue(values, k);
       return Array.isArray(expected) ? expected.includes(v) : v === expected;
     });
 
@@ -205,21 +268,26 @@ export default function FormBuilder({
     if (vis.whenAll && !vis.whenAll.every((c: any) => testWhen(c)))
       return false;
     if (vis.whenAny && !vis.whenAny.some((c: any) => testWhen(c))) return false;
-
     return true;
   }
 
   const groupMap = useMemo(() => {
     const m = new Map<string, string[]>();
     Object.entries(visibility).forEach(([child, rule]) => {
-      const keys = Object.keys(
-        rule.when ?? rule.whenAll?.[0] ?? rule.whenAny?.[0] ?? {}
-      );
+      if (!fieldMap.has(child)) return;
+      const firstCond =
+        rule.when ??
+        (Array.isArray(rule.whenAll) && rule.whenAll.length > 0 ? rule.whenAll[0] : undefined) ??
+        (Array.isArray(rule.whenAny) && rule.whenAny.length > 0 ? rule.whenAny[0] : undefined) ??
+        {};
+      const keys = Object.keys(firstCond);
       const controller = keys[0];
-      if (controller) m.set(controller, [...(m.get(controller) || []), child]);
+      if (controller && fieldMap.has(controller)) {
+        m.set(controller, [...(m.get(controller) || []), child]);
+      }
     });
     return m;
-  }, [visibility]);
+  }, [visibility, fieldMap]);
 
   const groupedChildren = new Set<string>([...groupMap.values()].flat());
 
@@ -228,7 +296,9 @@ export default function FormBuilder({
   }, [schema, defaults, reset]);
 
   function renderField(name: string) {
-    const def = props[name]!;
+    const def = fieldMap.get(name);
+    if (!def) return null;
+
     const type = def?.enum ? "enum" : def?.type;
     const placeholder = placeholders[name];
     const enumValues = enumValuesFromSchema(def);
@@ -240,7 +310,7 @@ export default function FormBuilder({
         <Controller
           name={name as any}
           control={control}
-          defaultValue={(formDefaults as any)[name]}
+          defaultValue={getNestedValue(formDefaults, name)}
           render={({ field }) => {
             if (type === "boolean") {
               return (
@@ -323,7 +393,7 @@ export default function FormBuilder({
     const visibleChildren = childrenInOrder.filter((n) => isFieldVisible(n));
     if (!visibleChildren.length) return null;
 
-    const title = props[controller]?.title ?? controller;
+    const title = fieldMap.get(controller)?.title ?? controller;
     return (
       <div className="col-span-full rounded-2xl border bg-card/30">
         <div className="flex items-center justify-between px-4 py-2 border-b">
