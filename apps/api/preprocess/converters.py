@@ -248,29 +248,14 @@ def rename_table_columns(
             cleaned_map[canonical_clean] = mapped_clean
 
     resolved_map: dict[str, str] = {}
-    missing_required_keys: list[str] = []
 
-    for canonical_key in required_keys:
-        requested_column = cleaned_map.get(canonical_key)
-
-        if requested_column:
-            resolved = _resolve_column_name(
-                header,
-                requested_column,
-                normalize_headers=normalize_headers,
-                required=True,
-            )
-        else:
-            resolved = _resolve_column_name(
-                header,
-                canonical_key,
-                normalize_headers=normalize_headers,
-                required=False,
-            )
-            if resolved is None:
-                missing_required_keys.append(canonical_key)
-                continue
-
+    for canonical_key, requested_column in cleaned_map.items():
+        resolved = _resolve_column_name(
+            header,
+            requested_column,
+            normalize_headers=normalize_headers,
+            required=True,
+        )
         assert resolved is not None
         if resolved in resolved_map.values():
             duplicate_with = next(
@@ -286,17 +271,6 @@ def rename_table_columns(
             )
         resolved_map[canonical_key] = resolved
 
-    if missing_required_keys:
-        raise ConversionError(
-            code="MISSING_REQUIRED_MAPPING",
-            message="Missing required column mapping for one or more canonical keys.",
-            details={
-                "missing_required_keys": missing_required_keys,
-                "required_keys": required_keys,
-                "available_columns": header,
-            },
-        )
-
     renamed_header = list(header)
     for canonical_key, source_column in resolved_map.items():
         source_index = header.index(source_column)
@@ -311,6 +285,30 @@ def rename_table_columns(
                 "duplicated_headers": duplicates,
                 "resolved_map": resolved_map,
                 "original_header": header,
+            },
+        )
+
+    missing_required_keys: list[str] = []
+    for canonical_key in required_keys:
+        resolved = _resolve_column_name(
+            renamed_header,
+            canonical_key,
+            normalize_headers=normalize_headers,
+            required=False,
+        )
+        if resolved is None:
+            missing_required_keys.append(canonical_key)
+
+    if missing_required_keys:
+        raise ConversionError(
+            code="MISSING_REQUIRED_MAPPING",
+            message="Missing required columns after applying column mapping.",
+            details={
+                "missing_required_keys": missing_required_keys,
+                "required_keys": required_keys,
+                "available_columns": header,
+                "renamed_columns": renamed_header,
+                "resolved_map": resolved_map,
             },
         )
 
