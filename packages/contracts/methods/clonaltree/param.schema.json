@@ -1,6 +1,31 @@
 {
   "type": "object",
   "properties": {
+    "doMapping": {
+      "type": "boolean",
+      "title": "Enable input column mapping",
+      "description": "When true, map uploaded tabular headers to canonical ClonalTree AIRR keys before safe conversions.",
+      "default": false
+    },
+    "column_map": {
+      "type": "object",
+      "title": "Input Column Mapping",
+      "description": "Map canonical ClonalTree keys to source table columns.",
+      "properties": {
+        "sequence_id": { "type": "string", "title": "Sequence ID column", "default": "" },
+        "productive": { "type": "string", "title": "Productive column", "default": "" },
+        "v_call": { "type": "string", "title": "V call column", "default": "" },
+        "d_call": { "type": "string", "title": "D call column", "default": "" },
+        "j_call": { "type": "string", "title": "J call column", "default": "" },
+        "sequence_alignment": { "type": "string", "title": "Sequence alignment column", "default": "" },
+        "j_sequence_alignment": { "type": "string", "title": "J sequence alignment column", "default": "" },
+        "v_sequence_alignment": { "type": "string", "title": "V sequence alignment column", "default": "" },
+        "j_sequence_alignment_aa": { "type": "string", "title": "J sequence alignment aa column", "default": "" },
+        "v_sequence_alignment_aa": { "type": "string", "title": "V sequence alignment aa column", "default": "" },
+        "junction_aa": { "type": "string", "title": "Junction aa column", "default": "" },
+        "cdr3_aa": { "type": "string", "title": "CDR3 aa column", "default": "" }
+      }
+    },
     "run_name": {
       "type": "string",
       "title": "Run label",
