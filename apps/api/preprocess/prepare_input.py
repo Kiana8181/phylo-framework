@@ -5,7 +5,11 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from apps.api.preprocess.column_requirements import REQUIRED_KEYS_BY_METHOD
+from apps.api.preprocess.column_requirements import (
+    CLONALTREE_BASE_REQUIRED_KEYS,
+    CLONALTREE_REFINEMENT_REQUIRED_KEYS,
+    REQUIRED_KEYS_BY_METHOD,
+)
 from apps.api.preprocess.converters import (
     ConversionError,
     convert_csv_to_tsv,
@@ -92,6 +96,22 @@ def _truthy(value: Any) -> bool:
 
 def _do_mapping(params: dict[str, Any]) -> bool:
     return _truthy(params.get("doMapping"))
+
+
+def _uses_clonaltree_refinement(params: dict[str, Any]) -> bool:
+    if "use_refinement" not in params:
+        return True
+    return _truthy(params.get("use_refinement"))
+
+
+def active_required_keys(method_id: str, params: dict[str, Any]) -> list[str]:
+    method = method_id.lower().strip()
+    if method == "clonaltree":
+        required = list(CLONALTREE_BASE_REQUIRED_KEYS)
+        if _uses_clonaltree_refinement(params):
+            required.extend(CLONALTREE_REFINEMENT_REQUIRED_KEYS)
+        return required
+    return list(REQUIRED_KEYS_BY_METHOD.get(method, []))
 
 
 def _get_column_map(params: dict[str, Any]) -> dict[str, str]:
@@ -207,7 +227,7 @@ def _missing_mapping_error(
     example_mapping = {key: f"<column for {key}>" for key in required_keys}
     return PreprocessError(
         code="MISSING_COLUMN_MAPPING",
-        message="Input column mapping is missing one or more required fields.",
+        message="Input is missing one or more required columns after column mapping.",
         details={
             "method_id": method_id,
             "input_ext": input_ext,
@@ -218,8 +238,8 @@ def _missing_mapping_error(
             "example_column_map": example_mapping,
             "converter_error": converter_error.to_dict(),
             "next_actions": [
-                "Set doMapping=true and provide column_map entries for each required canonical key.",
-                "Or rename your input headers to match canonical AIRR-style names and retry.",
+                "Map the missing source columns to their required canonical names.",
+                "Or rename your input headers to match the required canonical names and retry.",
             ],
         },
     )
@@ -274,7 +294,7 @@ def prepare_input_for_method(
     mapping_applied = False
 
     if should_apply_column_mapping(method, current_ext, params):
-        required_keys = REQUIRED_KEYS_BY_METHOD.get(method, [])
+        required_keys = active_required_keys(method, params)
         if current_ext not in TABULAR_EXTENSIONS:
             raise _conversion_error(
                 method_id=method,

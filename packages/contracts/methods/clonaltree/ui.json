@@ -82,10 +82,10 @@
     "column_map.d_call": { "when": { "doMapping": true } },
     "column_map.j_call": { "when": { "doMapping": true } },
     "column_map.sequence_alignment": { "when": { "doMapping": true } },
-    "column_map.j_sequence_alignment": { "when": { "doMapping": true } },
-    "column_map.v_sequence_alignment": { "when": { "doMapping": true } },
-    "column_map.j_sequence_alignment_aa": { "when": { "doMapping": true } },
-    "column_map.v_sequence_alignment_aa": { "when": { "doMapping": true } },
+    "column_map.j_sequence_alignment": { "whenAll": [{ "doMapping": true }, { "use_refinement": true }] },
+    "column_map.v_sequence_alignment": { "whenAll": [{ "doMapping": true }, { "use_refinement": true }] },
+    "column_map.j_sequence_alignment_aa": { "whenAll": [{ "doMapping": true }, { "use_refinement": true }] },
+    "column_map.v_sequence_alignment_aa": { "whenAll": [{ "doMapping": true }, { "use_refinement": true }] },
     "column_map.junction_aa": { "when": { "doMapping": true } },
     "column_map.cdr3_aa": { "when": { "doMapping": true } }
   }
