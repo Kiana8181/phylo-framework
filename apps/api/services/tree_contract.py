@@ -487,8 +487,14 @@ def assemble_unified_tree_result(
         return {"ok": False}, []
 
     raw_trees = raw_result.get("trees")
-    if not isinstance(raw_trees, list):
+    # Some method services (notably R/plumber with auto_unbox) may emit a
+    # single tree as a scalar string instead of a JSON array.
+    if isinstance(raw_trees, list):
+        pass
+    elif raw_trees is None:
         raw_trees = []
+    else:
+        raw_trees = [raw_trees]
 
     warnings_out: list[str | dict[str, Any]] = []
     for w in raw_result.get("warnings") or []:
