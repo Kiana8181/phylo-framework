@@ -39,7 +39,7 @@
     "root": {
       "type": "string",
       "title": "Root sequence ID",
-      "description": "ID of the germline / outgroup sequence in the input FASTA alignment (FASTA-derived scenarios).",
+      "description": "Original uploaded ID of the germline / outgroup sequence in the input FASTA alignment (FASTA-derived scenarios). It may be remapped internally to a short PHYLIP/GCtree-safe ID.",
       "default": "GL"
     },
     "frame": {
