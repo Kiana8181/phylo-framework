@@ -1,6 +1,54 @@
 {
   "type": "object",
   "properties": {
+    "doMapping": {
+      "type": "boolean",
+      "default": false,
+      "title": "Enable input column mapping",
+      "description": "When true, map your uploaded table headers to canonical Dowser AIRR keys before safe conversions."
+    },
+    "column_map": {
+      "type": "object",
+      "title": "Input Column Mapping",
+      "description": "Map canonical Dowser keys to source table columns.",
+      "properties": {
+        "sequence_id": {
+          "type": "string",
+          "title": "Sequence ID column",
+          "default": ""
+        },
+        "clone_id": {
+          "type": "string",
+          "title": "Clone ID column",
+          "default": ""
+        },
+        "sequence_alignment": {
+          "type": "string",
+          "title": "Aligned sequence column",
+          "default": ""
+        },
+        "germline_alignment_d_mask": {
+          "type": "string",
+          "title": "Germline alignment column",
+          "default": ""
+        },
+        "v_call": {
+          "type": "string",
+          "title": "V call column",
+          "default": ""
+        },
+        "j_call": {
+          "type": "string",
+          "title": "J call column",
+          "default": ""
+        },
+        "junction": {
+          "type": "string",
+          "title": "Junction column",
+          "default": ""
+        }
+      }
+    },
     "tree_model": {
       "type": "string",
       "enum": ["mp", "ml", "igphyml"],

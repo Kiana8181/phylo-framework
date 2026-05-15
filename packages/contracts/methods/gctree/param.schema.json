@@ -1,6 +1,29 @@
 {
   "type": "object",
   "properties": {
+    "doMapping": {
+      "type": "boolean",
+      "title": "Enable input column mapping",
+      "description": "When true and a CSV/TSV input is selected, map source table headers to canonical GCtree tabular keys before conversion.",
+      "default": false
+    },
+    "column_map": {
+      "type": "object",
+      "title": "Input Column Mapping",
+      "description": "Map canonical GCtree tabular keys to source table columns.",
+      "properties": {
+        "sequence_id": {
+          "type": "string",
+          "title": "FASTA ID column",
+          "default": ""
+        },
+        "sequence_alignment": {
+          "type": "string",
+          "title": "Aligned sequence column",
+          "default": ""
+        }
+      }
+    },
     "root": {
       "type": "string",
       "title": "Root sequence ID",
