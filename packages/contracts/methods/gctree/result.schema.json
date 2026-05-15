@@ -5,11 +5,11 @@
   "properties": {
     "ok": {
       "type": "boolean",
-      "description": "True if the pipeline completed successfully."
+      "description": "True only when GCtree inference completed successfully (not DNAPARS fallback)."
     },
     "trees": {
       "type": "array",
-      "description": "List of Newick trees (usually top-ranked trees).",
+      "description": "List of Newick trees (GCtree-ranked when ok=true; may be unranked DNAPARS fallback when ok=false for debugging).",
       "items": { "type": "string" }
     },
     "figures": {
@@ -74,7 +74,7 @@
     },
     "stats": {
       "type": "object",
-      "description": "Small JSON summary of the run (pipeline, number of trees, notes, etc.).",
+      "description": "Run summary. Should include input_scenario (aligned_fasta_with_root | airr_or_changeo_table_adapter | dnapars_outfile_with_abundance | gctree_forest_pickle) and result_quality (gctree_ranked | gctree_rerendered_from_pickle | failed_gctree_infer_unranked_dnapars_available | failed).",
       "additionalProperties": true
     },
     "logs": {
@@ -90,6 +90,22 @@
         },
         "additionalProperties": true
       }
+    },
+    "warnings": {
+      "type": "array",
+      "description": "Validation and scientific warnings (strings or structured objects).",
+      "items": {
+        "oneOf": [{ "type": "string" }, { "type": "object", "additionalProperties": true }]
+      }
+    },
+    "render_meta": {
+      "type": "object",
+      "description": "Metadata for coloring, isotype, and extra rendering.",
+      "additionalProperties": true
+    },
+    "tree_model": {
+      "type": "string",
+      "description": "Tree model label for compatibility with other methods (e.g. phylogeny)."
     },
     "artifact_zip_b64": {
       "type": "string",
@@ -108,5 +124,18 @@
       "description": "Preferred default render mode for the front-end (e.g. 'phylogeny')."
     }
   },
-  "required": ["ok", "trees", "figures", "annotations", "clones", "stats", "logs", "artifact_zip_b64", "artifact_name"]
+  "required": [
+    "ok",
+    "trees",
+    "figures",
+    "annotations",
+    "clones",
+    "stats",
+    "logs",
+    "warnings",
+    "render_meta",
+    "tree_model",
+    "artifact_zip_b64",
+    "artifact_name"
+  ]
 }

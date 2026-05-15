@@ -2,23 +2,24 @@
   "requiresFile": true,
   "maxFiles": 1,
   "uploadGuidance": [
-    "GCtree accepts aligned FASTA/FA. You can also upload TSV/CSV; conversion is applied when possible.",
+    "Aligned FASTA, or CSV/TSV with an aligned sequence column (framework converts to FASTA).",
+    "Single GCtree forest pickle (.p) for re-rank/re-render — set input scenario to gctree_forest_pickle.",
+    "For DNAPARS outfile + abundances (and optional idmap, position maps), upload a single .zip containing manifest.json plus the files listed in the manifest (see docs).",
     "If you want to compare across methods, upload a format accepted by all desired methods."
   ],
   "order": [
+    "input_scenario",
     "doMapping",
     "column_map.sequence_id",
     "column_map.sequence_alignment",
-
     "root",
     "frame",
-    "pipeline",
-    "infer",
+    "frame2",
+    "chain_split",
     "top_n",
     "ranking_strategy",
     "quick",
     "jumble",
-    "bootstrap",
     "img_type",
     "outbase",
     "idlabel",
@@ -27,20 +28,20 @@
     "tree_stats",
     "apply_coloring_settings",
     "color_mode",
-    "color_feature",
-    "color_palette",
-    "color_scale"
+    "apply_isotype"
   ],
   "sections": [
     {
       "id": "inputMapping",
-      "label": "Input Mapping",
+      "label": "Input mapping",
       "order": 0,
-      "fields": [
-        "doMapping",
-        "column_map.sequence_id",
-        "column_map.sequence_alignment"
-      ]
+      "fields": ["doMapping", "column_map.sequence_id", "column_map.sequence_alignment"]
+    },
+    {
+      "id": "advanced",
+      "label": "Advanced",
+      "order": 1,
+      "fields": ["frame2", "chain_split", "apply_isotype"]
     }
   ],
   "placeholders": {
@@ -51,9 +52,24 @@
     "column_map.sequence_id": { "when": { "doMapping": true } },
     "column_map.sequence_alignment": { "when": { "doMapping": true } },
 
-    "color_mode": { "when": { "apply_coloring_settings": true } },
-    "color_feature": { "when": { "apply_coloring_settings": true } },
-    "color_palette": { "when": { "apply_coloring_settings": true } },
-    "color_scale": { "when": { "apply_coloring_settings": true } }
+    "root": {
+      "whenAny": [
+        { "input_scenario": "aligned_fasta_with_root" },
+        { "input_scenario": "airr_or_changeo_table_adapter" }
+      ]
+    },
+    "quick": {
+      "whenAny": [
+        { "input_scenario": "aligned_fasta_with_root" },
+        { "input_scenario": "airr_or_changeo_table_adapter" }
+      ]
+    },
+    "jumble": {
+      "whenAny": [
+        { "input_scenario": "aligned_fasta_with_root" },
+        { "input_scenario": "airr_or_changeo_table_adapter" }
+      ]
+    },
+    "color_mode": { "when": { "apply_coloring_settings": true } }
   }
 }
