@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import logging
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -213,6 +214,119 @@ def convert_csv_to_tsv(input_path: Path, output_path: Path) -> None:
         "Converted CSV to TSV",
         extra={"rows": len(body), "columns": len(header), "input_path": str(input_path)},
     )
+
+
+def rename_table_columns(
+    input_path: Path,
+    output_path: Path,
+    *,
+    delimiter: Literal["csv", "tsv"] | None = None,
+    normalize_headers: bool = True,
+    column_map: dict[str, str],
+    required_keys: list[str],
+    allow_missing_optional: bool = True,
+) -> dict[str, Any]:
+    # Reserved for future optional-key support while keeping a stable function signature.
+    _ = allow_missing_optional
+
+    delimiter_char = _table_delimiter(input_path, delimiter=delimiter)
+    header, body = _read_table(input_path, delimiter_char=delimiter_char)
+    if not header:
+        raise ConversionError(
+            code="EMPTY_HEADER",
+            message="Input table has no header row.",
+            details={"input_path": str(input_path)},
+        )
+
+    cleaned_map: dict[str, str] = {}
+    for canonical_key, mapped_value in (column_map or {}).items():
+        if not isinstance(canonical_key, str) or not isinstance(mapped_value, str):
+            continue
+        canonical_clean = canonical_key.strip()
+        mapped_clean = mapped_value.strip()
+        if canonical_clean and mapped_clean:
+            cleaned_map[canonical_clean] = mapped_clean
+
+    resolved_map: dict[str, str] = {}
+    missing_required_keys: list[str] = []
+
+    for canonical_key in required_keys:
+        requested_column = cleaned_map.get(canonical_key)
+
+        if requested_column:
+            resolved = _resolve_column_name(
+                header,
+                requested_column,
+                normalize_headers=normalize_headers,
+                required=True,
+            )
+        else:
+            resolved = _resolve_column_name(
+                header,
+                canonical_key,
+                normalize_headers=normalize_headers,
+                required=False,
+            )
+            if resolved is None:
+                missing_required_keys.append(canonical_key)
+                continue
+
+        assert resolved is not None
+        if resolved in resolved_map.values():
+            duplicate_with = next(
+                key for key, resolved_name in resolved_map.items() if resolved_name == resolved
+            )
+            raise ConversionError(
+                code="AMBIGUOUS_COLUMN",
+                message="Multiple canonical keys resolve to the same source column.",
+                details={
+                    "source_column": resolved,
+                    "canonical_keys": [duplicate_with, canonical_key],
+                },
+            )
+        resolved_map[canonical_key] = resolved
+
+    if missing_required_keys:
+        raise ConversionError(
+            code="MISSING_REQUIRED_MAPPING",
+            message="Missing required column mapping for one or more canonical keys.",
+            details={
+                "missing_required_keys": missing_required_keys,
+                "required_keys": required_keys,
+                "available_columns": header,
+            },
+        )
+
+    renamed_header = list(header)
+    for canonical_key, source_column in resolved_map.items():
+        source_index = header.index(source_column)
+        renamed_header[source_index] = canonical_key
+
+    duplicates = sorted([name for name, count in Counter(renamed_header).items() if count > 1])
+    if duplicates:
+        raise ConversionError(
+            code="AMBIGUOUS_COLUMN",
+            message="Renaming would create duplicate target headers.",
+            details={
+                "duplicated_headers": duplicates,
+                "resolved_map": resolved_map,
+                "original_header": header,
+            },
+        )
+
+    _write_table(
+        output_path=output_path,
+        delimiter_char=delimiter_char,
+        header=renamed_header,
+        body=body,
+    )
+
+    return {
+        "resolved_map": resolved_map,
+        "rows": len(body),
+        "cols": len(renamed_header),
+        "warnings": [],
+    }
 
 
 def convert_table_to_aligned_fasta(
