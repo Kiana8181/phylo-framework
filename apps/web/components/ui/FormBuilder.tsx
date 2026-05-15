@@ -3,13 +3,7 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -52,7 +46,7 @@ function enumValuesFromSchema(def: JSONSchema): EnumPrimitive[] {
   if (!Array.isArray(def.enum)) return [];
   return def.enum.filter(
     (value): value is EnumPrimitive =>
-      typeof value === "string" || typeof value === "number" || typeof value === "boolean"
+      typeof value === "string" || typeof value === "number" || typeof value === "boolean",
   );
 }
 
@@ -150,13 +144,16 @@ function zodFromJsonSchema(schema: JSONSchema): z.ZodType<FormValues, FormValues
       const enumSchema =
         literalSchemas.length === 1
           ? literalSchemas[0]
-          : z.union(literalSchemas as [typeof literalSchemas[0], typeof literalSchemas[0], ...typeof literalSchemas]);
+          : z.union(
+              literalSchemas as [
+                (typeof literalSchemas)[0],
+                (typeof literalSchemas)[0],
+                ...typeof literalSchemas,
+              ],
+            );
       zt = z.preprocess((value) => coerceEnumInput(value, enumValues), enumSchema);
     } else if (def.type === "number" || def.type === "integer") {
-      zt = z.preprocess(
-        (v) => (v === "" || v == null ? undefined : Number(v)),
-        z.number()
-      );
+      zt = z.preprocess((v) => (v === "" || v == null ? undefined : Number(v)), z.number());
     } else if (def.type === "boolean") {
       zt = z.boolean();
     } else {
@@ -170,11 +167,7 @@ function zodFromJsonSchema(schema: JSONSchema): z.ZodType<FormValues, FormValues
   return z.object(shape) as z.ZodType<FormValues, FormValues>;
 }
 
-function defaultForField(
-  def: JSONSchema,
-  hasOverride: boolean,
-  overrideValue: unknown
-): unknown {
+function defaultForField(def: JSONSchema, hasOverride: boolean, overrideValue: unknown): unknown {
   const nestedProps = def?.properties ?? {};
   const isObject = def?.type === "object" || Object.keys(nestedProps).length > 0;
 
@@ -218,10 +211,7 @@ export default function FormBuilder({
   disabled?: boolean;
 }) {
   const zodSchema = useMemo(() => zodFromJsonSchema(schema), [schema]);
-  const formDefaults = useMemo(
-    () => defaultsFromSchema(schema, defaults),
-    [schema, defaults]
-  );
+  const formDefaults = useMemo(() => defaultsFromSchema(schema, defaults), [schema, defaults]);
   const leafFields = useMemo(() => collectLeafFields(schema), [schema]);
   const fieldMap = useMemo(() => {
     const map = new Map<string, JSONSchema>();
@@ -237,22 +227,14 @@ export default function FormBuilder({
   const disabled = formState.isSubmitting || formDisabled;
 
   const values = useWatch({ control });
-  const placeholders = useMemo(
-    () => schema.uiHints?.placeholders ?? {},
-    [schema.uiHints?.placeholders]
-  );
-  const visibility = useMemo(
-    () => schema.uiHints?.visibility ?? {},
-    [schema.uiHints?.visibility]
-  );
+  const placeholders = useMemo(() => schema.uiHints?.placeholders ?? {}, [schema.uiHints?.placeholders]);
+  const visibility = useMemo(() => schema.uiHints?.visibility ?? {}, [schema.uiHints?.visibility]);
 
   const order = useMemo(() => {
     const explicit = Array.isArray(schema.uiHints?.order) ? schema.uiHints?.order : [];
-    const filteredExplicit = explicit.filter((name) => fieldMap.has(name));
-    const remaining = leafFields
-      .map((item) => item.path)
-      .filter((name) => !filteredExplicit.includes(name));
-    return [...filteredExplicit, ...remaining];
+    const filteredExplicit = explicit?.filter((name) => fieldMap.has(name));
+    const remaining = leafFields.map((item) => item.path).filter((name) => !filteredExplicit?.includes(name));
+    return [...(filteredExplicit || []), ...remaining];
   }, [schema.uiHints?.order, fieldMap, leafFields]);
 
   const testWhen = (cond: Record<string, any>) =>
@@ -265,8 +247,7 @@ export default function FormBuilder({
     const vis = (visibility as any)?.[name];
     if (!vis) return true;
     if (vis.when && !testWhen(vis.when)) return false;
-    if (vis.whenAll && !vis.whenAll.every((c: any) => testWhen(c)))
-      return false;
+    if (vis.whenAll && !vis.whenAll.every((c: any) => testWhen(c))) return false;
     if (vis.whenAny && !vis.whenAny.some((c: any) => testWhen(c))) return false;
     return true;
   }
@@ -314,11 +295,7 @@ export default function FormBuilder({
           render={({ field }) => {
             if (type === "boolean") {
               return (
-                <Switch
-                  checked={Boolean(field.value)}
-                  onCheckedChange={field.onChange}
-                  disabled={disabled}
-                />
+                <Switch checked={Boolean(field.value)} onCheckedChange={field.onChange} disabled={disabled} />
               );
             }
             if (type === "number" || type === "integer") {
@@ -379,17 +356,13 @@ export default function FormBuilder({
           }}
         />
 
-        {def?.description && (
-          <p className="text-xs text-muted-foreground">{def.description}</p>
-        )}
+        {def?.description && <p className="text-xs text-muted-foreground">{def.description}</p>}
       </div>
     );
   }
 
   function GroupBox({ controller }: { controller: string }) {
-    const childrenInOrder = order.filter((n) =>
-      groupMap.get(controller)?.includes(n)
-    );
+    const childrenInOrder = order.filter((n) => groupMap.get(controller)?.includes(n));
     const visibleChildren = childrenInOrder.filter((n) => isFieldVisible(n));
     if (!visibleChildren.length) return null;
 
@@ -414,9 +387,7 @@ export default function FormBuilder({
       onSubmit={handleSubmit((data) => onSubmit(data))}
       className={cn("grid gap-4 grid-cols-1 md:grid-cols-2 xl:grid-cols-3")}
     >
-      {basicFields.map((name) =>
-        isFieldVisible(name) ? renderField(name) : null
-      )}
+      {basicFields.map((name) => (isFieldVisible(name) ? renderField(name) : null))}
 
       {[...groupMap.keys()].map((controller) => (
         <GroupBox key={controller} controller={controller} />
