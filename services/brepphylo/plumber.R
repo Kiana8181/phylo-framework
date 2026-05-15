@@ -109,6 +109,86 @@ clone_seq_counts <- function(df, clone_col, clone_ids) {
   vapply(clone_ids, function(cid) sum(df[[clone_col]] == cid, na.rm = TRUE), integer(1))
 }
 
+tail_file_text <- function(path, n = 80) {
+  lines <- tryCatch(readLines(path, warn = FALSE), error = function(e) {
+    sprintf("<failed to read %s: %s>", basename(path), conditionMessage(e))
+  })
+  if (!length(lines)) return("<empty log>")
+  paste(utils::tail(lines, n), collapse = "\n")
+}
+
+summarise_brepphylo_output_dir <- function(out_dir, tail_lines = 80, max_files = 120) {
+  output_dir <- normalizePath(out_dir, mustWork = FALSE)
+  all_files <- list.files(out_dir, recursive = TRUE, full.names = TRUE, all.files = FALSE)
+  rel_files <- gsub(paste0("^", out_dir, "/?"), "", all_files)
+  rel_files <- sort(rel_files[nzchar(rel_files)])
+  shown_files <- utils::head(rel_files, max_files)
+
+  clone_logs <- list.files(
+    out_dir,
+    pattern = "^clone_.*\\.log$",
+    recursive = TRUE,
+    full.names = TRUE
+  )
+  log_files <- clone_logs
+  log_source <- "clone_*.log"
+  if (!length(log_files)) {
+    log_files <- list.files(
+      out_dir,
+      pattern = "\\.log$",
+      recursive = TRUE,
+      full.names = TRUE
+    )
+    log_source <- "*.log"
+  }
+
+  log_tails <- character(0)
+  if (length(log_files)) {
+    log_files <- sort(log_files)
+    log_tails <- vapply(
+      log_files,
+      function(p) {
+        rel <- gsub(paste0("^", out_dir, "/?"), "", p)
+        paste0("----- ", rel, " -----\n", tail_file_text(p, tail_lines))
+      },
+      FUN.VALUE = character(1)
+    )
+  }
+
+  parts <- c(
+    sprintf("No .tree files were produced by BrepPhylo."),
+    sprintf("output_dir=%s", output_dir),
+    sprintf("files_found=%d", length(rel_files))
+  )
+
+  if (length(shown_files)) {
+    parts <- c(parts, paste0("produced_files:\n", paste(shown_files, collapse = "\n")))
+    if (length(rel_files) > length(shown_files)) {
+      parts <- c(parts, sprintf("produced_files_truncated=%d", length(rel_files) - length(shown_files)))
+    }
+  } else {
+    parts <- c(parts, "produced_files=<none>")
+  }
+
+  if (length(log_tails)) {
+    parts <- c(
+      parts,
+      sprintf("log_source=%s", log_source),
+      sprintf("clone_log_files_found=%d", length(clone_logs)),
+      sprintf("log_files_found=%d", length(log_files)),
+      paste0("log_tails:\n", paste(log_tails, collapse = "\n\n"))
+    )
+  } else {
+    parts <- c(
+      parts,
+      sprintf("clone_log_files_found=%d", length(clone_logs)),
+      "log_files_found=0"
+    )
+  }
+
+  paste(parts, collapse = "\n")
+}
+
 clean_input_df <- function(df, seq_col, clone_col, germ_col) {
   warnings <- character(0)
 
@@ -789,13 +869,14 @@ run_handler_impl <- function(req, res) {
     )
     if (!length(tree_files)) {
       res$status <- 500
-      add_log("brepphylo.collectTrees", FALSE,
-              "No .tree files were produced by BrepPhylo.")
+      collect_diagnostics <- summarise_brepphylo_output_dir(out_dir)
+      add_log("brepphylo.collectTrees", FALSE, collect_diagnostics)
       return(list(
-        ok       = FALSE,
-        error    = "BrepPhylo did not produce any .tree files.",
-        logs     = logs,
-        warnings = as.list(warnings)
+        ok          = FALSE,
+        error       = "BrepPhylo did not produce any .tree files.",
+        diagnostics = list(output_dir = normalizePath(out_dir, mustWork = FALSE)),
+        logs        = logs,
+        warnings    = as.list(warnings)
       ))
     }
 
