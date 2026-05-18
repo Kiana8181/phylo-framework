@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from apps.api.preprocess.column_requirements import (
+    CLONALTREE_ALIGNMENT_REQUIRED_KEYS,
     CLONALTREE_BASE_REQUIRED_KEYS,
     CLONALTREE_REFINEMENT_REQUIRED_KEYS,
     REQUIRED_KEYS_BY_METHOD,
@@ -110,6 +111,7 @@ def active_required_keys(method_id: str, params: dict[str, Any]) -> list[str]:
         required = list(CLONALTREE_BASE_REQUIRED_KEYS)
         if _uses_clonaltree_refinement(params):
             required.extend(CLONALTREE_REFINEMENT_REQUIRED_KEYS)
+        required.extend(CLONALTREE_ALIGNMENT_REQUIRED_KEYS)
         return required
     return list(REQUIRED_KEYS_BY_METHOD.get(method, []))
 
