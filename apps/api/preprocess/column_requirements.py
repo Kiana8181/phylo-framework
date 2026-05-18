@@ -33,7 +33,40 @@ CLONALTREE_REFINEMENT_REQUIRED_KEYS = [
     "v_sequence_alignment_aa",
 ]
 
-CLONALTREE_REQUIRED_KEYS = CLONALTREE_BASE_REQUIRED_KEYS + CLONALTREE_REFINEMENT_REQUIRED_KEYS
+# Required by alignment_intraclonal.py when ClonalTree builds per-clone trees.
+CLONALTREE_ALIGNMENT_REQUIRED_KEYS = [
+    "sequence",
+    "v_identity",
+    "d_identity",
+    "j_identity",
+    "cdr1",
+    "cdr2",
+    "cdr3",
+    "fwr1",
+    "fwr2",
+    "fwr3",
+    "fwr4",
+    "v_germline_alignment",
+    "d_germline_alignment",
+    "j_germline_alignment",
+    "np1",
+    "np2",
+    "v_sequence_start",
+    "cdr1_start",
+    "cdr1_end",
+    "cdr2_start",
+    "cdr2_end",
+    "cdr3_start",
+    "cdr3_end",
+    "d_sequence_start",
+    "d_sequence_end",
+]
+
+CLONALTREE_REQUIRED_KEYS = (
+    CLONALTREE_BASE_REQUIRED_KEYS
+    + CLONALTREE_REFINEMENT_REQUIRED_KEYS
+    + CLONALTREE_ALIGNMENT_REQUIRED_KEYS
+)
 
 # GCtree tabular adapter requirements only (CSV/TSV -> aligned FASTA path).
 GCTREE_TABULAR_REQUIRED_KEYS = [
