@@ -10,8 +10,10 @@ DOWSER_REQUIRED_KEYS = [
     "germline_alignment_d_mask",
     "v_call",
     "j_call",
-    "junction",
+    "junction_length",
 ]
+
+DOWSER_HL_REQUIRED_KEYS = ["cell_id", "locus"]
 
 # ClonalTree requirements from base-codes formatter + downstream scripts.
 CLONALTREE_BASE_REQUIRED_KEYS = [

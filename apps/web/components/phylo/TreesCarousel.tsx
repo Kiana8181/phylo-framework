@@ -7,6 +7,7 @@ import LineageSVG from "@/components/LineageSVG";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { RunsApi } from "@/features/runs/api";
 import type {
+  DowserTreeDetail,
   FigurePayload,
   LineagePlot,
   RunTree,
@@ -19,11 +20,13 @@ import { Switch } from "@/components/ui/switch";
 type TreesCarouselProps = {
   runId?: string | null;
   trees: Array<RunTree | string>;
+  treesDetail?: DowserTreeDetail[];
   figures?: FigurePayload;
   annotations?: Array<Array<Record<string, any>> | null>;
   cleanNewick: (s: string) => string;
   colorBy?: string;
   unknownValue?: string;
+  showInternalNodesDefault?: boolean;
 };
 
 type TreeImage = {
@@ -94,16 +97,20 @@ function treeLabel(treeIdx: number, cloneId?: string): string {
 export default function TreesCarousel({
   runId,
   trees,
+  treesDetail,
   figures,
   annotations,
   cleanNewick,
   colorBy,
   unknownValue,
+  showInternalNodesDefault = false,
 }: TreesCarouselProps) {
   const total = trees?.length ?? 0;
   const [idx, setIdx] = useState(0);
   const [activeTab, setActiveTab] = useState<"method" | "phylogeny" | "lineage">("phylogeny");
   const [showLabels, setShowLabels] = useState(true);
+  const [showInternalNodes, setShowInternalNodes] = useState(showInternalNodesDefault);
+  const [showNodeNumbers, setShowNodeNumbers] = useState(showInternalNodesDefault);
   const [displayIdField, setDisplayIdField] = useState<string>("sequence_id");
   const [treeCache, setTreeCache] = useState<Record<string, RunTreePayload>>({});
   const [loadingTreeId, setLoadingTreeId] = useState<string | null>(null);
@@ -167,16 +174,23 @@ export default function TreesCarousel({
     };
   }, [currentRawTree, idx, runId, treeCache]);
 
+  useEffect(() => {
+    setShowInternalNodes(showInternalNodesDefault);
+    setShowNodeNumbers(showInternalNodesDefault);
+  }, [runId, showInternalNodesDefault]);
+
   const viewTrees = useMemo<TreeVM[]>(() => {
     return (trees ?? []).map((t, i) => {
+      const detail = treesDetail?.[i];
+      const detailNewick = detail?.lineage_newick || detail?.canonical_newick;
       if (typeof t === "string") {
         const figureImage = toImagePayload(figures?.phylogeny?.[i]);
         return {
           id: `tree-${i + 1}`,
-          cloneId: undefined,
-          phylogenyNewick: cleanNewick(t),
+          cloneId: detail?.clone_id,
+          phylogenyNewick: cleanNewick(detailNewick || t),
           hasServiceImage: Boolean(figureImage?.base64),
-          hasLineagePlot: false,
+          hasLineagePlot: Boolean(detail?.nodes?.length),
           isLoading: false,
           loadError: undefined,
           serviceImage: figureImage,
@@ -198,9 +212,9 @@ export default function TreesCarousel({
       return {
         id: treeId,
         cloneId: typeof t.clone_id === "string" ? t.clone_id : undefined,
-        phylogenyNewick: cleanNewick(t.original_newick || t.newick || ""),
+        phylogenyNewick: cleanNewick(detailNewick || t.original_newick || t.newick || ""),
         hasServiceImage: Boolean(t.has_service_image || svcImage?.base64),
-        hasLineagePlot: Boolean(t.has_lineage_plot || lineagePlot),
+        hasLineagePlot: Boolean(t.has_lineage_plot || lineagePlot || detail?.nodes?.length),
         isLoading: loadingTreeId === treeId,
         loadError: treeLoadErrors[treeId],
         serviceImage: svcImage,
@@ -208,7 +222,7 @@ export default function TreesCarousel({
         lineagePlot,
       };
     });
-  }, [annotations, cleanNewick, figures?.phylogeny, loadingTreeId, treeCache, treeLoadErrors, trees]);
+  }, [annotations, cleanNewick, figures?.phylogeny, loadingTreeId, treeCache, treeLoadErrors, trees, treesDetail]);
 
   const current = viewTrees[idx];
   const isRenderableTreeTab = activeTab === "phylogeny" || activeTab === "lineage";
@@ -324,6 +338,26 @@ export default function TreesCarousel({
                     <span>Show labels</span>
                     <Switch checked={showLabels} onCheckedChange={setShowLabels} aria-label="Show labels" />
                   </label>
+                  {(treesDetail?.length || showInternalNodesDefault) && (
+                    <>
+                      <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <span>Internal nodes</span>
+                        <Switch
+                          checked={showInternalNodes}
+                          onCheckedChange={setShowInternalNodes}
+                          aria-label="Show internal nodes"
+                        />
+                      </label>
+                      <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <span>Node numbers</span>
+                        <Switch
+                          checked={showNodeNumbers}
+                          onCheckedChange={setShowNodeNumbers}
+                          aria-label="Show node numbers"
+                        />
+                      </label>
+                    </>
+                  )}
 
                   {displayFields.length > 0 && (
                     <div className="flex items-center gap-2">
