@@ -289,7 +289,7 @@ validate_required_rows <- function(df, seq_col, clone_col, germ_col, label_col =
   list(ok = TRUE, error = NULL, rejected_rows = list())
 }
 
-UNSAFE_CLONE_ID_RE <- "[/\\\\]|\\.\\.|[\x00-\x1f]|[\x7f]|[\"'`$;&|<>*?\\[\\]{}()]"
+UNSAFE_CLONE_ID_RE <- "[/\\\\]|\\.\\.|[\\x00-\\x1f]|[\\x7f]|[\"'`$;&|<>*?\\[\\]{}()]"
 
 is_unsafe_clone_id <- function(x) {
   x <- as.character(x)[1]
@@ -303,7 +303,7 @@ clone_id_unsafe_reason <- function(x) {
   if (grepl("\\s", x, perl = TRUE)) return("contains whitespace")
   if (grepl("[/\\\\]", x, perl = TRUE)) return("contains path separator")
   if (grepl("\\.\\.", x, perl = TRUE)) return("contains '..'")
-  if (grepl("[\x00-\x1f]|[\x7f]", x, perl = TRUE)) return("contains control characters")
+  if (grepl("[\\x00-\\x1f]|[\\x7f]", x, perl = TRUE)) return("contains control characters")
   if (grepl("[\"'`]", x, perl = TRUE)) return("contains quotes or backtick")
   if (grepl("[$;&|<>*?]", x, perl = TRUE)) return("contains shell-sensitive character")
   if (grepl("[\\[\\]{}()]", x, perl = TRUE)) return("contains brackets/braces/parentheses")
