@@ -177,6 +177,9 @@ services:
       - ./.env
     environment:
       <<: *method_common_env
+      DNAPARS_PATH: ${DNAPARS_PATH:-/usr/local/bin/dnapars}
+      DNAML_PATH: ${DNAML_PATH:-/usr/local/bin/dnaml}
+      RAXML_BIN: ${RAXML_BIN:-/usr/local/bin/raxml-ng}
       IGPHYML_BIN: ${IGPHYML_BIN:-/usr/local/share/igphyml/src/igphyml}
       IGPHYML_MOTIFS: ${IGPHYML_MOTIFS:-/usr/local/share/igphyml/src/motifs}
       IGPHYML_PATH: ${IGPHYML_PATH:-/usr/local/share/igphyml/src/motifs}

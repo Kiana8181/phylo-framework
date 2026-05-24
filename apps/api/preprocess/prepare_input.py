@@ -9,6 +9,8 @@ from apps.api.preprocess.column_requirements import (
     CLONALTREE_ALIGNMENT_REQUIRED_KEYS,
     CLONALTREE_BASE_REQUIRED_KEYS,
     CLONALTREE_REFINEMENT_REQUIRED_KEYS,
+    DOWSER_HL_REQUIRED_KEYS,
+    DOWSER_REQUIRED_KEYS,
     REQUIRED_KEYS_BY_METHOD,
 )
 from apps.api.preprocess.converters import (
@@ -112,6 +114,12 @@ def active_required_keys(method_id: str, params: dict[str, Any]) -> list[str]:
         if _uses_clonaltree_refinement(params):
             required.extend(CLONALTREE_REFINEMENT_REQUIRED_KEYS)
         required.extend(CLONALTREE_ALIGNMENT_REQUIRED_KEYS)
+        return required
+    if method == "dowser":
+        required = list(DOWSER_REQUIRED_KEYS)
+        chain_mode = str(params.get("chain_mode") or "H").strip().upper()
+        if chain_mode == "HL":
+            required.extend(DOWSER_HL_REQUIRED_KEYS)
         return required
     return list(REQUIRED_KEYS_BY_METHOD.get(method, []))
 

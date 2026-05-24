@@ -306,13 +306,16 @@ Run each local service in its own terminal (you can run only one if you want):
 set -a; source .env; set +a
 export CONTRACTS_DIR="$(python3 -c 'import os; p=os.environ.get("CONTRACTS_DIR","packages/contracts"); print(p if os.path.isabs(p) else os.path.realpath(p))')"
 export STRICT_CONTRACT_ROUTES="${STRICT_CONTRACT_ROUTES:-true}"
+export DNAPARS_PATH="${DNAPARS_PATH:-$(command -v dnapars || echo /usr/local/bin/dnapars)}"
+export DNAML_PATH="${DNAML_PATH:-$(command -v dnaml || echo /usr/local/bin/dnaml)}"
+export RAXML_BIN="${RAXML_BIN:-$(command -v raxml-ng || echo /usr/local/bin/raxml-ng)}"
 export IGPHYML_BIN="${IGPHYML_BIN:-/usr/local/share/igphyml/src/igphyml}"
 export IGPHYML_MOTIFS="${IGPHYML_MOTIFS:-/usr/local/share/igphyml/src/motifs}"
 export IGPHYML_PATH="${IGPHYML_PATH:-$IGPHYML_MOTIFS}"
-Rscript --vanilla -e "setwd('services/dowser'); Sys.setenv(CONTRACTS_DIR='${CONTRACTS_DIR}', STRICT_CONTRACT_ROUTES='${STRICT_CONTRACT_ROUTES}', IGPHYML_BIN='${IGPHYML_BIN}', IGPHYML_MOTIFS='${IGPHYML_MOTIFS}', IGPHYML_PATH='${IGPHYML_PATH}'); pr <- plumber::plumb('plumber.R'); pr\$run(host='0.0.0.0', port=${METHOD_DOWSER_HOST_PORT})"
+Rscript --vanilla -e "setwd('services/dowser'); Sys.setenv(CONTRACTS_DIR='${CONTRACTS_DIR}', STRICT_CONTRACT_ROUTES='${STRICT_CONTRACT_ROUTES}', DNAPARS_PATH='${DNAPARS_PATH}', DNAML_PATH='${DNAML_PATH}', RAXML_BIN='${RAXML_BIN}', IGPHYML_BIN='${IGPHYML_BIN}', IGPHYML_MOTIFS='${IGPHYML_MOTIFS}', IGPHYML_PATH='${IGPHYML_PATH}'); pr <- plumber::plumb('plumber.R'); pr\$run(host='0.0.0.0', port=${METHOD_DOWSER_HOST_PORT})"
 ```
 
-Notice: if `tree_model=igphyml`, `IGPHYML_BIN` must be executable and motifs must exist in `IGPHYML_MOTIFS`/`IGPHYML_PATH`.
+Dowser requires aligned AIRR/Change-O input (not raw FASTA). Supported build methods: `pratchet`, `pml`, `dnapars`, `dnaml`, `igphyml`, `raxml`. For `dnapars`/`dnaml` install PHYLIP; for `raxml` install [RAxML-NG](https://github.com/amkozlov/raxml-ng); for `igphyml` set `IGPHYML_BIN` and motif paths. Run validator tests: `Rscript services/dowser/tests/run_validators.R`.
 
 **GCtree (local Python)**
 

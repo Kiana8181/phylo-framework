@@ -327,8 +327,113 @@ export type TreeTipColorStats = {
   unknown_value?: string;
 };
 
+export type DowserAnalysisMode =
+  | "tree_only"
+  | "tree_with_internal_sequences"
+  | "discrete_trait_analysis"
+  | "time_evolution";
+
+export type DowserTreeBuild = "pratchet" | "pml" | "dnapars" | "dnaml" | "igphyml" | "raxml";
+
+export type DowserTipLabelMap = {
+  sequence_id: string;
+  display_label: string;
+};
+
+export type DowserNode = {
+  clone_id?: string;
+  node?: number;
+  node_id?: string;
+  sequence?: string;
+  sequence_alignment?: string;
+  locus?: string;
+  is_internal?: boolean;
+  is_observed?: boolean;
+  parent?: string;
+  children?: string[];
+  branch_length?: number;
+  trait_state?: string;
+};
+
+export type DowserTreeDetail = {
+  clone_id?: string;
+  canonical_newick?: string;
+  display_newick?: string | null;
+  lineage_newick?: string | null;
+  tip_label_map?: DowserTipLabelMap[];
+  nodes?: DowserNode[];
+  all_sequences?: Array<Record<string, unknown>>;
+  show_node_numbers?: boolean;
+};
+
+export type DowserDtaResult = {
+  trait_field?: string;
+  trait_model?: string;
+  permutations?: number;
+  tip_switch?: number;
+  switches?: Array<Record<string, unknown>>;
+  ps?: { summary?: Array<Record<string, unknown>>; raw?: Array<Record<string, unknown>> };
+  sp?: { summary?: Array<Record<string, unknown>>; raw?: Array<Record<string, unknown>> };
+  sc?: { summary?: Array<Record<string, unknown>>; raw?: Array<Record<string, unknown>> };
+  interpretation_warning?: string;
+};
+
+export type DowserTimeEvolution = {
+  time_field?: string;
+  permutations?: number;
+  results?: Array<Record<string, unknown>>;
+  plots?: unknown[];
+  interpretation_warning?: string;
+};
+
+export type DowserIgPhyML = {
+  exec?: string | null;
+  motifs?: string | null;
+  partition_model?: string;
+  parameters?: Record<string, unknown>;
+  warnings?: string[];
+};
+
+export type DowserChainQc = {
+  chain_mode?: string;
+  n_input_rows?: number;
+  n_after_resolve?: number;
+  n_dropped?: number;
+  heavy_locus?: string;
+  light_loci?: string[];
+};
+
+export type DowserArtifact = {
+  name?: string;
+  path?: string;
+  kind?: string;
+};
+
+export type DowserInputQc = {
+  n_input_rows?: number;
+  n_working_rows?: number;
+  n_clones_input?: number;
+  n_clones_working?: number;
+  n_duplicate_sequence_id?: number;
+  n_excluded_trait_missing?: number;
+  n_missing_sequence_alignment?: number;
+  n_missing_germline_alignment?: number;
+  n_length_mismatch?: number;
+  excluded_records?: Array<Record<string, unknown>>;
+};
+
+export type DowserStats = TreeTipColorStats & {
+  analysis_mode?: DowserAnalysisMode;
+  tree_build?: DowserTreeBuild;
+  canonical_ids?: string;
+  n_clones?: number;
+  n_trees?: number;
+  total_seqs?: number;
+  label_field?: string;
+};
+
 export function readTreeTipColorStats(
-  stats: (BrepPhyloStats & TreeTipColorStats) | Record<string, unknown> | null | undefined,
+  stats: (BrepPhyloStats & TreeTipColorStats & DowserStats) | Record<string, unknown> | null | undefined,
 ): { colorBy?: string; unknownValue: string } {
   if (!stats || typeof stats !== "object") {
     return { unknownValue: "unknown" };
@@ -342,12 +447,53 @@ export function readTreeTipColorStats(
   return { colorBy, unknownValue: s.unknown_value ?? "unknown" };
 }
 
+export function readDowserResult(result: RunResult | Record<string, unknown> | null | undefined) {
+  if (!result || typeof result !== "object") {
+    return {
+      treesDetail: [] as DowserTreeDetail[],
+      dta: undefined as DowserDtaResult | undefined,
+      timeEvolution: undefined as DowserTimeEvolution | undefined,
+      igphyml: undefined as DowserIgPhyML | undefined,
+      chainQc: undefined as DowserChainQc | undefined,
+      inputQc: undefined as DowserInputQc | undefined,
+      dataProvenance: undefined as Record<string, unknown> | undefined,
+      artifacts: [] as DowserArtifact[],
+      isDowser: false,
+    };
+  }
+  const r = result as RunResult & {
+    trees_detail?: DowserTreeDetail[];
+    discrete_trait_analysis?: DowserDtaResult;
+    time_evolution?: DowserTimeEvolution;
+    igphyml?: DowserIgPhyML;
+    chain_qc?: DowserChainQc;
+    input_qc?: DowserInputQc;
+    data_provenance?: Record<string, unknown>;
+    artifacts?: DowserArtifact[];
+  };
+  const stats = r.stats as DowserStats | undefined;
+  const isDowser = Boolean(
+    stats?.analysis_mode || stats?.tree_build || r.trees_detail || r.discrete_trait_analysis,
+  );
+  return {
+    treesDetail: r.trees_detail ?? [],
+    dta: r.discrete_trait_analysis,
+    timeEvolution: r.time_evolution,
+    igphyml: r.igphyml,
+    chainQc: r.chain_qc,
+    inputQc: r.input_qc,
+    dataProvenance: r.data_provenance,
+    artifacts: r.artifacts ?? [],
+    isDowser,
+  };
+}
+
 export type RunResult = {
   ok: boolean;
   trees: Array<RunTree | string>;
   clones: { clone_id?: string[]; seqs?: number[] } | null;
   clone_catalog?: Record<string, unknown>;
-  stats: BrepPhyloStats | Record<string, unknown>;
+  stats: BrepPhyloStats | DowserStats | Record<string, unknown>;
   node_abundances?: Array<Record<string, number>>;
   annotations?: Array<Array<Record<string, unknown>> | null>;
   analysis?: BrepPhyloAnalysis;
@@ -361,6 +507,14 @@ export type RunResult = {
   artifact_zip_b64?: string | BrepPhyloArtifactZip | null;
   artifact_name?: string;
   error?: string | null;
+  trees_detail?: DowserTreeDetail[];
+  discrete_trait_analysis?: DowserDtaResult;
+  time_evolution?: DowserTimeEvolution;
+  igphyml?: DowserIgPhyML;
+  chain_qc?: DowserChainQc;
+  input_qc?: DowserInputQc;
+  data_provenance?: Record<string, unknown>;
+  artifacts?: DowserArtifact[];
 } & {
   run_id?: string;
   method_id?: string;

@@ -5,6 +5,32 @@
   "properties": {
     "ok": { "type": "boolean" },
     "trees": { "type": "array", "items": { "type": "string" } },
+    "trees_detail": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "clone_id": { "type": "string" },
+          "canonical_newick": { "type": "string" },
+          "display_newick": { "type": ["string", "null"] },
+          "lineage_newick": { "type": ["string", "null"] },
+          "tip_label_map": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "sequence_id": { "type": "string" },
+                "display_label": { "type": "string" }
+              }
+            }
+          },
+          "nodes": { "type": "array", "items": { "type": "object" } },
+          "all_sequences": { "type": "array", "items": { "type": "object" } },
+          "show_node_numbers": { "type": "boolean" }
+        },
+        "additionalProperties": true
+      }
+    },
     "figures": {
       "type": ["object", "null"],
       "properties": {
@@ -20,7 +46,7 @@
           "type": "object",
           "properties": {
             "label": { "type": "string" },
-            "c_call": { "type": ["string", "null"] }
+            "sequence_id": { "type": ["string", "null"] }
           },
           "additionalProperties": true
         }
@@ -31,18 +57,43 @@
       "required": ["clone_id", "seqs"],
       "properties": {
         "clone_id": { "type": "array", "items": { "type": "string" } },
-        "seqs":     { "type": "array", "items": { "type": "integer" } }
+        "seqs": { "type": "array", "items": { "type": "integer" } }
       }
     },
     "stats": {
       "type": "object",
       "properties": {
-        "n_clones":   { "type": ["integer", "null"] },
-        "n_trees":    { "type": ["integer", "null"] },
-        "total_seqs": { "type": ["integer", "null"] }
+        "n_clones": { "type": ["integer", "null"] },
+        "n_trees": { "type": ["integer", "null"] },
+        "total_seqs": { "type": ["integer", "null"] },
+        "analysis_mode": { "type": "string" },
+        "tree_build": { "type": "string" },
+        "canonical_ids": { "type": "string" }
       },
       "additionalProperties": true
     },
+    "input_qc": { "type": "object", "additionalProperties": true },
+    "data_provenance": { "type": "object", "additionalProperties": true },
+    "discrete_trait_analysis": { "type": ["object", "null"], "additionalProperties": true },
+    "time_evolution": { "type": ["object", "null"], "additionalProperties": true },
+    "igphyml": { "type": ["object", "null"], "additionalProperties": true },
+    "chain_qc": { "type": ["object", "null"], "additionalProperties": true },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "path": { "type": "string" },
+          "kind": { "type": "string" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "warnings": { "type": "array", "items": { "type": "string" } },
+    "logs": { "type": "array", "items": { "type": "object" } },
+    "error": { "type": ["string", "null"] },
+    "step": { "type": ["string", "null"] },
     "render": { "type": ["string", "null"] }
   },
   "additionalProperties": true

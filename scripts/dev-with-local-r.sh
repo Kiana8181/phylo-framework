@@ -257,7 +257,7 @@ echo "${GRN}PostgreSQL is healthy.${CLR}"
 echo "${BLU}==> Checking required R packages${CLR}"
 set +e
 MISSING=$(Rscript --vanilla -e 'suppressPackageStartupMessages(suppressWarnings({
-  pkgs <- c("plumber","dowser","alakazam","shazam","ggtree","ape","jsonlite","jsonvalidate","sodium","BrepPhylo","Biostrings","igraph")
+  pkgs <- c("plumber","dowser","alakazam","shazam","ggtree","ape","phangorn","jsonlite","jsonvalidate","sodium","Biostrings")
   miss <- pkgs[!sapply(pkgs, require, character.only=TRUE, quietly=TRUE)]
   if (length(miss)>0) { cat(paste(miss, collapse=",")); quit(status=10) }
 }))' 2>/dev/null)
@@ -279,8 +279,17 @@ export METHOD_SERVICE_FILE_PREFIX="$ABS_STORAGE"
 export HOST_RUNTIME_SHARED_ROOT="$ABS_STORAGE"
 export NEXT_PUBLIC_API_BASE_URL="${NEXT_PUBLIC_API_BASE_URL:-http://localhost:${API_PORT}}"
 
+echo "${BLU}==> Checking Dowser external binaries (optional build backends)${CLR}"
+for tool in dnapars dnaml raxml-ng igphyml; do
+  if command -v "$tool" >/dev/null 2>&1; then
+    echo "${GRN}  found: $(command -v "$tool")${CLR}"
+  else
+    echo "${YLW}  missing: $tool (tree_build=$tool will return structured preflight error)${CLR}"
+  fi
+done
+
 echo "${BLU}==> Starting Dowser (R/plumber) on :${DOWSER_PORT}${CLR}"
-Rscript --vanilla -e "setwd('$PLUMBER_DIR'); Sys.setenv(CONTRACTS_DIR='${R_CONTRACTS_REL}', STRICT_CONTRACT_ROUTES='${STRICT_CONTRACT_ROUTES:-true}', IGPHYML_BIN='${IGPHYML_BIN:-/usr/local/share/igphyml/src/igphyml}', IGPHYML_MOTIFS='${IGPHYML_MOTIFS:-/usr/local/share/igphyml/src/motifs}', IGPHYML_PATH='${IGPHYML_PATH:-/usr/local/share/igphyml/src/motifs}'); pr <- plumber::plumb('plumber.R'); pr\$run(host='0.0.0.0', port=${DOWSER_PORT})" \
+Rscript --vanilla -e "setwd('$PLUMBER_DIR'); Sys.setenv(CONTRACTS_DIR='${R_CONTRACTS_REL}', STRICT_CONTRACT_ROUTES='${STRICT_CONTRACT_ROUTES:-true}', DNAPARS_PATH='${DNAPARS_PATH:-}', DNAML_PATH='${DNAML_PATH:-}', RAXML_BIN='${RAXML_BIN:-}', IGPHYML_BIN='${IGPHYML_BIN:-/usr/local/share/igphyml/src/igphyml}', IGPHYML_MOTIFS='${IGPHYML_MOTIFS:-/usr/local/share/igphyml/src/motifs}', IGPHYML_PATH='${IGPHYML_PATH:-/usr/local/share/igphyml/src/motifs}'); pr <- plumber::plumb('plumber.R'); pr\$run(host='0.0.0.0', port=${DOWSER_PORT})" \
   >/tmp/dowser.log 2>&1 &
 R_PID=$!
 wait_http "$DOWSER_PORT" || { echo "${YLW}Last 200 Dowser logs:${CLR}"; tail -n 200 /tmp/dowser.log || true; die "Dowser failed readiness check"; }

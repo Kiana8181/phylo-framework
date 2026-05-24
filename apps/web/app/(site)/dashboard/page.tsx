@@ -13,7 +13,7 @@ import { RunsApi } from "@/features/runs/api";
 import { useRunResult, useRunStatus } from "@/features/runs/hooks";
 import { cleanNewick } from "@/lib/newick";
 import { formatRunDuration } from "@/lib/runDuration";
-import { readTreeTipColorStats, type MethodInfo, type RunTree, type RunWarning } from "@phylo/contracts";
+import { readDowserResult, readTreeTipColorStats, type MethodInfo, type RunTree, type RunWarning } from "@phylo/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { GitCompare } from "lucide-react";
 import Image from "next/image";
@@ -203,6 +203,11 @@ function DashboardPageContent() {
   );
 
   const { colorBy: svgColorBy, unknownValue: svgUnknown } = readTreeTipColorStats(result?.stats);
+  const dowserResult = useMemo(() => readDowserResult(result), [result]);
+  const showInternalNodesDefault = useMemo(() => {
+    const mode = (result?.stats as Record<string, unknown> | undefined)?.analysis_mode;
+    return mode === "tree_with_internal_sequences" || mode === "discrete_trait_analysis";
+  }, [result?.stats]);
 
   const methodFigureSections = useMemo(() => {
     const figs = result?.figures;
@@ -422,6 +427,12 @@ function DashboardPageContent() {
             repertoireTable={result?.tables?.repertoire_two_levels_info}
             analysis={result?.analysis}
             diagnostics={result?.diagnostics}
+            dowserDta={dowserResult.dta}
+            dowserTimeEvolution={dowserResult.timeEvolution}
+            dowserInputQc={dowserResult.inputQc}
+            dowserArtifacts={dowserResult.artifacts}
+            dowserChainQc={dowserResult.chainQc}
+            dowserTreesDetail={dowserResult.treesDetail}
           />
 
           {warnings.length > 0 && (
@@ -449,11 +460,13 @@ function DashboardPageContent() {
           <TreesCarousel
             runId={runId}
             trees={result.trees ?? []}
+            treesDetail={dowserResult.treesDetail}
             figures={result.figures}
             annotations={result.annotations}
             cleanNewick={cleanNewick}
             colorBy={svgColorBy}
             unknownValue={svgUnknown}
+            showInternalNodesDefault={showInternalNodesDefault}
           />
 
           {methodFigureSections.length > 0 && (
