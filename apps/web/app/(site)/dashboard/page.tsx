@@ -13,7 +13,7 @@ import { RunsApi } from "@/features/runs/api";
 import { useRunResult, useRunStatus } from "@/features/runs/hooks";
 import { cleanNewick } from "@/lib/newick";
 import { formatRunDuration } from "@/lib/runDuration";
-import type { MethodInfo, RunTree, RunWarning } from "@phylo/contracts";
+import { readTreeTipColorStats, type MethodInfo, type RunTree, type RunWarning } from "@phylo/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { GitCompare } from "lucide-react";
 import Image from "next/image";
@@ -147,8 +147,7 @@ function DashboardPageContent() {
     }
 
     const prevStatus = previousStatusRef.current;
-    const wasActive =
-      prevStatus === "PENDING" || prevStatus === "QUEUED" || prevStatus === "RUNNING";
+    const wasActive = prevStatus === "PENDING" || prevStatus === "QUEUED" || prevStatus === "RUNNING";
     const nowDone = currentStatus === "DONE";
     const nowFailed = currentStatus === "ERROR" || currentStatus === "CANCELLED";
 
@@ -181,9 +180,9 @@ function DashboardPageContent() {
     return map;
   }, [methods]);
 
-  const selectedMethodId = dashboardMode === "create" ? selected?.id ?? null : runMethodKey;
+  const selectedMethodId = dashboardMode === "create" ? (selected?.id ?? null) : runMethodKey;
   const modelLabel = runMethodKey
-    ? methodsById.get(runMethodKey)?.name ?? runContractSpec?.methodLabel ?? runMethodKey
+    ? (methodsById.get(runMethodKey)?.name ?? runContractSpec?.methodLabel ?? runMethodKey)
     : "—";
 
   const runDatasetName = result?.dataset_name ?? status?.dataset_name ?? null;
@@ -198,15 +197,12 @@ function DashboardPageContent() {
     () =>
       result?.clones?.clone_id?.map((id: string, i: number) => ({
         id,
-        seqs: result?.clones?.seqs?.[i],
+        seqs: result?.clones?.seqs?.[i] ?? 0,
       })) ?? [],
-    [result]
+    [result],
   );
 
-  const svgColorBy: string | undefined = result?.stats?.tip_states_capped
-    ? undefined
-    : result?.stats?.tip_color_by;
-  const svgUnknown = result?.stats?.unknown_value ?? "unknown";
+  const { colorBy: svgColorBy, unknownValue: svgUnknown } = readTreeTipColorStats(result?.stats);
 
   const methodFigureSections = useMemo(() => {
     const figs = result?.figures;
@@ -224,7 +220,8 @@ function DashboardPageContent() {
   }, [result]);
 
   const warnings = useMemo<RunWarning[]>(() => {
-    return Array.isArray(result?.warnings) ? result.warnings : [];
+    const runWarnings = result?.warnings;
+    return Array.isArray(runWarnings) ? runWarnings : [];
   }, [result?.warnings]);
 
   return (
@@ -322,7 +319,7 @@ function DashboardPageContent() {
             )}
             <Button onClick={resetToCreateMode}>Start another run</Button>
           </div>
-          {Array.isArray(result?.logs) && result.logs.length > 0 && (
+          {result && Array.isArray(result.logs) && result.logs.length > 0 && (
             <details className="rounded border p-3 bg-card/50">
               <summary className="cursor-pointer text-sm font-medium">Show model logs</summary>
               <div className="mt-2 max-h-64 overflow-y-auto space-y-3 text-xs font-mono">
@@ -423,6 +420,8 @@ function DashboardPageContent() {
             artifact_zip_b64={result?.artifact_zip_b64}
             artifact_name={result?.artifact_name || ""}
             repertoireTable={result?.tables?.repertoire_two_levels_info}
+            analysis={result?.analysis}
+            diagnostics={result?.diagnostics}
           />
 
           {warnings.length > 0 && (
@@ -462,7 +461,9 @@ function DashboardPageContent() {
               <h3 className="text-lg font-medium">Method Charts</h3>
               {methodFigureSections.map((section) => (
                 <details key={section.key} className="rounded border p-3 bg-card/50">
-                  <summary className="cursor-pointer text-sm font-medium">{_labelFromFigureKey(section.key)}</summary>
+                  <summary className="cursor-pointer text-sm font-medium">
+                    {_labelFromFigureKey(section.key)}
+                  </summary>
                   <div className="mt-3 grid gap-3 sm:grid-cols-2">
                     {section.items.map((src, index) =>
                       src.startsWith("data:application/pdf") ? (
@@ -482,7 +483,7 @@ function DashboardPageContent() {
                           unoptimized
                           className="w-full rounded border bg-white"
                         />
-                      )
+                      ),
                     )}
                   </div>
                 </details>
@@ -495,7 +496,8 @@ function DashboardPageContent() {
             <div className="mt-2 space-y-2">
               {(result.trees ?? []).map((tree, index) => {
                 const treeObj: RunTree | null = typeof tree === "string" ? null : tree;
-                const newickText = typeof tree === "string" ? tree : treeObj?.original_newick || treeObj?.newick || "";
+                const newickText =
+                  typeof tree === "string" ? tree : treeObj?.original_newick || treeObj?.newick || "";
                 return (
                   <pre key={`newick-${index}`} className="whitespace-pre-wrap text-xs">
                     {newickText}

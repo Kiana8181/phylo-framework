@@ -4,7 +4,7 @@
     "sequence_column": {
       "type": "string",
       "title": "Sequence column",
-      "description": "Column containing aligned BCR nucleotide sequences (gapped or ungapped).",
+      "description": "Column containing BCR nucleotide sequences (gapped or ungapped).",
       "default": "sequence"
     },
     "clone_id_column": {
@@ -25,35 +25,31 @@
       "description": "Optional human-readable label for tips; falls back to sequence order if empty.",
       "default": ""
     },
-    "class_column": {
-      "type": "string",
-      "title": "Class column",
-      "description": "Optional column used by BrepPhylo for per-class colouring and palette generation.",
-      "default": ""
-    },
 
     "which_clones": {
       "type": "string",
       "title": "Restrict to clone IDs",
-      "description": "Optional list of clone IDs to include, as a comma/space/semicolon-separated string (e.g. 'c1, c2 c3'). Empty means all clones.",
+      "description": "Optional list of clone IDs to include, as a comma/space/semicolon-separated string (e.g. 'c1, c2 c3'). Empty means all clones. Mutually exclusive with ignore_clones.",
       "default": ""
     },
     "ignore_clones": {
       "type": "string",
       "title": "Ignore clone IDs",
-      "description": "Optional list of clone IDs to exclude, as a comma/space/semicolon-separated string. Applied after which_clones.",
+      "description": "Optional list of clone IDs to exclude, as a comma/space/semicolon-separated string. Mutually exclusive with which_clones.",
       "default": ""
     },
-    "germline_set": {
+
+    "input_sequence_mode": {
       "type": "string",
-      "title": "Germline set",
-      "description": "Optional germline set identifier or path passed to BrepPhylo::cloneLineage (germlineSet). Leave blank for package defaults.",
-      "default": ""
+      "title": "Input sequence mode",
+      "description": "raw_sequence: sequences are not assumed IMGT-gapped; BrepPhylo may run MSA. aligned_imgt_gapped: sequences are already IMGT-gapped/aligned; alignment algorithm is not used.",
+      "enum": ["raw_sequence", "aligned_imgt_gapped"],
+      "default": "raw_sequence"
     },
 
     "tree_type": {
       "type": "string",
-      "title": "Tree builder",
+      "title": "Tree inference method",
       "description": "Tree construction method passed to treeConstruction$type ('simple', 'dnapars', or 'igphyml').",
       "enum": ["simple", "dnapars", "igphyml"],
       "default": "dnapars"
@@ -67,14 +63,15 @@
     "igphyml_accuracy": {
       "type": "string",
       "title": "IgPhyML accuracy preset",
-      "description": "Accuracy preset passed to IgPhyML (e.g. 'basic', 'high', 'extreme'); leave blank for the BrepPhylo default.",
-      "enum": ["basic", "high", "extreme"]
+      "description": "Accuracy preset passed to IgPhyML (basic, high, or extreme); only used when tree_type = 'igphyml'.",
+      "enum": ["basic", "high", "extreme"],
+      "default": "basic"
     },
 
     "make_alignment_pdf": {
       "type": "boolean",
       "title": "Write alignment PDF",
-      "description": "Generate alignment PDF per clone (makeAlignmentPDFConstruction).",
+      "description": "Generate alignment PDF per clone (makeAlignmentPDFConstruction). Requires LaTeX in the runtime environment.",
       "default": false
     },
     "min_clone_size": {
@@ -87,20 +84,36 @@
     "species": {
       "type": "string",
       "title": "Species",
-      "description": "Species identifier for selecting BrepPhylo germline references.",
+      "description": "Species identifier for selecting BrepPhylo germline references. Use 'custom' to supply a germline FASTA via the textarea below.",
+      "enum": [
+        "Homo_sapiens",
+        "Mus_musculus",
+        "Bos_taurus",
+        "Gallus_gallus",
+        "Oryctolagus_cuniculus",
+        "Sus_scrofa",
+        "custom"
+      ],
       "default": "Homo_sapiens"
+    },
+    "germline_set_text": {
+      "type": "string",
+      "title": "Custom germline set",
+      "description": "Copy file content of IMGT-format germline V-gene FASTA. Required when species = 'custom'.",
+      "default": ""
     },
     "algorithm": {
       "type": "string",
       "title": "Alignment algorithm",
-      "description": "Multiple sequence aligner; default (model) is ClustalOmega.",
+      "description": "Multiple sequence aligner; only used when input_sequence_mode = 'raw_sequence'.",
       "enum": ["ClustalOmega", "ClustalW"],
       "default": "ClustalOmega"
     },
     "plot_type": {
       "type": "string",
       "title": "Plot type",
-      "description": "Plot flavour used by BrepPhylo (e.g. 'phylogram').",
+      "description": "Plot flavour used by BrepPhylo.",
+      "enum": ["phylogram", "cladogram", "fan", "radial"],
       "default": "phylogram"
     },
     "plot_format": {
@@ -116,54 +129,27 @@
       "description": "Gather individual clone plots into a combined PDF where supported.",
       "default": true
     },
-    "use_temp_dir": {
+
+    "enable_csr_analysis": {
       "type": "boolean",
-      "title": "Use per-run temp dir",
-      "description": "Let BrepPhylo stage intermediate files in a temp directory inside the container.",
+      "title": "Enable CSR / isotype analysis",
+      "description": "Run class-switch recombination and arborescence analysis after tree inference.",
       "default": true
     },
-
-    "apply_filters": {
-      "type": "boolean",
-      "title": "Apply sequence text filters",
-      "description": "Enable sequence-level preprocessing on the sequence column (uppercase, gap policy, non-IUPAC policy).",
-      "default": false
-    },
-    "uppercase": {
-      "type": "boolean",
-      "title": "Uppercase sequences",
-      "description": "Convert all letters in the sequence column to uppercase before further processing.",
-      "default": false
-    },
-    "gap_policy": {
+    "isotype_column": {
       "type": "string",
-      "title": "Gap policy",
-      "description": "How to treat gap characters ('-', '.', whitespace) in the sequence column when apply_filters = true.",
-      "enum": ["keep", "remove", "replace_N", "replace_NNN", "drop_row"],
-      "default": "keep"
-    },
-    "noniupac_policy": {
-      "type": "string",
-      "title": "Non-IUPAC policy",
-      "description": "How to treat non-IUPAC nucleotides in the sequence column when apply_filters = true.",
-      "enum": ["keep", "replace_N", "drop_row"],
-      "default": "keep"
-    },
-    "max_class_categories": {
-      "type": "integer",
-      "title": "Max class categories for colouring",
-      "description": "Maximum number of distinct class values allowed for colouring. If exceeded, class-based colouring is disabled and a warning is returned.",
-      "minimum": 1,
-      "default": 30
+      "title": "Isotype/subclass column",
+      "description": "Column containing isotype or subclass labels for CSR analysis. Required when enable_csr_analysis = true.",
+      "default": ""
     }
   },
   "required": [
     "sequence_column",
     "clone_id_column",
     "germline_id_column",
+    "input_sequence_mode",
     "tree_type",
     "species",
-    "algorithm",
     "plot_type",
     "plot_format",
     "min_clone_size"

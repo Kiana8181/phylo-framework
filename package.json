@@ -13,6 +13,7 @@
     "dev:web": "node --env-file=.env ./scripts/dev-web.mjs",
     "dev:api": "node --env-file=.env ./scripts/dev-api.mjs",
     "lint": "npm -w web run lint",
+    "test": "npm -w @phylo/contracts run test && npm -w web run test",
     "phylo:run": "node ./scripts/select-mode.mjs",
     "phylo:dev:docker": "bash ./scripts/dev-with-docker.sh",
     "phylo:dev:r": "bash ./scripts/dev-with-local-r.sh",

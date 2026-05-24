@@ -199,22 +199,168 @@ export type RunProvenance = {
   [key: string]: any;
 };
 
+export type BrepPhyloRowDiagnostic = {
+  row_index: number;
+  sequence_id?: string | null;
+  clone_id?: string | null;
+  reason?: string;
+  label?: string | null;
+};
+
+export type BrepPhyloMixedGermlineClone = {
+  clone_id: string;
+  distinct_germlines: string[];
+};
+
+export type BrepPhyloDistanceFromGermline = {
+  clone_id: string;
+  sequence_id: string;
+  distance?: number | null;
+};
+
+export type BrepPhyloCsrEvent = {
+  clone_id: string;
+  from_isotype?: string | null;
+  to_isotype?: string | null;
+  distance_from_germline?: number | null;
+  valid?: boolean | null;
+};
+
+export type BrepPhyloArborescenceEdge = {
+  startID?: string | number;
+  endID?: string | number;
+  weight?: number | null;
+  startLabel?: string;
+  endLabel?: string;
+};
+
+export type BrepPhyloArborescence = {
+  clone_id: string;
+  edges: BrepPhyloArborescenceEdge[];
+};
+
+export type BrepPhyloIsotypeSwitchValidity = {
+  clone_id: string;
+  sequence_id_from?: string;
+  sequence_id_to?: string;
+  from_isotype?: string;
+  to_isotype?: string;
+  valid?: boolean | null;
+};
+
+export type BrepPhyloPerCloneStatus = {
+  clone_id: string;
+  n_seqs: number;
+  analyzed: boolean;
+  status?: "analyzed" | "skipped" | "failed";
+  skip_reason?: string | null;
+};
+
+export type BrepPhyloSkippedClone = {
+  clone_id: string;
+  reason: string;
+};
+
+export type BrepPhyloBatchSummary = {
+  clones_analyzed?: number;
+  clones_skipped?: number;
+  csr_total?: number;
+  distance_rows?: number;
+};
+
+export type BrepPhyloAnalysis = {
+  batch_summary?: BrepPhyloBatchSummary;
+  distance_from_germline?: BrepPhyloDistanceFromGermline[];
+  csr_events?: BrepPhyloCsrEvent[];
+  csr_summary?: Record<string, unknown>[];
+  csr_summary_fallback?: Record<string, number>;
+  arborescence?: BrepPhyloArborescence[];
+  isotype_switch_validity?: BrepPhyloIsotypeSwitchValidity[];
+  per_clone_status?: BrepPhyloPerCloneStatus[];
+  skipped_clones?: BrepPhyloSkippedClone[];
+};
+
+export type BrepPhyloDiagnostics = {
+  dropped_rows?: BrepPhyloRowDiagnostic[];
+  rejected_rows?: BrepPhyloRowDiagnostic[];
+  unmapped_input_rows?: BrepPhyloRowDiagnostic[];
+  unmapped_tree_tips?: Array<{ clone_id: string; final_tip_label: string }>;
+  mixed_germline_clones?: BrepPhyloMixedGermlineClone[];
+  latex_available?: boolean | null;
+};
+
+export type BrepPhyloArtifactZip = {
+  clone_bundle_zip?: string | null;
+};
+
+export type BrepPhyloStats = {
+  method?: string;
+  tree_type_requested?: string | null;
+  tree_type?: string;
+  input_sequence_mode?: string;
+  species?: string;
+  species_effective?: string | null;
+  algorithm?: string | null;
+  plot_type?: string;
+  plot_format?: string;
+  min_clone_size?: number;
+  gather_plots?: boolean;
+  enable_csr_analysis?: boolean;
+  n_clones?: number;
+  n_trees?: number;
+  tree_inference_seconds?: number | null;
+  analysis_seconds?: number | null;
+  isotype_column?: string | null;
+  label_column?: string | null;
+  sequence_column?: string;
+  clone_id_column?: string;
+  germline_id_column?: string;
+  which_clones?: string[] | null;
+  ignore_clones?: string[] | null;
+  total_seqs?: number;
+};
+
+/** Optional tip-colouring metadata (e.g. Dowser); not used by BrepPhylo after colour controls were removed. */
+export type TreeTipColorStats = {
+  tip_color_by?: string | null;
+  tip_states_capped?: boolean;
+  unknown_value?: string;
+};
+
+export function readTreeTipColorStats(
+  stats: (BrepPhyloStats & TreeTipColorStats) | Record<string, unknown> | null | undefined,
+): { colorBy?: string; unknownValue: string } {
+  if (!stats || typeof stats !== "object") {
+    return { unknownValue: "unknown" };
+  }
+  const s = stats as TreeTipColorStats;
+  if (s.tip_states_capped) {
+    return { unknownValue: s.unknown_value ?? "unknown" };
+  }
+  const colorBy =
+    typeof s.tip_color_by === "string" && s.tip_color_by.length > 0 ? s.tip_color_by : undefined;
+  return { colorBy, unknownValue: s.unknown_value ?? "unknown" };
+}
+
 export type RunResult = {
   ok: boolean;
   trees: Array<RunTree | string>;
-  clones: any;
-  clone_catalog?: any;
-  stats: any;
+  clones: { clone_id?: string[]; seqs?: number[] } | null;
+  clone_catalog?: Record<string, unknown>;
+  stats: BrepPhyloStats | Record<string, unknown>;
   node_abundances?: Array<Record<string, number>>;
-  annotations?: Array<Array<Record<string, any>> | null>;
+  annotations?: Array<Array<Record<string, unknown>> | null>;
+  analysis?: BrepPhyloAnalysis;
+  diagnostics?: BrepPhyloDiagnostics;
   figures?: FigurePayload;
   tables?: RunTables;
   provenance?: RunProvenance;
   warnings?: RunWarning[];
   render?: string | null;
   logs?: RunLogEntry[];
-  artifact_zip_b64?: any;
+  artifact_zip_b64?: string | BrepPhyloArtifactZip | null;
   artifact_name?: string;
+  error?: string | null;
 } & {
   run_id?: string;
   method_id?: string;

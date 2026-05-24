@@ -347,7 +347,35 @@ Rscript --vanilla -e "setwd('services/brepphylo'); Sys.setenv(CONTRACTS_DIR='${C
 
 Notice: default `tree_type=dnapars` expects `dnapars` on `PATH` (or `DNAPARS_PATH`). If using `tree_type=igphyml`, set `IGPHYML_BIN` and motifs (`IGPHYML_MOTIFS` or `IGPHYML_PATH`).
 
-**ClonalTree (local Python)**
+**BrepPhylo parameters (contract/UI)**
+
+- `tree_type` is labeled **Tree inference method** (`simple`, `dnapars`, `igphyml`).
+- `input_sequence_mode`: `raw_sequence` (MSA via `algorithm`) or `aligned_imgt_gapped` (sequences must contain IMGT gap `.` characters; no alignment algorithm).
+- `species` enum includes built-in references plus `custom` (paste IMGT germline V-gene FASTA into `germline_set_text`).
+- `enable_csr_analysis` + `isotype_column` gate CSR / arborescence post-processing.
+- Removed from UI/backend: `class_column`, color controls, `use_temp_dir`, sequence preprocessing (`apply_filters`, `uppercase`, `gap_policy`, `noniupac_policy`), resume, and server-side `germline_set` paths.
+
+**Alignment PDF / LaTeX (`make_alignment_pdf=true`)**
+
+- **Docker**: the `brepphylo` image installs TeX Live packages (with `tinytex` fallback if needed).
+- **macOS (local R)**: install [MacTeX](https://tug.org/mactex/) or TinyTeX:
+  ```bash
+  R -e "install.packages('tinytex'); tinytex::install_tinytex()"
+  ```
+- **Debian/Ubuntu (local R)**:
+  ```bash
+  sudo apt-get install -y texlive-latex-base texlive-latex-recommended \
+    texlive-latex-extra texlive-fonts-recommended latexmk
+  ```
+- If LaTeX is missing, tree inference still runs; the service reports `diagnostics.latex_available=false` and a warning (alignment PDF may fail without blocking trees).
+
+**BrepPhylo validator tests (local)**
+
+```bash
+Rscript services/brepphylo/tests/run_validators.R
+Rscript services/brepphylo/tests/runtime/run_smoke.R
+```
+
 
 ```bash
 set -a; source .env; set +a

@@ -5,12 +5,21 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Loader2 } from "lucide-react";
-import { ReactNode, useEffect, useMemo } from "react";
+import { ReactNode, useEffect, useMemo, useState } from "react";
 import { Controller, useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
+
+type FieldWidget = "textarea";
+
+type VisibilityRule = {
+  when?: Record<string, unknown>;
+  whenAll?: Array<Record<string, unknown>>;
+  whenAny?: Array<Record<string, unknown>>;
+};
 
 type JSONSchema = {
   type?: string;
@@ -23,19 +32,13 @@ type JSONSchema = {
   uiHints?: {
     order?: string[];
     placeholders?: Record<string, string>;
-    visibility?: Record<
-      string,
-      {
-        when?: Record<string, any>;
-        whenAll?: Array<Record<string, any>>;
-        whenAny?: Array<Record<string, any>>;
-      }
-    >;
+    widgets?: Record<string, FieldWidget>;
+    visibility?: Record<string, VisibilityRule>;
   };
 };
 
 type EnumPrimitive = string | number | boolean;
-type FormValues = Record<string, any>;
+type FormValues = Record<string, unknown>;
 
 type LeafField = {
   path: string;
@@ -91,20 +94,20 @@ function coerceEnumInput(value: unknown, values: EnumPrimitive[]): unknown {
   return value;
 }
 
-function asObject(value: unknown): Record<string, any> | null {
+function asObject(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  return value as Record<string, any>;
+  return value as Record<string, unknown>;
 }
 
 function getNestedValue(source: unknown, path: string): unknown {
   if (!path) return source;
   const tokens = path.split(".");
-  let current: any = source;
+  let current: unknown = source;
   for (const token of tokens) {
     if (!current || typeof current !== "object" || Array.isArray(current)) {
       return undefined;
     }
-    current = current[token];
+    current = (current as Record<string, unknown>)[token];
   }
   return current;
 }
@@ -228,6 +231,7 @@ export default function FormBuilder({
 
   const values = useWatch({ control });
   const placeholders = useMemo(() => schema.uiHints?.placeholders ?? {}, [schema.uiHints?.placeholders]);
+  const widgets = useMemo(() => schema.uiHints?.widgets ?? {}, [schema.uiHints?.widgets]);
   const visibility = useMemo(() => schema.uiHints?.visibility ?? {}, [schema.uiHints?.visibility]);
 
   const order = useMemo(() => {
@@ -237,19 +241,46 @@ export default function FormBuilder({
     return [...(filteredExplicit || []), ...remaining];
   }, [schema.uiHints?.order, fieldMap, leafFields]);
 
-  const testWhen = (cond: Record<string, any>) =>
+  const testWhen = (cond: Record<string, unknown>) =>
     Object.entries(cond).every(([k, expected]) => {
       const v = getNestedValue(values, k);
       return Array.isArray(expected) ? expected.includes(v) : v === expected;
     });
 
   function isFieldVisible(name: string): boolean {
-    const vis = (visibility as any)?.[name];
+    const vis = visibility[name];
     if (!vis) return true;
     if (vis.when && !testWhen(vis.when)) return false;
-    if (vis.whenAll && !vis.whenAll.every((c: any) => testWhen(c))) return false;
-    if (vis.whenAny && !vis.whenAny.some((c: any) => testWhen(c))) return false;
+    if (vis.whenAll && !vis.whenAll.every((c) => testWhen(c))) return false;
+    if (vis.whenAny && !vis.whenAny.some((c) => testWhen(c))) return false;
     return true;
+  }
+
+  function filterVisibleValues(data: FormValues): FormValues {
+    const out: FormValues = {};
+    for (const [key, value] of Object.entries(data)) {
+      if (isFieldVisible(key)) out[key] = value;
+    }
+    return out;
+  }
+
+  function validateConditionalRequired(data: FormValues): string | null {
+    if (data.species === "custom") {
+      const text = String(data.germline_set_text ?? "").trim();
+      if (!text) return "Custom germline set is required when species is 'custom'.";
+    }
+    if (data.enable_csr_analysis === true) {
+      const col = String(data.isotype_column ?? "").trim();
+      if (!col) return "Isotype/subclass column is required when CSR analysis is enabled.";
+    }
+    if (data.which_clones && data.ignore_clones) {
+      const which = String(data.which_clones ?? "").trim();
+      const ignore = String(data.ignore_clones ?? "").trim();
+      if (which && ignore) {
+        return "Restrict to clone IDs and Ignore clone IDs are mutually exclusive.";
+      }
+    }
+    return null;
   }
 
   const groupMap = useMemo(() => {
@@ -282,6 +313,7 @@ export default function FormBuilder({
 
     const type = def?.enum ? "enum" : def?.type;
     const placeholder = placeholders[name];
+    const widget = widgets[name];
     const enumValues = enumValuesFromSchema(def);
 
     return (
@@ -289,7 +321,7 @@ export default function FormBuilder({
         <Label>{def?.title ?? name}</Label>
 
         <Controller
-          name={name as any}
+          name={name}
           control={control}
           defaultValue={getNestedValue(formDefaults, name)}
           render={({ field }) => {
@@ -299,10 +331,16 @@ export default function FormBuilder({
               );
             }
             if (type === "number" || type === "integer") {
+              const numberInputValue =
+                field.value === undefined || field.value === null
+                  ? ""
+                  : typeof field.value === "number" || typeof field.value === "string"
+                    ? field.value
+                    : "";
               return (
                 <Input
                   type="number"
-                  value={field.value ?? ""}
+                  value={numberInputValue}
                   onChange={(e) => {
                     const v = e.target.value;
                     field.onChange(v === "" ? undefined : Number(v));
@@ -342,9 +380,24 @@ export default function FormBuilder({
                 </Select>
               );
             }
+            if (widget === "textarea") {
+              return (
+                <Textarea
+                  value={String(field.value ?? "")}
+                  onChange={field.onChange}
+                  onBlur={field.onBlur}
+                  name={field.name}
+                  ref={field.ref}
+                  placeholder={placeholder}
+                  disabled={disabled}
+                  rows={6}
+                  className="font-mono text-xs"
+                />
+              );
+            }
             return (
               <Input
-                value={field.value ?? ""}
+                value={String(field.value ?? "")}
                 onChange={field.onChange}
                 onBlur={field.onBlur}
                 name={field.name}
@@ -382,11 +435,27 @@ export default function FormBuilder({
 
   const basicFields = order.filter((name) => !groupedChildren.has(name));
 
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
   return (
     <form
-      onSubmit={handleSubmit((data) => onSubmit(data))}
+      onSubmit={handleSubmit((data) => {
+        const visible = filterVisibleValues(data);
+        const conditionalErr = validateConditionalRequired(visible);
+        if (conditionalErr) {
+          setSubmitError(conditionalErr);
+          return;
+        }
+        setSubmitError(null);
+        onSubmit(visible);
+      })}
       className={cn("grid gap-4 grid-cols-1 md:grid-cols-2 xl:grid-cols-3")}
     >
+      {submitError && (
+        <div className="col-span-full rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {submitError}
+        </div>
+      )}
       {basicFields.map((name) => (isFieldVisible(name) ? renderField(name) : null))}
 
       {[...groupMap.keys()].map((controller) => (
