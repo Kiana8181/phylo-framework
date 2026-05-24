@@ -4,6 +4,11 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import ArtifactsDownloadButton from "../ArtifactsDownloadButton";
+import type {
+  BrepPhyloAnalysis,
+  BrepPhyloDiagnostics,
+  BrepPhyloStats,
+} from "@phylo/contracts";
 import { useEffect, useMemo, useState } from "react";
 
 const ROWS_PER_PAGE = 5;
@@ -11,10 +16,23 @@ const ROWS_PER_PAGE = 5;
 type RepertoireTable = {
   filename?: string;
   columns?: string[];
-  rows?: Array<Record<string, any>>;
+  rows?: Array<Record<string, unknown>>;
   total_rows?: number;
   truncated?: boolean;
 };
+
+type CloneRow = { id: string; seqs: number | string };
+
+function resolveArtifactBase64(
+  artifact: string | { clone_bundle_zip?: string | null } | null | undefined,
+): string | null {
+  if (!artifact) return null;
+  if (typeof artifact === "string") return artifact;
+  if (typeof artifact === "object" && typeof artifact.clone_bundle_zip === "string") {
+    return artifact.clone_bundle_zip;
+  }
+  return null;
+}
 
 export default function ResultsSummary({
   stats,
@@ -22,17 +40,34 @@ export default function ResultsSummary({
   artifact_zip_b64,
   artifact_name,
   repertoireTable,
+  analysis,
+  diagnostics,
 }: {
-  stats: any;
-  cloneRows: Array<{ id: string; seqs: any }>;
-  artifact_zip_b64: any;
+  stats: BrepPhyloStats | Record<string, unknown> | null | undefined;
+  cloneRows: CloneRow[];
+  artifact_zip_b64: string | { clone_bundle_zip?: string | null } | null | undefined;
   artifact_name: string;
   repertoireTable?: RepertoireTable;
+  analysis?: BrepPhyloAnalysis;
+  diagnostics?: BrepPhyloDiagnostics;
 }) {
   const [currentPage, setCurrentPage] = useState(1);
   const [repertoirePage, setRepertoirePage] = useState(1);
   const [tableQuery, setTableQuery] = useState("");
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
+
+  const artifactB64 = resolveArtifactBase64(artifact_zip_b64);
+
+  const statsRecord = (stats ?? {}) as BrepPhyloStats;
+  const csrEvents = analysis?.csr_events ?? [];
+  const distanceRows = analysis?.distance_from_germline ?? [];
+  const skippedClones = analysis?.skipped_clones ?? [];
+  const batchSummary = analysis?.batch_summary;
+  const mixedGermline = diagnostics?.mixed_germline_clones ?? [];
+  const rejectedRows = diagnostics?.rejected_rows ?? [];
+  const droppedRows = diagnostics?.dropped_rows ?? [];
+  const unmappedInput = diagnostics?.unmapped_input_rows ?? [];
+  const cloneRemap = diagnostics?.clone_id_remap ?? [];
 
   const totalPages = useMemo(
     () => Math.max(1, Math.ceil(cloneRows.length / ROWS_PER_PAGE)),
@@ -56,12 +91,13 @@ export default function ResultsSummary({
   const endRow = Math.min(currentPage * ROWS_PER_PAGE, cloneRows.length);
 
   const repertoireRows = useMemo(() => {
-    return Array.isArray(repertoireTable?.rows) ? repertoireTable.rows : [];
+    const rows = repertoireTable?.rows;
+    return Array.isArray(rows) ? rows : [];
   }, [repertoireTable?.rows]);
 
   const repertoireColumns = useMemo(() => {
-    const columns = Array.isArray(repertoireTable?.columns) ? repertoireTable.columns : [];
-    if (columns.length) return columns;
+    const columns = repertoireTable?.columns;
+    if (Array.isArray(columns) && columns.length) return columns;
     if (!repertoireRows.length) return [] as string[];
     return Object.keys(repertoireRows[0] ?? {});
   }, [repertoireRows, repertoireTable?.columns]);
@@ -70,7 +106,7 @@ export default function ResultsSummary({
     const q = tableQuery.trim().toLowerCase();
     if (!q) return repertoireRows;
     return repertoireRows.filter((row) =>
-      repertoireColumns.some((col) => String(row?.[col] ?? "").toLowerCase().includes(q))
+      repertoireColumns.some((col) => String(row?.[col] ?? "").toLowerCase().includes(q)),
     );
   }, [repertoireColumns, repertoireRows, tableQuery]);
 
@@ -100,7 +136,7 @@ export default function ResultsSummary({
     const lines = [
       repertoireColumns.join("\t"),
       ...pagedRepertoireRows.map((row) =>
-        repertoireColumns.map((col) => String(row?.[col] ?? "")).join("\t")
+        repertoireColumns.map((col) => String(row?.[col] ?? "")).join("\t"),
       ),
     ];
     try {
@@ -113,92 +149,207 @@ export default function ResultsSummary({
     }
   };
 
+  const hasAnalysis =
+    Boolean(batchSummary) ||
+    csrEvents.length > 0 ||
+    distanceRows.length > 0 ||
+    skippedClones.length > 0;
+
+  const hasDiagnostics =
+    mixedGermline.length > 0 ||
+    rejectedRows.length > 0 ||
+    droppedRows.length > 0 ||
+    unmappedInput.length > 0 ||
+    cloneRemap.length > 0 ||
+    diagnostics?.latex_available === false;
+
   return (
     <section className="space-y-4">
       <h3 className="text-lg font-medium">Results</h3>
 
-      {/* KPIs */}
-      {stats && (stats.n_clones || stats.n_trees || stats.total_seqs) && (
+      {stats && (statsRecord.n_clones || statsRecord.n_trees || statsRecord.total_seqs) && (
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          {stats.n_clones && (
+          {statsRecord.n_clones != null && (
             <Card className="p-4">
               <div className="text-xs text-muted-foreground">Clones</div>
-              <div className="text-2xl font-semibold">{stats.n_clones ?? "-"}</div>
+              <div className="text-2xl font-semibold">{statsRecord.n_clones}</div>
             </Card>
           )}
-          {stats.n_trees && (
+          {statsRecord.n_trees != null && (
             <Card className="p-4">
               <div className="text-xs text-muted-foreground">Trees</div>
-              <div className="text-2xl font-semibold">{stats.n_trees ?? "-"}</div>
+              <div className="text-2xl font-semibold">{statsRecord.n_trees}</div>
             </Card>
           )}
-          {stats.total_seqs && (
+          {statsRecord.total_seqs != null && (
             <Card className="p-4">
               <div className="text-xs text-muted-foreground">Sequences</div>
-              <div className="text-2xl font-semibold">{stats.total_seqs ?? "-"}</div>
+              <div className="text-2xl font-semibold">{statsRecord.total_seqs}</div>
             </Card>
           )}
         </div>
       )}
 
-      {/* Clones table */}
+      {hasAnalysis && (
+        <Card className="p-0 overflow-hidden">
+          <div className="px-4 py-3 border-b">
+            <h4 className="font-medium">CSR / lineage analysis</h4>
+            {batchSummary && (
+              <p className="text-xs text-muted-foreground mt-1">
+                Analyzed {batchSummary.clones_analyzed ?? 0} clone(s); skipped{" "}
+                {batchSummary.clones_skipped ?? 0}; CSR events {batchSummary.csr_total ?? 0}; distance rows{" "}
+                {batchSummary.distance_rows ?? 0}
+              </p>
+            )}
+          </div>
+          {csrEvents.length > 0 && (
+            <div className="overflow-x-auto border-b">
+              <table className="w-full text-xs">
+                <thead className="bg-muted/40">
+                  <tr>
+                    <th className="px-3 py-2 text-left">Clone</th>
+                    <th className="px-3 py-2 text-left">From</th>
+                    <th className="px-3 py-2 text-left">To</th>
+                    <th className="px-3 py-2 text-left">Dist. from germline</th>
+                    <th className="px-3 py-2 text-left">Valid switch</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {csrEvents.slice(0, 50).map((ev, idx) => (
+                    <tr key={`csr-${idx}`} className="border-t">
+                      <td className="px-3 py-2">{ev.clone_id}</td>
+                      <td className="px-3 py-2">{ev.from_isotype ?? "—"}</td>
+                      <td className="px-3 py-2">{ev.to_isotype ?? "—"}</td>
+                      <td className="px-3 py-2">
+                        {ev.distance_from_germline != null ? ev.distance_from_germline : "—"}
+                      </td>
+                      <td className="px-3 py-2">
+                        {ev.valid == null ? "n/a" : ev.valid ? "yes" : "no"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {csrEvents.length > 50 && (
+                <div className="px-4 py-2 text-xs text-muted-foreground">
+                  Showing first 50 of {csrEvents.length} CSR events.
+                </div>
+              )}
+            </div>
+          )}
+          {skippedClones.length > 0 && (
+            <div className="px-4 py-3 text-xs space-y-1">
+              <div className="font-medium">Skipped clones</div>
+              {skippedClones.map((s, idx) => (
+                <div key={`skip-${idx}`} className="text-muted-foreground">
+                  {s.clone_id}: {s.reason}
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      )}
+
+      {hasDiagnostics && (
+        <Card className="p-0 overflow-hidden">
+          <div className="px-4 py-3 border-b">
+            <h4 className="font-medium">Diagnostics</h4>
+          </div>
+          <div className="px-4 py-3 text-xs space-y-3">
+            {diagnostics?.latex_available === false && (
+              <p className="text-yellow-800 dark:text-yellow-200">
+                LaTeX was not available; alignment PDF generation may have failed.
+              </p>
+            )}
+            {cloneRemap.length > 0 && (
+              <div>
+                <div className="font-medium mb-1">Clone ID remapping ({cloneRemap.length})</div>
+                {cloneRemap.slice(0, 10).map((m, idx) => (
+                  <div key={`remap-${idx}`} className="text-muted-foreground">
+                    {m.original_clone_id} → {m.safe_clone_id}
+                  </div>
+                ))}
+              </div>
+            )}
+            {mixedGermline.length > 0 && (
+              <div>
+                <div className="font-medium mb-1">Mixed germline per clone ({mixedGermline.length})</div>
+                {mixedGermline.slice(0, 10).map((m, idx) => (
+                  <div key={`mixed-${idx}`} className="text-muted-foreground">
+                    {m.clone_id}: {(m.distinct_germlines ?? []).join(", ")}
+                  </div>
+                ))}
+              </div>
+            )}
+            {[...rejectedRows, ...droppedRows, ...unmappedInput].length > 0 && (
+              <div>
+                <div className="font-medium mb-1">Row issues</div>
+                {[...rejectedRows, ...droppedRows, ...unmappedInput].slice(0, 15).map((r, idx) => (
+                  <div key={`row-${idx}`} className="text-muted-foreground">
+                    row {r.row_index}
+                    {r.sequence_id ? ` (${r.sequence_id})` : ""}
+                    {r.reason ? `: ${r.reason}` : ""}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </Card>
+      )}
+
       {cloneRows.length ? (
         <Card className="p-0 overflow-hidden">
           <div className="px-4 py-3 border-b">
             <h4 className="font-medium">Clone summary</h4>
           </div>
-          {cloneRows.length ? (
-            <>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-muted/40">
-                    <tr>
-                      <th className="px-3 py-2 text-left">Clone ID</th>
-                      <th className="px-3 py-2 text-left">Seqs</th>
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-muted/40">
+                  <tr>
+                    <th className="px-3 py-2 text-left">Clone ID</th>
+                    <th className="px-3 py-2 text-left">Seqs</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pagedCloneRows.map((r, i) => (
+                    <tr key={`${r.id}-${(currentPage - 1) * ROWS_PER_PAGE + i}`} className="border-t">
+                      <td className="px-3 py-2">{r.id}</td>
+                      <td className="px-3 py-2">{r.seqs}</td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {pagedCloneRows.map((r, i) => (
-                      <tr key={`${r.id}-${(currentPage - 1) * ROWS_PER_PAGE + i}`} className="border-t">
-                        <td className="px-3 py-2">{r.id}</td>
-                        <td className="px-3 py-2">{r.seqs}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              {cloneRows.length > ROWS_PER_PAGE && (
-                <div className="flex items-center justify-between gap-3 border-t px-4 py-3 text-sm">
-                  <div className="text-muted-foreground">
-                    Showing {startRow}-{endRow} of {cloneRows.length}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                      disabled={currentPage === 1}
-                    >
-                      Previous
-                    </Button>
-                    <span className="text-muted-foreground">
-                      Page {currentPage} of {totalPages}
-                    </span>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                      disabled={currentPage === totalPages}
-                    >
-                      Next
-                    </Button>
-                  </div>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {cloneRows.length > ROWS_PER_PAGE && (
+              <div className="flex items-center justify-between gap-3 border-t px-4 py-3 text-sm">
+                <div className="text-muted-foreground">
+                  Showing {startRow}-{endRow} of {cloneRows.length}
                 </div>
-              )}
-            </>
-          ) : (
-            <div className="p-4 text-sm text-muted-foreground">No clone metadata found.</div>
-          )}
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                    disabled={currentPage === 1}
+                  >
+                    Previous
+                  </Button>
+                  <span className="text-muted-foreground">
+                    Page {currentPage} of {totalPages}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                    disabled={currentPage === totalPages}
+                  >
+                    Next
+                  </Button>
+                </div>
+              </div>
+            )}
+          </>
         </Card>
       ) : null}
 
@@ -207,7 +358,9 @@ export default function ResultsSummary({
           <div className="px-4 py-3 border-b flex items-center justify-between gap-3">
             <div>
               <h4 className="font-medium">Other outputs / Tables</h4>
-              <p className="text-xs text-muted-foreground">{repertoireTable?.filename || "repertoire_two_levels_info.tsv"}</p>
+              <p className="text-xs text-muted-foreground">
+                {repertoireTable?.filename || "repertoire_two_levels_info.tsv"}
+              </p>
             </div>
             <Button variant="outline" size="sm" onClick={copyRepertoireTsv}>
               {copyState === "copied" ? "Copied" : copyState === "error" ? "Copy failed" : "Copy visible rows"}
@@ -221,7 +374,8 @@ export default function ResultsSummary({
               className="sm:max-w-xs"
             />
             <div className="text-xs text-muted-foreground">
-              Showing {repertoireStartRow}-{repertoireEndRow} of {filteredRepertoireRows.length} filtered ({repertoireRows.length} total)
+              Showing {repertoireStartRow}-{repertoireEndRow} of {filteredRepertoireRows.length} filtered (
+              {repertoireRows.length} total)
             </div>
           </div>
           <div className="overflow-x-auto">
@@ -237,7 +391,10 @@ export default function ResultsSummary({
               </thead>
               <tbody>
                 {pagedRepertoireRows.map((row, rowIdx) => (
-                  <tr key={`repertoire-row-${(repertoirePage - 1) * ROWS_PER_PAGE + rowIdx}`} className="border-t align-top">
+                  <tr
+                    key={`repertoire-row-${(repertoirePage - 1) * ROWS_PER_PAGE + rowIdx}`}
+                    className="border-t align-top"
+                  >
                     {repertoireColumns.map((col) => (
                       <td key={`${rowIdx}-${col}`} className="px-3 py-2 whitespace-nowrap">
                         {String(row?.[col] ?? "")}
@@ -275,13 +432,14 @@ export default function ResultsSummary({
           )}
           {repertoireTable?.truncated && (
             <div className="px-4 py-2 border-t text-xs text-muted-foreground">
-              Preview truncated to {repertoireRows.length} rows (total {repertoireTable?.total_rows ?? repertoireRows.length}).
+              Preview truncated to {repertoireRows.length} rows (total{" "}
+              {repertoireTable?.total_rows ?? repertoireRows.length}).
             </div>
           )}
         </Card>
       )}
 
-      {artifact_zip_b64 && <ArtifactsDownloadButton base64={artifact_zip_b64} filename={artifact_name} />}
+      {artifactB64 && <ArtifactsDownloadButton base64={artifactB64} filename={artifact_name} />}
     </section>
   );
 }

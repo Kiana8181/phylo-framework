@@ -1,5 +1,5 @@
 #* @apiTitle BrepPhylo microservice
-#* @apiDescription Build BCR lineage trees with BrepPhylo::cloneLineage.
+#* @apiDescription Build BCR lineage trees with BrepPhylo::cloneLineage and CSR analysis.
 
 library(plumber)
 SER <- plumber::serializer_json(
@@ -16,13 +16,21 @@ library(ape)
 library(Biostrings)
 library(igraph)
 
+# Validation helpers (no global side effects)
+validators_candidates <- c(
+  file.path(getwd(), "validators.R"),
+  "/srv/validators.R",
+  "validators.R"
+)
+validators_path <- validators_candidates[file.exists(validators_candidates)][1]
+if (is.na(validators_path)) {
+  stop("validators.R not found; expected alongside plumber.R or at /srv/validators.R")
+}
+source(validators_path, local = FALSE)
+
 # ---------------------------
 # Helpers
 # ---------------------------
-`%||%` <- function(x, y) {
-  if (!is.null(x) && !(is.character(x) && length(x) == 1 && is.na(x))) x else y
-}
-
 logf <- function(...) {
   cat(sprintf(...), "\n", file = stderr())
 }
@@ -53,7 +61,6 @@ read_input_table <- function(path) {
   }
 }
 
-# Parse vectors from JSON / string ("a,b c;d")
 parse_vec <- function(x) {
   if (is.null(x)) return(character(0))
   if (is.list(x)) x <- unlist(x, use.names = FALSE)
@@ -68,41 +75,6 @@ parse_vec <- function(x) {
   }
   x <- trimws(x)
   unique(x[nzchar(x)])
-}
-
-# build a palette from a class column only (no user-supplied palette)
-build_class_palette <- function(df, class_col) {
-  if (is.null(class_col) || !nzchar(class_col)) return(list())
-  if (!class_col %in% names(df)) return(list())
-
-  classes <- sort(unique(as.character(df[[class_col]])))
-  classes <- classes[!is.na(classes) & nzchar(classes)]
-  if (!length(classes)) return(list())
-
-  pal <- as.list(grDevices::rainbow(length(classes)))
-  names(pal) <- classes
-  pal
-}
-
-make_annotations_per_clone <- function(df, clone_id, clone_col, label_col, class_col) {
-  cur <- df[df[[clone_col]] == clone_id, , drop = FALSE]
-  if (!nrow(cur)) return(list())
-
-  annos <- vector("list", nrow(cur))
-  for (i in seq_len(nrow(cur))) {
-    row <- cur[i, , drop = FALSE]
-    label <- if (!is.null(label_col) && nzchar(label_col) && label_col %in% names(row)) {
-      val <- trimws(as.character(row[[label_col]]))
-      if (nzchar(val)) val else as.character(i)
-    } else {
-      as.character(i)
-    }
-
-    a <- as.list(row[1, , drop = FALSE])
-    a$label <- label
-    annos[[i]] <- a
-  }
-  annos
 }
 
 clone_seq_counts <- function(df, clone_col, clone_ids) {
@@ -156,7 +128,7 @@ summarise_brepphylo_output_dir <- function(out_dir, tail_lines = 80, max_files =
   }
 
   parts <- c(
-    sprintf("No .tree files were produced by BrepPhylo."),
+    "No .tree files were produced by BrepPhylo.",
     sprintf("output_dir=%s", output_dir),
     sprintf("files_found=%d", length(rel_files))
   )
@@ -189,86 +161,448 @@ summarise_brepphylo_output_dir <- function(out_dir, tail_lines = 80, max_files =
   paste(parts, collapse = "\n")
 }
 
-clean_input_df <- function(df, seq_col, clone_col, germ_col) {
-  warnings <- character(0)
-
-  drop_if_blank <- function(x) is.na(x) | !nzchar(trimws(as.character(x)))
-
-  bad_seq <- drop_if_blank(df[[seq_col]])
-  if (any(bad_seq)) {
-    warnings <- c(warnings, sprintf("Dropped %d rows with empty %s.", sum(bad_seq), seq_col))
-    df <- df[!bad_seq, , drop = FALSE]
-  }
-
-  bad_clone <- drop_if_blank(df[[clone_col]])
-  if (any(bad_clone)) {
-    warnings <- c(warnings, sprintf("Dropped %d rows with empty %s.", sum(bad_clone), clone_col))
-    df <- df[!bad_clone, , drop = FALSE]
-  }
-
-  bad_germ <- drop_if_blank(df[[germ_col]])
-  if (any(bad_germ)) {
-    warnings <- c(warnings, sprintf("Dropped %d rows with empty %s.", sum(bad_germ), germ_col))
-    df <- df[!bad_germ, , drop = FALSE]
-  }
-
-  list(df = df, warnings = warnings)
+fixed_colour_specification <- function() {
+  list(
+    colours        = list(default = "#000000"),
+    coloursColumn  = ".brepphylo_colour",
+    germlineColour = "#808080"
+  )
 }
 
-# ---------------------------
-# Sequence text filters (no IgPhyML preflight here)
-# ---------------------------
-IUPAC       <- "ACGTRYSWKMBDHVN"
-gap_re      <- "[-\\.\\s]"
-NONIUPAC_RE <- "[^ACGTRYSWKMBDHVN]"
+INTERNAL_ANNOTATION_COLS <- c(".brepphylo_tip_id", ".brepphylo_colour")
 
-apply_text_filters <- function(df, seq_col, p) {
-  if (!seq_col %in% names(df)) {
+find_distance_table <- function(out_dir, clone_id) {
+  patterns <- c("dist", "distance", "path_stats")
+  prefix <- paste0("clone_", clone_id)
+  candidates <- list.files(
+    out_dir,
+    recursive = TRUE,
+    full.names = TRUE
+  )
+  candidates <- candidates[startsWith(basename(candidates), prefix)]
+  for (p in candidates) {
+    bn <- tolower(basename(p))
+    if (any(vapply(patterns, function(pat) grepl(pat, bn, fixed = TRUE), logical(1)))) {
+      if (grepl("\\.(tsv|csv|txt)$", bn, ignore.case = TRUE)) {
+        return(p)
+      }
+    }
+  }
+  NULL
+}
+
+read_distance_table <- function(path) {
+  if (is.null(path) || !file.exists(path)) return(NULL)
+  ext <- tolower(tools::file_ext(path))
+  df <- tryCatch(
+    if (ext == "csv") read.csv(path, stringsAsFactors = FALSE) else read.delim(path, stringsAsFactors = FALSE),
+    error = function(e) NULL
+  )
+  df
+}
+
+df_to_records <- function(df) {
+  if (is.null(df) || !is.data.frame(df) || !nrow(df)) return(list())
+  lapply(seq_len(nrow(df)), function(i) as.list(df[i, , drop = FALSE]))
+}
+
+arborescence_edges_from_table <- function(table_df) {
+  if (is.null(table_df) || !is.data.frame(table_df) || !nrow(table_df)) return(list())
+  cols <- names(table_df)
+  pick <- function(candidates) {
+    hit <- candidates[candidates %in% cols]
+    if (length(hit)) hit[1] else NULL
+  }
+  start_id <- pick(c("startID", "startId", "from", "start"))
+  end_id <- pick(c("endID", "endId", "to", "end"))
+  weight <- pick(c("weight", "Weight", "dist"))
+  start_label <- pick(c("startLabel", "start_label", "fromLabel"))
+  end_label <- pick(c("endLabel", "end_label", "toLabel"))
+
+  lapply(seq_len(nrow(table_df)), function(i) {
+    row <- table_df[i, , drop = FALSE]
+    list(
+      startID    = if (!is.null(start_id)) row[[start_id]] else NA,
+      endID      = if (!is.null(end_id)) row[[end_id]] else NA,
+      weight     = if (!is.null(weight)) as.numeric(row[[weight]]) else NA_real_,
+      startLabel = if (!is.null(start_label)) as.character(row[[start_label]]) else "",
+      endLabel   = if (!is.null(end_label)) as.character(row[[end_label]]) else ""
+    )
+  })
+}
+
+normalize_isotype_label <- function(x) {
+  x <- trimws(as.character(x))
+  x <- sub("^Ig", "", x, ignore.case = TRUE)
+  x
+}
+
+derive_germline_id_from_arborescence <- function(table_df, path_stats = NULL, tip_id_col = NULL) {
+  if (is.null(table_df) || !is.data.frame(table_df) || !nrow(table_df)) return(NULL)
+
+  cols <- names(table_df)
+  pick <- function(candidates) {
+    hit <- candidates[candidates %in% cols]
+    if (length(hit)) hit[1] else NULL
+  }
+  start_id <- pick(c("startID", "startId", "from", "start"))
+  end_id <- pick(c("endID", "endId", "to", "end"))
+  start_label <- pick(c("startLabel", "start_label", "fromLabel"))
+  end_label <- pick(c("endLabel", "end_label", "toLabel"))
+
+  germ_patterns <- c("germline", "gl")
+  for (lbl_col in c(start_label, end_label)) {
+    if (is.null(lbl_col)) next
+    vals <- tolower(trimws(as.character(table_df[[lbl_col]])))
+    hit <- which(vals %in% germ_patterns)
+    if (length(hit)) {
+      id_col <- if (identical(lbl_col, start_label)) start_id else end_id
+      if (!is.null(id_col)) return(as.character(table_df[[id_col]][hit[1]]))
+    }
+  }
+
+  if (!is.null(start_id) && !is.null(end_id)) {
+    starts <- as.character(table_df[[start_id]])
+    ends <- as.character(table_df[[end_id]])
+    roots <- setdiff(unique(starts), unique(ends))
+    if (length(roots)) return(roots[1])
+  }
+
+  if (!is.null(path_stats) && is.data.frame(path_stats) && nrow(path_stats)) {
+    dist_cols <- intersect(c("dist", "distFromGermline", "distance", "Distance"), names(path_stats))
+    seq_cols <- intersect(c("Seq_ID", "sequence_id", "label", tip_id_col), names(path_stats))
+    if (length(dist_cols) && length(seq_cols)) {
+      dist_col <- dist_cols[1]
+      seq_col <- seq_cols[1]
+      dists <- suppressWarnings(as.numeric(path_stats[[dist_col]]))
+      zero_idx <- which(!is.na(dists) & dists == 0)
+      if (length(zero_idx)) return(as.character(path_stats[[seq_col]][zero_idx[1]]))
+    }
+  }
+
+  NULL
+}
+
+try_summarise_csr <- function(csr_df, clone_id, warnings_out = character(0)) {
+  if (is.null(csr_df) || !is.data.frame(csr_df) || !nrow(csr_df)) {
+    return(list(summary = list(), warnings = warnings_out))
+  }
+  if (!exists("summariseCSR", where = asNamespace("BrepPhylo"), inherits = FALSE)) {
+    return(list(summary = list(), warnings = warnings_out))
+  }
+
+  csr_prep <- csr_df
+  if (!"clone_id" %in% names(csr_prep) && !"CloneID" %in% names(csr_prep)) {
+    csr_prep$clone_id <- clone_id
+  }
+
+  clone_col <- intersect(c("CloneID", "clone_id"), names(csr_prep))[1]
+  if (is.na(clone_col)) clone_col <- "clone_id"
+  dist_col <- intersect(c("distFromGermline", "dist", "meanDist", "distance"), names(csr_prep))[1]
+  if (is.na(dist_col)) {
     return(list(
-      df      = df,
-      stats   = list(upper = 0L, gap_rows = 0L, noniupac_rows = 0L),
-      dropped = integer(0)
+      summary = list(),
+      warnings = c(
+        warnings_out,
+        sprintf(
+          "Clone %s: summariseCSR skipped because no distance column was found in CSR events.",
+          clone_id
+        )
+      )
     ))
   }
 
-  s <- as.character(df[[seq_col]])
-  s[is.na(s)] <- ""
-  stats <- list(upper = 0L, gap_rows = 0L, noniupac_rows = 0L)
-  drop_mask <- rep(FALSE, nrow(df))
+  summary_try <- tryCatch(
+    BrepPhylo::summariseCSR(
+      csr_prep,
+      cloneID_column = clone_col,
+      dist_column = dist_col,
+      summarise_variables = clone_col
+    ),
+    error = function(e) e
+  )
 
-  # Uppercase
-  if (isTRUE(p$uppercase)) {
-    s2 <- toupper(s)
-    stats$upper <- sum(s2 != s, na.rm = TRUE)
-    s <- s2
+  if (inherits(summary_try, "error")) {
+    return(list(
+      summary = list(),
+      warnings = c(
+        warnings_out,
+        sprintf("Clone %s: summariseCSR failed: %s", clone_id, conditionMessage(summary_try))
+      )
+    ))
   }
 
-  # Gap policy
-  has_gap <- grepl(gap_re, s, perl = TRUE)
-  stats$gap_rows <- sum(has_gap, na.rm = TRUE)
-  if (p$gap_policy == "remove") {
-    s <- gsub(gap_re, "", s, perl = TRUE)
-  } else if (p$gap_policy == "replace_N") {
-    s <- gsub(gap_re, "N", s, perl = TRUE)
-  } else if (p$gap_policy == "replace_NNN") {
-    s <- gsub(gap_re, "NNN", s, perl = TRUE)
-  } else if (p$gap_policy == "drop_row") {
-    drop_mask <- drop_mask | has_gap
+  list(summary = df_to_records(summary_try), warnings = warnings_out)
+}
+
+run_csr_analysis_for_clone <- function(
+  clone_id,
+  clone_df,
+  tree_path,
+  out_dir,
+  tip_id_col,
+  isotype_col,
+  plot_format,
+  species
+) {
+  result <- list(
+    distance_from_germline = list(),
+    csr_events = list(),
+    csr_summary = list(),
+    csr_summary_fallback = list(),
+    isotype_switch_validity = list(),
+    arborescence_edges = list(),
+    warnings = character(0),
+    status = "analyzed",
+    skip_reason = NULL
+  )
+
+  if (!file.exists(tree_path)) {
+    result$status <- "skipped"
+    result$skip_reason <- sprintf("Tree file not found: %s", tree_path)
+    return(result)
   }
 
-  # Non-IUPAC policy
-  bad_non <- grepl(NONIUPAC_RE, s, perl = TRUE)
-  stats$noniupac_rows <- sum(bad_non, na.rm = TRUE)
-  if (p$noniupac_policy == "replace_N") {
-    s <- gsub(NONIUPAC_RE, "N", s, perl = TRUE)
-  } else if (p$noniupac_policy == "drop_row") {
-    drop_mask <- drop_mask | bad_non
+  arbo_out <- file.path(out_dir, paste0("arbo_", clone_id))
+  dir.create(arbo_out, recursive = TRUE, showWarnings = FALSE)
+
+  arbo <- tryCatch(
+    BrepPhylo::cloneArborescence(
+      clone            = clone_df,
+      cloneID          = clone_id,
+      columnSeqID      = tip_id_col,
+      columnSubclass   = isotype_col,
+      tree             = tree_path,
+      outputFolder     = arbo_out,
+      plotFormat       = plot_format
+    ),
+    error = function(e) e
+  )
+
+  if (inherits(arbo, "error")) {
+    result$status <- "failed"
+    result$skip_reason <- conditionMessage(arbo)
+    return(result)
   }
 
-  df[[seq_col]] <- s
-  if (any(drop_mask)) df <- df[!drop_mask, , drop = FALSE]
+  if (!is.null(arbo$table) && is.data.frame(arbo$table)) {
+    result$arborescence_edges <- arborescence_edges_from_table(arbo$table)
+  }
 
-  list(df = df, stats = stats, dropped = which(drop_mask))
+  dist_path <- find_distance_table(out_dir, clone_id)
+  path_stats <- read_distance_table(dist_path)
+
+  if (!is.null(path_stats) && nrow(path_stats)) {
+    seq_col_name <- intersect(c("Seq_ID", "sequence_id", "label", tip_id_col), names(path_stats))
+    dist_col_name <- intersect(c("dist", "distFromGermline", "distance", "Distance"), names(path_stats))
+    seq_col <- if (length(seq_col_name)) seq_col_name[1] else names(path_stats)[1]
+    dist_col <- if (length(dist_col_name)) dist_col_name[1] else names(path_stats)[2]
+
+    for (i in seq_len(nrow(path_stats))) {
+      result$distance_from_germline[[length(result$distance_from_germline) + 1L]] <- list(
+        clone_id    = clone_id,
+        sequence_id = as.character(path_stats[[seq_col]][i]),
+        distance    = suppressWarnings(as.numeric(path_stats[[dist_col]][i]))
+      )
+    }
+  }
+
+  csr_df <- NULL
+  if (!is.null(arbo$csr_events) && is.data.frame(arbo$csr_events) && nrow(arbo$csr_events)) {
+    csr_df <- arbo$csr_events
+  }
+
+  if (is.null(csr_df) && !is.null(arbo$table) && !is.null(path_stats)) {
+    germline_id <- derive_germline_id_from_arborescence(arbo$table, path_stats, tip_id_col)
+    if (!is.null(germline_id) && nzchar(as.character(germline_id)[1])) {
+      csr_try <- tryCatch(
+        BrepPhylo::getCSEvents(
+          clone           = clone_df,
+          columnSeqID     = tip_id_col,
+          columnSubclass  = isotype_col,
+          dfArborescence  = arbo$table,
+          germline        = germline_id,
+          path_stats      = path_stats
+        ),
+        error = function(e) e
+      )
+      if (inherits(csr_try, "error")) {
+        result$warnings <- c(
+          result$warnings,
+          sprintf("Clone %s: getCSEvents fallback failed: %s", clone_id, conditionMessage(csr_try))
+        )
+      } else if (is.data.frame(csr_try) && nrow(csr_try)) {
+        csr_df <- csr_try
+      }
+    } else {
+      result$warnings <- c(
+        result$warnings,
+        sprintf(
+          "Clone %s: CSR fallback skipped because germline/root node ID could not be determined safely.",
+          clone_id
+        )
+      )
+    }
+  }
+
+  human_species <- identical(species, "Homo_sapiens")
+  if (!human_species && !is.null(csr_df) && nrow(csr_df)) {
+    result$warnings <- c(
+      result$warnings,
+      sprintf(
+        "CSR isotype-switch validity not evaluated for species '%s' (human-only logic); events marked valid=null.",
+        species
+      )
+    )
+  }
+
+  if (!is.null(csr_df) && is.data.frame(csr_df) && nrow(csr_df)) {
+    from_cols <- intersect(c("from", "fromSubclass", "startSubclass", "parentSubclass"), names(csr_df))
+    to_cols <- intersect(c("to", "toSubclass", "endSubclass", "childSubclass"), names(csr_df))
+    dist_cols <- intersect(c("distFromGermline", "dist", "meanDist", "distance"), names(csr_df))
+    from_col <- if (length(from_cols)) from_cols[1] else NULL
+    to_col <- if (length(to_cols)) to_cols[1] else NULL
+    dist_col <- if (length(dist_cols)) dist_cols[1] else NULL
+
+    for (i in seq_len(nrow(csr_df))) {
+      from_iso <- if (!is.null(from_col)) as.character(csr_df[[from_col]][i]) else NA_character_
+      to_iso <- if (!is.null(to_col)) as.character(csr_df[[to_col]][i]) else NA_character_
+      dist_val <- if (!is.null(dist_col)) suppressWarnings(as.numeric(csr_df[[dist_col]][i])) else NA_real_
+
+      valid_val <- NULL
+      if (human_species && !is.na(from_iso) && !is.na(to_iso)) {
+        valid_val <- tryCatch(
+          BrepPhylo::is.valid.IsotypeSwitch(
+            normalize_isotype_label(from_iso),
+            normalize_isotype_label(to_iso)
+          ),
+          error = function(e) NA
+        )
+      }
+
+      result$csr_events[[length(result$csr_events) + 1L]] <- list(
+        clone_id               = clone_id,
+        from_isotype           = from_iso,
+        to_isotype             = to_iso,
+        distance_from_germline = dist_val,
+        valid                  = valid_val
+      )
+
+      result$isotype_switch_validity[[length(result$isotype_switch_validity) + 1L]] <- list(
+        clone_id         = clone_id,
+        sequence_id_from = from_iso,
+        sequence_id_to   = to_iso,
+        from_isotype     = from_iso,
+        to_isotype       = to_iso,
+        valid            = valid_val
+      )
+    }
+
+    result$csr_summary_fallback <- aggregate_csr_summary(result$csr_events)
+    summarise_res <- try_summarise_csr(csr_df, clone_id, result$warnings)
+    result$csr_summary <- summarise_res$summary
+    result$warnings <- summarise_res$warnings
+  }
+
+  result
+}
+
+build_annotations_from_tree_tips <- function(
+  clone_df,
+  clone_id,
+  label_col,
+  tip_id_col,
+  tree_path,
+  unmapped_tree_tips,
+  unmapped_input_rows
+) {
+  tree <- tryCatch(ape::read.tree(tree_path), error = function(e) NULL)
+  if (is.null(tree)) {
+    return(list(
+      annotations = list(),
+      unmapped_tree_tips = unmapped_tree_tips,
+      unmapped_input_rows = unmapped_input_rows
+    ))
+  }
+
+  tip_labels <- tree$tip.label
+  if (is.null(tip_labels)) tip_labels <- character(0)
+
+  tip_ids <- trimws(as.character(clone_df[[tip_id_col]]))
+  annotations <- list()
+  matched_rows <- logical(nrow(clone_df))
+
+  for (tip in tip_labels) {
+    row_idx <- which(tip_ids == tip)
+    if (!length(row_idx)) {
+      unmapped_tree_tips[[length(unmapped_tree_tips) + 1L]] <- list(
+        clone_id = clone_id,
+        final_tip_label = tip
+      )
+      next
+    }
+    i <- row_idx[1]
+    matched_rows[i] <- TRUE
+    row <- clone_df[i, , drop = FALSE]
+    ann <- as.list(row[1, , drop = FALSE])
+    for (drop_col in INTERNAL_ANNOTATION_COLS) {
+      if (drop_col %in% names(ann)) ann[[drop_col]] <- NULL
+    }
+
+    original_seq_id <- NA_character_
+    for (cand in c("sequence_id", "Sequence.ID")) {
+      if (cand %in% names(row)) {
+        val <- trimws(as.character(row[[cand]]))
+        if (nzchar(val) && !is.na(val)) {
+          original_seq_id <- val
+          break
+        }
+      }
+    }
+
+    ann$original_sequence_id <- original_seq_id
+    ann$final_tip_label <- tip
+    ann$clone_id <- clone_id
+    if (!is.null(label_col) && nzchar(label_col) && label_col %in% names(row)) {
+      ann$label <- as.character(row[[label_col]])
+    } else {
+      ann$label <- tip
+    }
+    annotations[[length(annotations) + 1L]] <- ann
+  }
+
+  for (i in seq_len(nrow(clone_df))) {
+    if (!matched_rows[i]) {
+      user_label <- if (!is.null(label_col) && nzchar(label_col) && label_col %in% names(clone_df)) {
+        as.character(clone_df[[label_col]][i])
+      } else {
+        tip_ids[i]
+      }
+      unmapped_input_rows[[length(unmapped_input_rows) + 1L]] <- list(
+        row_index = i,
+        sequence_id = tip_ids[i],
+        clone_id = clone_id,
+        label = user_label
+      )
+    }
+  }
+
+  list(
+    annotations = annotations,
+    unmapped_tree_tips = unmapped_tree_tips,
+    unmapped_input_rows = unmapped_input_rows
+  )
+}
+
+aggregate_csr_summary <- function(csr_events) {
+  counts <- list()
+  for (ev in csr_events) {
+    from <- ev$from_isotype %||% "?"
+    to <- ev$to_isotype %||% "?"
+    key <- paste(from, to, sep = "->")
+    counts[[key]] <- (counts[[key]] %||% 0L) + 1L
+  }
+  counts
 }
 
 # ---------------------------
@@ -360,13 +694,11 @@ resolve_igphyml <- function(require_ok = TRUE) {
 
 normalize_opt_string <- function(x) {
   if (is.null(x)) return(NULL)
-  x <- as.character(x[1])
+  x <- as.character(x)[1]
   x <- trimws(x)
   if (!nzchar(x)) return(NULL)
   x
 }
-
-CLASS_UNKNOWN_DEFAULT <- "unknown"
 
 # ---------------------------
 # Config & Contracts loading
@@ -431,12 +763,30 @@ fail <- function(msg, res, status = 400, logs = NULL, warnings = NULL) {
   )
 }
 
+reject_removed_params <- function(params) {
+  removed <- c(
+    "germline_set", "germlineSet", "class_column", "germline_colour",
+    "max_class_categories", "use_temp_dir", "useTempDir",
+    "apply_filters", "uppercase", "gap_policy", "noniupac_policy",
+    "resume_completed_clones", "resumeCompletedClones"
+  )
+  present <- intersect(removed, names(params))
+  if (length(present)) {
+    return(sprintf(
+      "Removed parameter(s) no longer supported: %s. Use germline_set_text with species='custom' for custom germlines.",
+      paste(present, collapse = ", ")
+    ))
+  }
+  NULL
+}
+
+# Irrelevant tree_type-conditional params are ignored at call time (UI may still submit defaults).
+
 # ---------------------------
 # Run BrepPhylo
 # ---------------------------
 run_handler_impl <- function(req, res) {
   tryCatch({
-    # ---- accumulators for pipeline diagnostics ----
     warnings <- character(0)
     logs <- list()
     add_log <- function(step, ok, out) {
@@ -446,7 +796,6 @@ run_handler_impl <- function(req, res) {
       fail(msg, res, status = status, logs = logs, warnings = as.list(warnings))
     }
 
-    # ---- parse and validate JSON body ----
     body_raw <- req$postBody
     if (is.raw(body_raw)) body_raw <- rawToChar(body_raw)
     if (is.null(body_raw) || !nzchar(body_raw)) {
@@ -476,13 +825,11 @@ run_handler_impl <- function(req, res) {
       return(fail_local(sprintf("Unsupported file extension '%s'. Provide CSV/TSV.", ext)))
     }
 
-    add_log(
-      "brepphylo.request",
-      TRUE,
-      sprintf("Validated request; file_path=%s, ext=%s.", file_path, ext)
-    )
+    removed_err <- reject_removed_params(params)
+    if (!is.null(removed_err)) return(fail_local(removed_err))
 
-    # ---- read input table ----
+    add_log("brepphylo.request", TRUE, sprintf("Validated request; file_path=%s, ext=%s.", file_path, ext))
+
     df <- tryCatch(read_input_table(file_path), error = function(e) e)
     if (inherits(df, "error")) {
       return(fail_local(paste("Failed to read input table:", df$message)))
@@ -491,18 +838,13 @@ run_handler_impl <- function(req, res) {
       return(fail_local("Input table is empty."))
     }
 
-    add_log(
-      "brepphylo.readInput",
-      TRUE,
-      sprintf("Read input table with %d rows and %d columns.", nrow(df), ncol(df))
-    )
+    add_log("brepphylo.readInput", TRUE, sprintf("Read input table with %d rows and %d columns.", nrow(df), ncol(df)))
 
-    # ---- resolve columns ----
     seq_col   <- normalize_col(params$sequence_column,    "sequence")
     clone_col <- normalize_col(params$clone_id_column,    "clone_id")
     germ_col  <- normalize_col(params$germline_id_column, "V.GENE.and.allele")
-    class_col <- normalize_col(params$class_column,       NULL)
     label_col <- normalize_col(params$label_column,       NULL)
+    isotype_col <- normalize_col(params$isotype_column,   NULL)
 
     required_cols <- c(seq_col, clone_col, germ_col)
     missing <- required_cols[!required_cols %in% names(df)]
@@ -510,361 +852,227 @@ run_handler_impl <- function(req, res) {
       return(fail_local(sprintf("Missing required column(s): %s", paste(missing, collapse = ", "))))
     }
 
-    # ---- parse additional params ----
     which_clones  <- parse_vec(params$which_clones  %||% params$whichClones)
     ignore_clones <- parse_vec(params$ignore_clones %||% params$ignoreClones)
-    germline_set  <- normalize_opt_string(params$germline_set %||% params$germlineSet)
 
-    apply_filters        <- as_bool(params$apply_filters, FALSE)
-    uppercase            <- as_bool(params$uppercase, FALSE)
-    gap_policy           <- params$gap_policy       %||% "keep"   # keep | remove | replace_N | replace_NNN | drop_row
-    noniupac_policy      <- params$noniupac_policy  %||% "keep"   # keep | replace_N | drop_row
-    max_class_categories <- as.integer(params$max_class_categories %||% 30L)
-
-    allowed_gap <- c("keep", "remove", "replace_N", "replace_NNN", "drop_row")
-    if (!gap_policy %in% allowed_gap) {
-      return(fail_local(sprintf("gap_policy must be one of: %s", paste(allowed_gap, collapse = ", "))))
-    }
-    allowed_noni <- c("keep", "replace_N", "drop_row")
-    if (!noniupac_policy %in% allowed_noni) {
-      return(fail_local(sprintf("noniupac_policy must be one of: %s", paste(allowed_noni, collapse = ", "))))
-    }
+    me_err <- validate_mutually_exclusive(which_clones, ignore_clones)
+    if (!is.null(me_err)) return(fail_local(me_err))
 
     tree_type <- params$tree_type %||% "dnapars"
-    tree_type_effective <- tree_type
 
-    # IgPhyML stop/frame policy is no longer enforced at wrapper level.
-    ig_stop_policy <- params$ig_stop_policy %||% NULL
-    igphyml_accuracy <- params$igphyml_accuracy %||% "basic"
-
-    # ---- clean / filter DF (basic empties) ----
-    cleaned <- clean_input_df(df, seq_col, clone_col, germ_col)
-    df <- cleaned$df
-    warnings <- c(warnings, cleaned$warnings)
-    if (!nrow(df)) {
-      add_log("brepphylo.preprocess", FALSE, "All rows were dropped during preprocessing.")
-      return(fail_local("All rows were dropped during preprocessing (empty sequence/clone/germline)."))
+    input_sequence_mode <- params$input_sequence_mode %||% "raw_sequence"
+    for (check_fn in list(
+      function() validate_input_sequence_mode(input_sequence_mode),
+      function() validate_species(params$species),
+      function() validate_plot_type(params$plot_type),
+      function() require_positive_int("min_clone_size", params$min_clone_size)
+    )) {
+      err <- check_fn()
+      if (!is.null(err)) return(fail_local(err))
     }
 
-    add_log(
-      "brepphylo.preprocess",
-      TRUE,
-      paste(
-        c(
-          sprintf("Preprocessed input table; remaining rows=%d.", nrow(df)),
-          cleaned$warnings
-        ),
-        collapse = "\n"
-      )
+    species <- trimws(as.character(params$species)[1])
+    plot_type <- trimws(as.character(params$plot_type)[1])
+    plot_format <- params$plot_format %||% "png"
+    min_clone_size <- as.integer(params$min_clone_size)
+    enable_csr_analysis <- as_bool(params$enable_csr_analysis, TRUE)
+    make_alignment_pdf <- as_bool(params$make_alignment_pdf, FALSE)
+    gather_plots <- as_bool(params$gather_plots, TRUE)
+    igphyml_accuracy <- normalize_opt_string(params$igphyml_accuracy)
+
+    if (!plot_format %in% c("png", "pdf")) {
+      return(fail_local("plot_format must be 'png' or 'pdf'."))
+    }
+
+    germline_set_text <- params$germline_set_text %||% ""
+    germline_set_path <- NULL
+    species_effective <- species
+
+    if (identical(species, "custom")) {
+      if (!nzchar(trimws(as.character(germline_set_text)[1]))) {
+        return(fail_local("germline_set_text is required when species is 'custom'."))
+      }
+      fasta_val <- validate_germline_set_text(germline_set_text)
+      if (!isTRUE(fasta_val$ok)) return(fail_local(fasta_val$error))
+      species_effective <- NULL
+    } else if (nzchar(trimws(as.character(germline_set_text)[1]))) {
+      warnings <- c(warnings, "germline_set_text is ignored unless species is 'custom'.")
+    }
+
+    algorithm <- NULL
+    if (identical(input_sequence_mode, "raw_sequence")) {
+      algorithm <- params$algorithm %||% "ClustalOmega"
+      allowed_alg <- c("ClustalOmega", "ClustalW")
+      if (!algorithm %in% allowed_alg) {
+        return(fail_local(sprintf("algorithm must be one of: %s", paste(allowed_alg, collapse = ", "))))
+      }
+    } else {
+      aligned_check <- validate_aligned_imgt_gapped(df, seq_col)
+      if (!isTRUE(aligned_check$ok)) return(fail_local(aligned_check$error))
+    }
+
+    if (enable_csr_analysis) {
+      iso_check <- validate_isotype_column(df, isotype_col)
+      if (!isTRUE(iso_check$ok)) return(fail_local(iso_check$error))
+    }
+
+    row_check <- validate_required_rows(df, seq_col, clone_col, germ_col, label_col)
+    if (!isTRUE(row_check$ok)) return(fail_local(row_check$error))
+
+    diagnostics <- list(
+      dropped_rows = list(),
+      rejected_rows = row_check$rejected_rows,
+      unmapped_input_rows = list(),
+      unmapped_tree_tips = list(),
+      mixed_germline_clones = list(),
+      latex_available = NULL
     )
 
-    if (!is.null(class_col) && !class_col %in% names(df)) {
-      warnings <- c(
-        warnings,
-        sprintf("Class column '%s' not found; colouring disabled.", class_col)
-      )
-      class_col <- NULL
-    }
-    if (!is.null(label_col) && !label_col %in% names(df)) {
-      warnings <- c(
-        warnings,
-        sprintf("Label column '%s' not found; falling back to sequence order.", label_col)
-      )
-      label_col <- NULL
-    }
-
-    # ---- apply_filters (optional, on sequence column only) ----
-    filter_stats <- list(upper = 0L, gap_rows = 0L, noniupac_rows = 0L)
-    if (apply_filters) {
-      ft <- apply_text_filters(
-        df,
-        seq_col,
-        list(
-          uppercase       = uppercase,
-          gap_policy      = gap_policy,
-          noniupac_policy = noniupac_policy
+    if (make_alignment_pdf) {
+      diagnostics$latex_available <- check_latex_available()
+      if (!isTRUE(diagnostics$latex_available)) {
+        warnings <- c(
+          warnings,
+          "make_alignment_pdf=true but LaTeX (pdflatex/latexmk) was not found; alignment PDF generation may fail."
         )
-      )
-      df <- ft$df
-      filter_stats <- ft$stats
-      if (!nrow(df)) {
-        add_log("brepphylo.filters", FALSE, "All rows dropped by apply_filters.")
-        return(fail_local("All rows were dropped by sequence filters (gaps / non-IUPAC)."))
       }
-
-      add_log(
-        "brepphylo.filters",
-        TRUE,
-        sprintf(
-          paste(
-            "apply_filters=TRUE; uppercase=%s; gap_policy=%s; noniupac_policy=%s;",
-            "uppercased_rows=%d; gap_rows_touched=%d; noniupac_rows_touched=%d."
-          ),
-          uppercase, gap_policy, noniupac_policy,
-          filter_stats$upper, filter_stats$gap_rows, filter_stats$noniupac_rows
-        )
-      )
-    } else {
-      add_log("brepphylo.filters", TRUE, "apply_filters=FALSE (no sequence text filters applied).")
     }
 
-    # ---- apply which_clones / ignore_clones at wrapper level ----
+    mixed <- precheck_mixed_germline(df, clone_col, germ_col)
+    if (length(mixed)) {
+      diagnostics$mixed_germline_clones <- mixed
+      msg <- sprintf(
+        "%d clone(s) have multiple distinct germline allele calls: %s",
+        length(mixed),
+        paste(vapply(mixed, function(m) m$clone_id, character(1)), collapse = ", ")
+      )
+      if (enable_csr_analysis) {
+        return(fail_local(paste(msg, "Resolve germline assignments before CSR analysis.")))
+      }
+      warnings <- c(warnings, msg)
+    }
+
+    label_check <- precheck_label_uniqueness(df, clone_col, label_col)
+    if (!isTRUE(label_check$ok)) return(fail_local(label_check$error))
+
+    clone_id_check <- validate_clone_ids_strict(df, clone_col)
+    if (!isTRUE(clone_id_check$ok)) return(fail_local(clone_id_check$error))
+
     if (length(which_clones)) {
       before_n <- nrow(df)
       df <- df[df[[clone_col]] %in% which_clones, , drop = FALSE]
-      add_log(
-        "brepphylo.whichClones",
-        TRUE,
-        sprintf("Applied which_clones filter: kept %d/%d rows.", nrow(df), before_n)
-      )
-      if (!nrow(df)) {
-        return(fail_local("No sequences remain after applying which_clones filter."))
-      }
+      add_log("brepphylo.whichClones", TRUE, sprintf("Applied which_clones filter: kept %d/%d rows.", nrow(df), before_n))
+      if (!nrow(df)) return(fail_local("No sequences remain after applying which_clones filter."))
     }
 
     if (length(ignore_clones)) {
       before_n <- nrow(df)
       df <- df[!(df[[clone_col]] %in% ignore_clones), , drop = FALSE]
-      add_log(
-        "brepphylo.ignoreClones",
-        TRUE,
-        sprintf("Applied ignore_clones filter: kept %d/%d rows.", nrow(df), before_n)
-      )
-      if (!nrow(df)) {
-        return(fail_local("No sequences remain after applying ignore_clones filter."))
-      }
+      add_log("brepphylo.ignoreClones", TRUE, sprintf("Applied ignore_clones filter: kept %d/%d rows.", nrow(df), before_n))
+      if (!nrow(df)) return(fail_local("No sequences remain after applying ignore_clones filter."))
     }
 
-    # ---- class column handling: unknown + max_class_categories ----
-    class_unknown_replaced <- 0L
-    n_class_states <- 0L
-    class_states_capped <- FALSE
-
-    pal <- list()
-    colour_col <- NULL
-
-    if (!is.null(class_col)) {
-      vals <- as.character(df[[class_col]])
-      is_missing_class <- is.na(vals) | !nzchar(trimws(vals))
-      if (any(is_missing_class)) {
-        df[[class_col]] <- vals
-        df[[class_col]][is_missing_class] <- CLASS_UNKNOWN_DEFAULT
-        class_unknown_replaced <- sum(is_missing_class, na.rm = TRUE)
-        warnings <- c(
-          warnings,
-          sprintf(
-            "Class column '%s' had %d empty/NA values -> set to '%s' for colouring.",
-            class_col, class_unknown_replaced, CLASS_UNKNOWN_DEFAULT
-          )
-        )
-      }
-
-      vals2 <- as.character(df[[class_col]])
-      class_states <- sort(unique(vals2[!is.na(vals2)]))
-      n_class_states <- length(class_states)
-
-      if (n_class_states > max_class_categories) {
-        class_states_capped <- TRUE
-        warnings <- c(
-          warnings,
-          sprintf(
-            "Class column '%s' has %d unique values (> max_class_categories=%d); colouring will be disabled.",
-            class_col, n_class_states, max_class_categories
-          )
-        )
-        pal <- list()
-        colour_col <- NULL
-      } else {
-        pal <- build_class_palette(df, class_col)
-        colour_col <- if (length(pal)) class_col else NULL
-      }
-    }
-
-    # ---- colour specification ----
-    # cloneLineage expects a non-NULL colourSpecification; fall back to a
-    # monochrome palette if colouring is disabled.
-    germline_colour <- params$germline_colour %||% "#808080"
-    if (!is.null(colour_col) && length(pal) > 0L) {
-      colourSpecification <- list(
-        colours        = pal,
-        coloursColumn  = colour_col,
-        germlineColour = germline_colour
-      )
-    } else {
-      warnings <- c(
-        warnings,
-        "Colouring disabled or palette unavailable; using fallback monochrome palette."
-      )
-      colourSpecification <- list(
-        colours        = list(default = "#000000"),
-        coloursColumn  = clone_col,
-        germlineColour = germline_colour
-      )
-    }
-
-    # ---- other params (tree construction, output, etc.) ----
-    out_dir <- tempfile("brepphylo_", tmpdir = tempdir())
-    dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
-
-    min_clone_size <- as.integer(params$min_clone_size %||% 10L)
-    species        <- normalize_opt_string(params$species)
-    algorithm      <- params$algorithm %||% "ClustalOmega"
-    plot_type      <- params$plot_type %||% "phylogram"
-    plot_format    <- params$plot_format %||% "png"
-
-    if (is.null(species) && is.null(germline_set)) {
-      return(fail_local("Either 'species' or 'germline_set' must be provided."))
-    }
-    
-    if (!nzchar(algorithm))    return(fail_local("algorithm is required."))
-    if (!nzchar(plot_type))    return(fail_local("plot_type is required."))
-    if (!nzchar(plot_format))  return(fail_local("plot_format is required."))
-    allowed_alg <- c("ClustalOmega", "ClustalW")
-    if (!algorithm %in% allowed_alg) {
-      return(fail_local(sprintf("algorithm must be one of: %s",
-                                paste(allowed_alg, collapse = ", "))))
-    }
-
-    gather_plots <- as_bool(params$gather_plots, TRUE)
-    use_temp_dir <- as_bool(params$use_temp_dir, TRUE)
-
-    # ---- sanity check: clones & min_clone_size before calling BrepPhylo ----
     clone_counts_pre <- table(df[[clone_col]])
     n_clones_pre <- length(clone_counts_pre)
     if (n_clones_pre == 0L) {
-      add_log(
-        "brepphylo.preBrepphylo",
-        FALSE,
-        "No clones remain in the input after preprocessing."
-      )
-      return(fail_local("No clones remain after preprocessing; nothing to build."))
+      return(fail_local("No clones remain in the input after filtering."))
     }
     n_large_clones <- sum(clone_counts_pre >= min_clone_size)
     if (n_large_clones == 0L) {
-      add_log(
-        "brepphylo.preBrepphylo",
-        FALSE,
-        sprintf(
-          "No clones with at least %d sequences after preprocessing (clones=%d).",
-          min_clone_size, n_clones_pre
-        )
-      )
-      return(fail_local(
-        sprintf(
-          "No clones with at least %d sequences remain after preprocessing; adjust 'min_clone_size' or filters.",
-          min_clone_size
-        )
-      ))
+      return(fail_local(sprintf(
+        "No clones with at least %d sequences remain; adjust min_clone_size or filters.",
+        min_clone_size
+      )))
     }
 
-    # ---- tree construction config (env-based executables) ----
-    tree_type_effective <- tree_type %||% "dnapars"
+    out_dir <- tempfile("brepphylo_", tmpdir = tempdir())
+    dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+    if (identical(species, "custom")) {
+      germline_set_path <- write_germline_fasta_tmp(germline_set_text, out_dir)
+    }
+
+    tree_type_effective <- tree_type
     tc_params <- list()
 
     if (identical(tree_type_effective, "dnapars")) {
       tc_params$collapseAndReplace <- as_bool(params$collapse_and_replace, TRUE)
-
       dnapars_exec <- Sys.getenv("DNAPARS_PATH", "")
-      if (!nzchar(dnapars_exec)) {
-        dnapars_exec <- Sys.which("dnapars")
-      }
+      if (!nzchar(dnapars_exec)) dnapars_exec <- Sys.which("dnapars")
       if (nzchar(dnapars_exec)) {
         tc_params$executable <- dnapars_exec
-        add_log("brepphylo.dnapars.exec", TRUE,
-                sprintf("Using DNAPARS executable: %s", dnapars_exec))
+        add_log("brepphylo.dnapars.exec", TRUE, sprintf("Using DNAPARS executable: %s", dnapars_exec))
       } else {
-        warnings <- c(
-          warnings,
-          "DNAPARS executable not found in DNAPARS_PATH or PATH; BrepPhylo will try its own lookup and may fail."
-        )
-        add_log("brepphylo.dnapars.exec", FALSE,
-                "DNAPARS executable not found in DNAPARS_PATH or PATH.")
+        warnings <- c(warnings, "DNAPARS executable not found; BrepPhylo will try its own lookup and may fail.")
       }
     } else if (identical(tree_type_effective, "igphyml")) {
-      if (nzchar(igphyml_accuracy)) {
-        tc_params$accuracy <- igphyml_accuracy
-      }
-
+      if (!is.null(igphyml_accuracy)) tc_params$accuracy <- igphyml_accuracy
       resolved <- resolve_igphyml(require_ok = TRUE)
-      if (!isTRUE(resolved$ok)) {
-        return(fail_local(resolved$error))
-      }
+      if (!isTRUE(resolved$ok)) return(fail_local(resolved$error))
       tc_params$executable <- resolved$exec
-      add_log(
-        "brepphylo.igphyml.exec",
-        TRUE,
-        sprintf(
-          "Using IgPhyML exec=%s; motifs=%s",
-          resolved$exec, resolved$motifs %||% "<none>"
-        )
-      )
+      add_log("brepphylo.igphyml.exec", TRUE, sprintf("Using IgPhyML exec=%s", resolved$exec))
     }
 
-    treeConstruction <- list(
-      type       = tree_type_effective,
-      parameters = tc_params
-    )
+    treeConstruction <- list(type = tree_type_effective, parameters = tc_params)
+    makeAlignmentPDFConstruction <- list(makeAlignmentPDF = make_alignment_pdf)
 
-    makeAlignmentPDFConstruction <- list(
-      makeAlignmentPDF = as_bool(params$make_alignment_pdf, FALSE)
-    )
-    
-    # ---- run BrepPhylo::cloneLineage with captured output ----
+    tip_res <- resolve_or_create_tip_id_column(df, label_col)
+    df <- tip_res$df
+    tip_id_col <- tip_res$tip_id_col
+    df$.brepphylo_colour <- "default"
+
+    colourSpecification <- fixed_colour_specification()
+
+    tree_start <- Sys.time()
     log_vec <- character(0)
     err <- tryCatch({
-      log_vec <- capture.output({
-        args <- list(
-          input        = df,
-          outputFolder = out_dir,
-          minCloneSize = min_clone_size,
-          sequenceColumn   = seq_col,
-          cloneIdColumn    = clone_col,
-          germlineIdColumn = germ_col,
-          algorithm        = algorithm,
-          whichClones      = if (length(which_clones)) which_clones else NULL,
-          ignoreClones     = if (length(ignore_clones)) ignore_clones else NULL,
-          colourSpecification           = colourSpecification,
-          plotType                      = plot_type,
-          plotFormat                    = plot_format,
-          gatherPlots                   = gather_plots,
-          useTempDir                    = use_temp_dir,
-          treeConstruction              = treeConstruction,
-          makeAlignmentPDFConstruction  = makeAlignmentPDFConstruction
-        )
-
-        if (!is.null(label_col) && nzchar(label_col)) {
-          args$labelColumn <- label_col
-        }
-        if (!is.null(species)) {
-          args$species <- species
-        }
-        if (!is.null(germline_set)) {
-          args$germlineSet <- germline_set
-        }
-
-        do.call(BrepPhylo::cloneLineage, args)
+      with_di2multi_top_alias({
+        log_vec <<- capture.output({
+          args <- list(
+            input                       = df,
+            outputFolder                = out_dir,
+            minCloneSize                = min_clone_size,
+            sequenceColumn              = seq_col,
+            cloneIdColumn               = clone_col,
+            germlineIdColumn            = germ_col,
+            colourSpecification         = colourSpecification,
+            plotType                    = plot_type,
+            plotFormat                  = plot_format,
+            gatherPlots                 = gather_plots,
+            treeConstruction            = treeConstruction,
+            makeAlignmentPDFConstruction = makeAlignmentPDFConstruction,
+            whichClones                 = NULL,
+            ignoreClones                = NULL,
+            labelColumn                 = tip_id_col
+          )
+          if (!is.null(species_effective)) args$species <- species_effective
+          if (!is.null(germline_set_path)) args$germlineSet <- germline_set_path
+          if (!is.null(algorithm)) args$algorithm <- algorithm
+          do.call(BrepPhylo::cloneLineage, args)
+        })
       })
       NULL
     }, error = function(e) e)
 
+    tree_inference_seconds <- as.numeric(difftime(Sys.time(), tree_start, units = "secs"))
     log_text <- paste(log_vec, collapse = "\n")
     add_log("brepphylo.cloneLineage", !inherits(err, "error"), log_text)
 
     if (inherits(err, "error")) {
       res$status <- 400
       return(list(
-        ok       = FALSE,
-        error    = conditionMessage(err),
-        logs     = logs,
-        warnings = as.list(warnings)
+        ok = FALSE,
+        error = conditionMessage(err),
+        logs = logs,
+        warnings = as.list(warnings),
+        diagnostics = diagnostics
       ))
     }
 
-    # ---- collect trees ----
     tree_files <- list.files(
       out_dir,
-      pattern    = "^clone_.*\\.tree$",
-      recursive  = TRUE,
+      pattern = "^clone_.*\\.tree$",
+      recursive = TRUE,
       full.names = TRUE
     )
     if (!length(tree_files)) {
@@ -872,29 +1080,23 @@ run_handler_impl <- function(req, res) {
       collect_diagnostics <- summarise_brepphylo_output_dir(out_dir)
       add_log("brepphylo.collectTrees", FALSE, collect_diagnostics)
       return(list(
-        ok          = FALSE,
-        error       = "BrepPhylo did not produce any .tree files.",
-        diagnostics = list(output_dir = normalizePath(out_dir, mustWork = FALSE)),
-        logs        = logs,
-        warnings    = as.list(warnings)
+        ok = FALSE,
+        error = "BrepPhylo did not produce any .tree files.",
+        diagnostics = diagnostics,
+        logs = logs,
+        warnings = as.list(warnings)
       ))
     }
 
     tree_files <- sort(tree_files)
-    trees <- vapply(
-      tree_files,
-      function(p) paste(readLines(p, warn = FALSE), collapse = ""),
-      FUN.VALUE = character(1)
-    )
-
+    trees <- vapply(tree_files, function(p) paste(readLines(p, warn = FALSE), collapse = ""), character(1))
     clone_ids <- sub("^clone_", "", basename(tree_files))
     clone_ids <- sub("\\.tree$", "", clone_ids)
 
-    # ---- collect figures (tree images) ----
     plot_files <- list.files(
       out_dir,
-      pattern    = paste0("\\.", plot_format, "$"),
-      recursive  = TRUE,
+      pattern = paste0("\\.", plot_format, "$"),
+      recursive = TRUE,
       full.names = TRUE
     )
     plot_files <- plot_files[grepl("clone_", basename(plot_files), fixed = TRUE)]
@@ -902,194 +1104,201 @@ run_handler_impl <- function(req, res) {
     png_data <- list()
     pdf_data <- list()
     for (cid in clone_ids) {
-      candidates <- plot_files[grepl(paste0("clone_", cid, "\\."),
-                                     basename(plot_files))]
-      if (!length(candidates)) {
-        png_data[[cid]] <- NULL
-        pdf_data[[cid]] <- NULL
-        next
-      }
+      prefix <- paste0("clone_", cid, ".")
+      candidates <- plot_files[startsWith(basename(plot_files), prefix)]
+      png_data[[cid]] <- NULL
+      pdf_data[[cid]] <- NULL
+      if (!length(candidates)) next
       f <- candidates[[1]]
       sz <- file.info(f)$size
-      if (is.na(sz) || sz <= 0) {
-        png_data[[cid]] <- NULL
-        pdf_data[[cid]] <- NULL
-        next
-      }
+      if (is.na(sz) || sz <= 0) next
       raw <- readBin(f, what = "raw", n = sz)
-      if (grepl("\\.png$", f, ignore.case = TRUE)) {
-        png_data[[cid]] <- jsonlite::base64_enc(raw)
-      }
-      if (grepl("\\.pdf$", f, ignore.case = TRUE)) {
-        pdf_data[[cid]] <- jsonlite::base64_enc(raw)
-      }
+      if (grepl("\\.png$", f, ignore.case = TRUE)) png_data[[cid]] <- jsonlite::base64_enc(raw)
+      if (grepl("\\.pdf$", f, ignore.case = TRUE)) pdf_data[[cid]] <- jsonlite::base64_enc(raw)
     }
 
     phylogeny_png <- unname(png_data[clone_ids])
     phylogeny_pdf <- unname(pdf_data[clone_ids])
 
-    # ---- annotations per clone ----
-    annotations <- lapply(
-      clone_ids,
-      function(cid) make_annotations_per_clone(df, cid, clone_col, label_col, class_col)
+    annotations <- vector("list", length(clone_ids))
+    for (i in seq_along(clone_ids)) {
+      cid <- clone_ids[i]
+      clone_df <- df[df[[clone_col]] == cid, , drop = FALSE]
+      ann_res <- build_annotations_from_tree_tips(
+        clone_df,
+        cid,
+        label_col,
+        tip_id_col,
+        tree_files[i],
+        diagnostics$unmapped_tree_tips,
+        diagnostics$unmapped_input_rows
+      )
+      diagnostics$unmapped_tree_tips <- ann_res$unmapped_tree_tips
+      diagnostics$unmapped_input_rows <- ann_res$unmapped_input_rows
+      annotations[[i]] <- ann_res$annotations
+    }
+
+    analysis_start <- Sys.time()
+    analysis <- list(
+      batch_summary = list(clones_analyzed = 0L, clones_skipped = 0L, csr_total = 0L, distance_rows = 0L),
+      distance_from_germline = list(),
+      csr_events = list(),
+      csr_summary = list(),
+      csr_summary_fallback = list(),
+      arborescence = list(),
+      isotype_switch_validity = list(),
+      per_clone_status = list(),
+      skipped_clones = list()
     )
 
-    # ---- clones meta and stats ----
-    clone_counts <- clone_seq_counts(df, clone_col, clone_ids)
+    if (enable_csr_analysis) {
+      # getSummaryFromBatch() requires output from doBatchCloneAnalysis(); not used on cloneLineage path.
+      for (i in seq_along(clone_ids)) {
+        cid <- clone_ids[i]
+        clone_df <- df[df[[clone_col]] == cid, , drop = FALSE]
+        n_seqs <- nrow(clone_df)
+        ar <- run_csr_analysis_for_clone(
+          cid, clone_df, tree_files[i], out_dir, tip_id_col, isotype_col,
+          plot_format, species
+        )
+        warnings <- c(warnings, ar$warnings)
 
+        if (!is.null(ar$skip_reason)) {
+          analysis$skipped_clones[[length(analysis$skipped_clones) + 1L]] <- list(
+            clone_id = cid,
+            reason = ar$skip_reason
+          )
+          analysis$per_clone_status[[length(analysis$per_clone_status) + 1L]] <- list(
+            clone_id = cid,
+            n_seqs = n_seqs,
+            analyzed = FALSE,
+            status = ar$status,
+            skip_reason = ar$skip_reason
+          )
+          next
+        }
+
+        analysis$per_clone_status[[length(analysis$per_clone_status) + 1L]] <- list(
+          clone_id = cid,
+          n_seqs = n_seqs,
+          analyzed = TRUE,
+          status = ar$status,
+          skip_reason = NULL
+        )
+        analysis$distance_from_germline <- c(analysis$distance_from_germline, ar$distance_from_germline)
+        analysis$csr_events <- c(analysis$csr_events, ar$csr_events)
+        analysis$isotype_switch_validity <- c(analysis$isotype_switch_validity, ar$isotype_switch_validity)
+        analysis$csr_summary <- c(analysis$csr_summary, ar$csr_summary)
+        analysis$arborescence[[length(analysis$arborescence) + 1L]] <- list(
+          clone_id = cid,
+          edges = ar$arborescence_edges
+        )
+      }
+
+      analysis$batch_summary$clones_analyzed <- sum(vapply(
+        analysis$per_clone_status,
+        function(s) isTRUE(s$analyzed),
+        logical(1)
+      ))
+      analysis$batch_summary$clones_skipped <- length(analysis$skipped_clones)
+      analysis$batch_summary$csr_total <- length(analysis$csr_events)
+      analysis$batch_summary$distance_rows <- length(analysis$distance_from_germline)
+      analysis$csr_summary_fallback <- aggregate_csr_summary(analysis$csr_events)
+    } else {
+      for (cid in clone_ids) {
+        n_seqs <- sum(df[[clone_col]] == cid, na.rm = TRUE)
+        analysis$per_clone_status[[length(analysis$per_clone_status) + 1L]] <- list(
+          clone_id = cid,
+          n_seqs = n_seqs,
+          analyzed = FALSE,
+          status = "skipped",
+          skip_reason = "CSR analysis disabled (enable_csr_analysis=false)"
+        )
+      }
+      analysis$batch_summary$clones_skipped <- length(clone_ids)
+    }
+
+    analysis_seconds <- as.numeric(difftime(Sys.time(), analysis_start, units = "secs"))
+
+    clone_counts <- clone_seq_counts(df, clone_col, clone_ids)
     clones_meta <- list(
       clone_id = as.list(unname(clone_ids)),
       seqs     = as.list(unname(clone_counts))
     )
 
     stats <- list(
-      method               = METHOD_ID,
-      tree_type_requested  = tree_type,
-      tree_type            = tree_type_effective,
-      species              = species,
-      algorithm            = algorithm,
-      plot_type            = plot_type,
-      plot_format          = plot_format,
-      min_clone_size       = min_clone_size,
-      gather_plots         = gather_plots,
-      use_temp_dir         = use_temp_dir,
-      sequence_column      = seq_col,
-      clone_id_column      = clone_col,
-      germline_id_column   = germ_col,
-      class_column         = class_col,
-      label_column         = label_col,
-      which_clones         = which_clones,
-      ignore_clones        = ignore_clones,
-      germline_set         = germline_set,
-      n_clones             = length(clone_ids),
-      n_trees              = length(trees),
-
-      # colouring stats
-      tip_color_by                    = if (is.null(colour_col)) NULL else colour_col,
-      unknown_value                   = CLASS_UNKNOWN_DEFAULT,
-      unknown_replaced_in_input       = class_unknown_replaced,
-      n_tip_states                    = if (is.null(colour_col)) 0L else n_class_states,
-      tip_states_capped               = class_states_capped,
-      class_unknown_value             = CLASS_UNKNOWN_DEFAULT,
-      class_unknown_replaced_in_input = class_unknown_replaced,
-      class_n_states                  = n_class_states,
-      class_states_capped             = class_states_capped,
-      max_class_categories            = max_class_categories,
-
-      # filter stats
-      filters_applied       = apply_filters,
-      uppercased_rows       = filter_stats$upper,
-      gap_rows_touched      = filter_stats$gap_rows,
-      noniupac_rows_touched = filter_stats$noniupac_rows,
-      gap_policy            = gap_policy,
-      noniupac_policy       = noniupac_policy,
-
-      # IgPhyML stop policy: reported only (no preflight filtering)
-      ig_stop_policy        = ig_stop_policy
+      method                 = METHOD_ID,
+      tree_type_requested    = tree_type,
+      tree_type              = tree_type_effective,
+      input_sequence_mode    = input_sequence_mode,
+      species                = species,
+      species_effective      = species_effective,
+      algorithm              = algorithm,
+      plot_type              = plot_type,
+      plot_format            = plot_format,
+      min_clone_size         = min_clone_size,
+      gather_plots           = gather_plots,
+      enable_csr_analysis    = enable_csr_analysis,
+      sequence_column        = seq_col,
+      clone_id_column        = clone_col,
+      germline_id_column     = germ_col,
+      label_column           = label_col,
+      tip_id_column          = tip_id_col,
+      isotype_column         = if (enable_csr_analysis) isotype_col else NULL,
+      which_clones           = if (length(which_clones)) which_clones else NULL,
+      ignore_clones          = if (length(ignore_clones)) ignore_clones else NULL,
+      n_clones               = length(clone_ids),
+      n_trees                = length(trees),
+      tree_inference_seconds = tree_inference_seconds,
+      analysis_seconds       = analysis_seconds,
+      igphyml_fallback_to_dnapars = FALSE
     )
 
-    add_log(
-      "brepphylo.summarise",
-      TRUE,
-      sprintf("Built %d trees for %d clones.", length(trees), length(clone_ids))
-    )
+    add_log("brepphylo.summarise", TRUE, sprintf("Built %d trees for %d clones.", length(trees), length(clone_ids)))
 
-    # ---- build artifacts ZIP with all other files (per-clone folders etc.) ----
     artifacts_zip_b64 <- NULL
     all_files <- list.files(out_dir, recursive = TRUE, full.names = TRUE)
-
     if (length(all_files)) {
       exclude_basenames <- unique(c(
         paste0("clone_", clone_ids, ".tree"),
         paste0("clone_", clone_ids, ".png"),
         paste0("clone_", clone_ids, ".pdf")
       ))
-
       files_to_zip <- all_files[!(basename(all_files) %in% exclude_basenames)]
-
       if (length(files_to_zip)) {
         zip_path <- file.path(out_dir, "brepphylo_artifacts.zip")
-        if (file.exists(zip_path)) {
-          file.remove(zip_path)
-        }
-
+        if (file.exists(zip_path)) file.remove(zip_path)
         old_wd <- getwd()
         setwd(out_dir)
         on.exit(setwd(old_wd), add = TRUE)
-
         rel_paths <- unique(gsub(paste0("^", out_dir, "/?"), "", files_to_zip))
         rel_paths <- rel_paths[nzchar(rel_paths)]
-
         if (length(rel_paths)) {
           utils::zip(zipfile = zip_path, files = rel_paths)
           sz <- file.info(zip_path)$size
           if (!is.na(sz) && sz > 0) {
             zip_raw <- readBin(zip_path, what = "raw", n = sz)
             artifacts_zip_b64 <- jsonlite::base64_enc(zip_raw)
-            add_log(
-              "brepphylo.artifacts",
-              TRUE,
-              sprintf("Zipped %d files into brepphylo_artifacts.zip (%d bytes).",
-                      length(rel_paths), sz)
-            )
-          } else {
-            add_log(
-              "brepphylo.artifacts",
-              FALSE,
-              "brepphylo_artifacts.zip was created but has zero size."
-            )
           }
-        } else {
-          add_log("brepphylo.artifacts", TRUE, "No extra files to zip (rel_paths empty).")
         }
-      } else {
-        add_log("brepphylo.artifacts", TRUE, "No extra files to zip (files_to_zip empty).")
-      }
-    } else {
-      add_log("brepphylo.artifacts", TRUE, "No files found in output directory.")
-    }
-
-    # ---- warnings aggregation for filters ----
-    if (apply_filters) {
-      if (uppercase && filter_stats$upper > 0L) {
-        warnings <- c(warnings, sprintf("Uppercased %d rows in '%s'.", filter_stats$upper, seq_col))
-      }
-      if (gap_policy == "remove" && filter_stats$gap_rows > 0L) {
-        warnings <- c(warnings, sprintf("Removed gaps in %d rows.", filter_stats$gap_rows))
-      }
-      if (gap_policy %in% c("replace_N", "replace_NNN") && filter_stats$gap_rows > 0L) {
-        warnings <- c(warnings, sprintf("Replaced gaps in %d rows.", filter_stats$gap_rows))
-      }
-      if (gap_policy == "drop_row" && filter_stats$gap_rows > 0L) {
-        warnings <- c(warnings, sprintf("Dropped %d rows due to gap characters.", filter_stats$gap_rows))
-      }
-      if (noniupac_policy == "replace_N" && filter_stats$noniupac_rows > 0L) {
-        warnings <- c(warnings, sprintf("Replaced non-IUPAC letters in %d rows.", filter_stats$noniupac_rows))
-      }
-      if (noniupac_policy == "drop_row" && filter_stats$noniupac_rows > 0L) {
-        warnings <- c(warnings, sprintf("Dropped %d rows with non-IUPAC letters.", filter_stats$noniupac_rows))
       }
     }
 
-    # ---- final result ----
-    result <- list(
-      ok         = TRUE,
-      trees      = unname(trees),
-      figures    = list(
-        phylogeny     = phylogeny_png,
-        phylogeny_pdf = phylogeny_pdf
-      ),
-      annotations      = annotations,
-      clones           = clones_meta,
-      artifact_zip_b64 = artifacts_zip_b64,
-      stats            = stats,
-      warnings         = unname(as.list(warnings)),
-      logs             = logs,
-      render           = "phylogeny",
-      error            = NULL
+    list(
+      ok = TRUE,
+      trees = unname(trees),
+      figures = list(phylogeny = phylogeny_png, phylogeny_pdf = phylogeny_pdf),
+      annotations = annotations,
+      clones = clones_meta,
+      analysis = analysis,
+      diagnostics = diagnostics,
+      artifact_zip_b64 = list(clone_bundle_zip = artifacts_zip_b64),
+      stats = stats,
+      warnings = unname(as.list(warnings)),
+      logs = logs,
+      render = "phylogeny",
+      error = NULL
     )
-
-    return(result)
   }, error = function(e) {
     logf("[brepphylo][ERROR] %s", as.character(e))
     fail(

@@ -12,12 +12,11 @@
     "clone_id_column",
     "germline_id_column",
     "label_column",
-    "class_column",
 
     "which_clones",
     "ignore_clones",
-    "germline_set",
 
+    "input_sequence_mode",
     "tree_type",
     "collapse_and_replace",
     "igphyml_accuracy",
@@ -25,18 +24,19 @@
 
     "min_clone_size",
     "species",
+    "germline_set_text",
     "algorithm",
     "plot_type",
     "plot_format",
     "gather_plots",
-    "use_temp_dir",
 
-    "apply_filters",
-    "uppercase",
-    "gap_policy",
-    "noniupac_policy",
-    "max_class_categories"
+    "enable_csr_analysis",
+    "isotype_column"
   ],
+
+  "widgets": {
+    "germline_set_text": "textarea"
+  },
 
   "visibility": {
     "collapse_and_replace": {
@@ -45,14 +45,14 @@
     "igphyml_accuracy": {
       "when": { "tree_type": "igphyml" }
     },
-    "uppercase": {
-      "when": { "apply_filters": true }
+    "algorithm": {
+      "when": { "input_sequence_mode": "raw_sequence" }
     },
-    "gap_policy": {
-      "when": { "apply_filters": true }
+    "germline_set_text": {
+      "when": { "species": "custom" }
     },
-    "noniupac_policy": {
-      "when": { "apply_filters": true }
+    "isotype_column": {
+      "when": { "enable_csr_analysis": true }
     }
   },
 
@@ -61,14 +61,13 @@
     "clone_id_column":    "clone_id",
     "germline_id_column": "V.GENE.and.allele",
     "label_column":       "optional; Seq_ID / sequence_id",
-    "class_column":       "optional; e.g. isotype",
 
     "which_clones":       "optional; e.g. c1, c2 c3",
     "ignore_clones":      "optional; comma/space-separated clone IDs to exclude",
-    "germline_set":       "optional; BrepPhylo germline set ID or path",
 
-    "algorithm":          "Default (model): ClustalOmega",
-    "gap_policy":         "keep / remove / replace_N / replace_NNN / drop_row",
-    "noniupac_policy":    "keep / replace_N / drop_row"
+    "germline_set_text":  ">IGHV1-69*01\nCAGGTGCAGCTGGTGGAG...",
+    "isotype_column":     "e.g. subclass, c_call, isotype",
+
+    "algorithm":          "Default: ClustalOmega"
   }
 }

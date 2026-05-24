@@ -18,7 +18,17 @@ RUN set -eux; \
       libjpeg-turbo-devel \
       libtiff-devel \
       fontconfig-devel \
-      freetype-devel; \
+      freetype-devel \
+      texlive-scheme-basic \
+      texlive-collection-latex \
+      texlive-collection-latexrecommended \
+      texlive-collection-latexextra \
+      texlive-collection-fontsrecommended \
+      texlive-latexmk || true; \
+    if ! command -v pdflatex >/dev/null 2>&1; then \
+      echo "WARN: pdflatex not available via dnf; attempting tinytex fallback"; \
+      R -q -e "install.packages('tinytex', repos='https://cloud.r-project.org'); tinytex::install_tinytex()" || true; \
+    fi; \
     dnapars_bin="$(command -v dnapars || true)"; \
     if [ -n "$dnapars_bin" ]; then \
       if [ "$dnapars_bin" != "/usr/local/bin/dnapars" ]; then \
@@ -41,6 +51,7 @@ RUN DOWNLOAD_STATIC_LIBV8=1 R -q -e "install.packages( \
     && R -q -e "remotes::install_github('Fraternalilab/BrepPhylo', dependencies = TRUE)"
 
 WORKDIR /srv
+COPY validators.R /srv/validators.R
 COPY plumber.R /srv/plumber.R
 
 EXPOSE 8003
