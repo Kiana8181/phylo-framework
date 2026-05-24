@@ -40,6 +40,32 @@ describe("readDowserResult", () => {
     expect(result.isDowser).toBe(false);
     expect(result.artifacts).toEqual([]);
   });
+
+  it("normalizes R-shaped input_qc fields for UI display", () => {
+    const result = readDowserResult({
+      ok: true,
+      trees: ["((s1,s2),Germline);"],
+      clones: { clone_id: ["c1"], seqs: [2] },
+      annotations: [[]],
+      stats: { analysis_mode: "tree_only", tree_build: "pratchet" },
+      input_qc: {
+        n_rows_original: 120,
+        n_rows_after_trait_exclusion: 118,
+        n_clones_original: 12,
+        n_clones_after_trait_exclusion: 11,
+        excluded_missing_trait: [{ sequence_id: "s1" }],
+        length_mismatch: [],
+        duplicate_sequence_ids: [],
+      },
+      chain_qc: { chain_mode: "H" },
+    });
+
+    expect(result.inputQc?.n_input_rows).toBe(120);
+    expect(result.inputQc?.n_working_rows).toBe(118);
+    expect(result.inputQc?.n_clones_input).toBe(12);
+    expect(result.inputQc?.n_clones_working).toBe(11);
+    expect(result.inputQc?.n_excluded_trait_missing).toBe(1);
+  });
 });
 
 describe("Dowser results presentation contracts", () => {

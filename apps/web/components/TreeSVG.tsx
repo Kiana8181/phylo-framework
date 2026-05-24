@@ -20,6 +20,10 @@ type Props = {
   displayIdField?: string | null;
   /** When set, tip nodes whose label/tooltip contains this text get highlighted. */
   highlightText?: string | null;
+  showInternalNodes?: boolean;
+  showNodeNumbers?: boolean;
+  /** Numeric annotation field used to scale tip circle radius. */
+  sizeBy?: string | null;
 };
 
 type LNode = NewickNode & { parent?: LNode; x?: number; y?: number };
@@ -167,6 +171,45 @@ function isBlackColor(value: string): boolean {
   return false;
 }
 
+function buildAnnoLookup(annotations?: Anno[]): Record<string, Anno> {
+  const m: Record<string, Anno> = {};
+  (annotations ?? []).forEach((a) => {
+    if (!a) return;
+    const keys = [a.final_tip_label, a.sequence_id, a.label].filter(
+      (k): k is string => typeof k === "string" && k.trim().length > 0,
+    );
+    for (const key of keys) {
+      m[key.trim()] = a;
+    }
+  });
+  return m;
+}
+
+function resolveAnno(lookup: Record<string, Anno>, tipName: string): Anno | undefined {
+  return lookup[tipName];
+}
+
+function buildTipSizeScale(
+  annotations: Anno[] | undefined,
+  field: string | null | undefined,
+  minRadius = 2.5,
+  maxRadius = 10,
+) {
+  if (!field || !annotations?.length) return null;
+  const vals = annotations
+    .map((row) => Number(row[field]))
+    .filter((v) => Number.isFinite(v) && v > 0);
+  if (!vals.length) return null;
+  const min = Math.min(...vals);
+  const max = Math.max(...vals);
+  return (anno: Anno | undefined) => {
+    const v = Number(anno?.[field]);
+    if (!Number.isFinite(v) || v <= 0) return minRadius;
+    if (min === max) return (minRadius + maxRadius) / 2;
+    return minRadius + ((v - min) / (max - min)) * (maxRadius - minRadius);
+  };
+}
+
 export default function TreeSVG({
   newick,
   width = 900,
@@ -181,6 +224,9 @@ export default function TreeSVG({
   unknownValue,
   displayIdField,
   highlightText,
+  showInternalNodes = false,
+  showNodeNumbers = false,
+  sizeBy = null,
 }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
 
@@ -188,13 +234,11 @@ export default function TreeSVG({
   const colorField = colorBy || null;
   const unknown = (unknownValue && unknownValue.trim()) || "unknown";
 
-  const annoByLabel = useMemo(() => {
-    const m: Record<string, Anno> = {};
-    (annotations ?? []).forEach((a) => {
-      if (a?.label) m[a.label] = a;
-    });
-    return m;
-  }, [annotations]);
+  const annoByLabel = useMemo(() => buildAnnoLookup(annotations), [annotations]);
+  const tipSizeScale = useMemo(
+    () => buildTipSizeScale(annotations, sizeBy),
+    [annotations, sizeBy],
+  );
 
   const colors = useMemo(() => {
     if (!coloringEnabled) return {};
@@ -307,15 +351,19 @@ export default function TreeSVG({
     walkEdges(root);
 
     const leafNodes: LNode[] = [];
+    const internalNodes: LNode[] = [];
     (function collect(n: LNode) {
       if (!n.children || !n.children.length) leafNodes.push(n);
-      else n.children.forEach((c) => collect(c as LNode));
+      else {
+        internalNodes.push(n);
+        n.children.forEach((c) => collect(c as LNode));
+      }
     })(root);
 
     const plotRightX = width - margin.right;
     const labelX = plotRightX + labelPad;
 
-    return { root, edges, leafNodes, margin, labelX };
+    return { root, edges, leafNodes, internalNodes, margin, labelX };
   }, [newick, width, computedHeight, fontSize, showLabels]);
 
   function downloadSVG() {
@@ -392,7 +440,7 @@ export default function TreeSVG({
         <g>
           {layout.leafNodes.map((n, i) => {
             const label = n.name ?? "";
-            const anno = annoByLabel[label];
+            const anno = resolveAnno(annoByLabel, label);
             const defaultLeafFill = "var(--foreground)";
 
             let fill = defaultLeafFill;
@@ -417,13 +465,14 @@ export default function TreeSVG({
             const tipFill = matchesHighlight ? "#dc2626" : fill;
             const tipStroke = matchesHighlight ? "#b91c1c" : undefined;
             const tipStrokeWidth = matchesHighlight ? 2 : 0;
+            const tipRadius = tipSizeScale ? tipSizeScale(anno) : 3;
 
             return (
               <circle
                 key={i}
                 cx={n.x!}
                 cy={n.y!}
-                r={3}
+                r={tipRadius}
                 fill={tipFill}
                 stroke={tipStroke}
                 strokeWidth={tipStrokeWidth}
@@ -435,12 +484,38 @@ export default function TreeSVG({
           })}
         </g>
 
+        {showInternalNodes &&
+          layout.internalNodes.map((n, i) => (
+            <g key={`internal-${i}`}>
+              <circle
+                cx={n.x!}
+                cy={n.y!}
+                r={2.5}
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={1.2}
+                opacity={0.75}
+              />
+              {(showNodeNumbers || showInternalNodes) && (
+                <text
+                  x={(n.x ?? 0) + 6}
+                  y={(n.y ?? 0) - 6}
+                  fontSize={9}
+                  fill="currentColor"
+                  opacity={0.8}
+                >
+                  {showNodeNumbers ? `#${i + 1}` : ""}
+                </text>
+              )}
+            </g>
+          ))}
+
         {/* labels */}
         {showLabels && (
           <g fontSize={fontSize} fill="currentColor">
             {layout.leafNodes.map((n, i) => {
               const label = n.name ?? "";
-              const anno = annoByLabel[label];
+              const anno = resolveAnno(annoByLabel, label);
               const title = buildTipTitle(label, anno, colorField, displayIdField || null);
               const displayLabel = (displayIdField && String(anno?.[displayIdField] ?? "").trim()) || label;
               const labelParts = splitByHighlight(displayLabel, highlightText ?? "");

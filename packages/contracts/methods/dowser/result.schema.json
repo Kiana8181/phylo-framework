@@ -90,6 +90,21 @@
         "additionalProperties": true
       }
     },
+    "artifact_zip_b64": {
+      "type": "object",
+      "description": "Export bundle as a base64-encoded ZIP archive.",
+      "properties": {
+        "clone_bundle_zip": {
+          "type": ["string", "null"],
+          "description": "ZIP of Dowser export files (base64-encoded)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "artifact_name": {
+      "type": ["string", "null"],
+      "description": "Suggested filename for the artifact ZIP download."
+    },
     "warnings": { "type": "array", "items": { "type": "string" } },
     "logs": { "type": "array", "items": { "type": "object" } },
     "error": { "type": ["string", "null"] },

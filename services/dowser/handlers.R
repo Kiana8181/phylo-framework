@@ -32,6 +32,9 @@ parse_dowser_params <- function(raw) {
   p$columns <- parse_vec(p$columns)
   p$unknown_value <- p$unknown_value %||% "unknown"
   p$tipsize <- as.numeric(p$tipsize %||% 2)
+  tsb <- p$tip_size_by %||% NULL
+  if (is.character(tsb) && length(tsb) == 1 && !nzchar(tsb)) tsb <- NULL
+  p$tip_size_by <- tsb
   p$max_tip_categories <- as.integer(p$max_tip_categories %||% 30L)
 
   p$label_field <- normalize_col(p$label_field, "sequence_id")
@@ -326,7 +329,7 @@ run_handler_impl <- function(req, res) {
 
     annos <- build_annotations(trees_tbl, db_working, p, tip_col, plot_tip_col)
 
-    fig <- render_tree_figures(trees_tbl, p, plot_tip_col, state_overflow, tip_col)
+    fig <- render_tree_figures(trees_tbl, p, plot_tip_col, state_overflow, tip_col, db = db_working, clones = clones)
     if (!is.null(fig$warnings)) warnings <- c(warnings, fig$warnings)
 
     discrete_trait_analysis <- NULL
@@ -369,6 +372,7 @@ run_handler_impl <- function(req, res) {
       tree_build = p$tree_build,
       label_field = p$label_field,
       tip_color_by = tip_col,
+      tip_size_by = p$tip_size_by,
       unknown_value = p$unknown_value,
       unknown_replaced_in_input = tc$unknown_replaced,
       n_tip_states = tc$n_states,
@@ -390,6 +394,8 @@ run_handler_impl <- function(req, res) {
       figures_b64 = fig$figures_b64,
       trees_tbl = trees_tbl
     ), p)
+
+    artifact_zip <- zip_export_bundle(export_dir)
 
     if (!is.null(tip_col) && tc$unknown_replaced > 0) {
       warnings <- c(warnings, sprintf(
@@ -421,6 +427,8 @@ run_handler_impl <- function(req, res) {
       igphyml = igphyml_out,
       chain_qc = chain_qc,
       artifacts = artifacts,
+      artifact_zip_b64 = list(clone_bundle_zip = artifact_zip$b64),
+      artifact_name = artifact_zip$name %||% "dowser_artifacts.zip",
       warnings = as.list(as.character(unique(warnings))),
       logs = logs,
       render = fig$render

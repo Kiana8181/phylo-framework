@@ -26,6 +26,7 @@ type TreesCarouselProps = {
   cleanNewick: (s: string) => string;
   colorBy?: string;
   unknownValue?: string;
+  tipSizeBy?: string;
   showInternalNodesDefault?: boolean;
 };
 
@@ -45,6 +46,7 @@ type TreeVM = {
   serviceImage?: TreeImage;
   nodeAttributes?: Record<string, Record<string, any>>;
   lineagePlot?: LineagePlot;
+  detailNodes?: Array<Record<string, unknown>>;
 };
 
 function toImagePayload(raw?: string | null): TreeImage | undefined {
@@ -65,11 +67,15 @@ function buildAnnoMapFromRows(rows?: Array<Record<string, any>> | null): Record<
   const out: Record<string, Record<string, any>> = {};
   if (!Array.isArray(rows)) return out;
   for (const row of rows) {
-    const label = String(row?.label ?? "").trim();
-    if (!label) continue;
     const item = { ...row };
     delete item.label;
-    out[label] = item;
+    const keys = [row?.final_tip_label, row?.sequence_id, row?.label]
+      .map((k) => String(k ?? "").trim())
+      .filter(Boolean);
+    if (!keys.length) continue;
+    for (const key of keys) {
+      out[key] = { ...item, ...(out[key] ?? {}) };
+    }
   }
   return out;
 }
@@ -103,6 +109,7 @@ export default function TreesCarousel({
   cleanNewick,
   colorBy,
   unknownValue,
+  tipSizeBy,
   showInternalNodesDefault = false,
 }: TreesCarouselProps) {
   const total = trees?.length ?? 0;
@@ -112,6 +119,7 @@ export default function TreesCarousel({
   const [showInternalNodes, setShowInternalNodes] = useState(showInternalNodesDefault);
   const [showNodeNumbers, setShowNodeNumbers] = useState(showInternalNodesDefault);
   const [displayIdField, setDisplayIdField] = useState<string>("sequence_id");
+  const [sizeByField, setSizeByField] = useState<string>("");
   const [treeCache, setTreeCache] = useState<Record<string, RunTreePayload>>({});
   const [loadingTreeId, setLoadingTreeId] = useState<string | null>(null);
   const [treeLoadErrors, setTreeLoadErrors] = useState<Record<string, string>>({});
@@ -185,16 +193,21 @@ export default function TreesCarousel({
       const detailNewick = detail?.lineage_newick || detail?.canonical_newick;
       if (typeof t === "string") {
         const figureImage = toImagePayload(figures?.phylogeny?.[i]);
+        const treeId = treeIdFor(t, i);
+        const payload = treeCache[treeId];
+        const lineagePlot = payload?.lineage_plot as LineagePlot | undefined;
         return {
-          id: `tree-${i + 1}`,
+          id: treeId,
           cloneId: detail?.clone_id,
           phylogenyNewick: cleanNewick(detailNewick || t),
           hasServiceImage: Boolean(figureImage?.base64),
-          hasLineagePlot: Boolean(detail?.nodes?.length),
-          isLoading: false,
-          loadError: undefined,
+          hasLineagePlot: Boolean(lineagePlot),
+          isLoading: loadingTreeId === treeId,
+          loadError: treeLoadErrors[treeId],
           serviceImage: figureImage,
           nodeAttributes: buildAnnoMapFromRows(annotations?.[i]),
+          lineagePlot,
+          detailNodes: detail?.nodes as Array<Record<string, unknown>> | undefined,
         };
       }
 
@@ -204,22 +217,25 @@ export default function TreesCarousel({
         fromServiceImage(payload?.service_image) ??
         fromServiceImage(t.visualizations?.service_image) ??
         toImagePayload(figures?.phylogeny?.[i]);
-      const attrs =
+      const lineagePlot = (payload?.lineage_plot ?? t.lineage_plot) as LineagePlot | undefined;
+      const rawAttrs =
         payload?.node_attributes ??
         t.node_attributes ??
         buildAnnoMapFromRows(annotations?.[i]);
-      const lineagePlot = (payload?.lineage_plot ?? t.lineage_plot) as LineagePlot | undefined;
+      const annoFallback = buildAnnoMapFromRows(annotations?.[i]);
+      const mergedAttrs = { ...annoFallback, ...rawAttrs };
       return {
         id: treeId,
         cloneId: typeof t.clone_id === "string" ? t.clone_id : undefined,
         phylogenyNewick: cleanNewick(detailNewick || t.original_newick || t.newick || ""),
         hasServiceImage: Boolean(t.has_service_image || svcImage?.base64),
-        hasLineagePlot: Boolean(t.has_lineage_plot || lineagePlot || detail?.nodes?.length),
+        hasLineagePlot: Boolean(lineagePlot),
         isLoading: loadingTreeId === treeId,
         loadError: treeLoadErrors[treeId],
         serviceImage: svcImage,
-        nodeAttributes: attrs,
+        nodeAttributes: mergedAttrs,
         lineagePlot,
+        detailNodes: detail?.nodes as Array<Record<string, unknown>> | undefined,
       };
     });
   }, [annotations, cleanNewick, figures?.phylogeny, loadingTreeId, treeCache, treeLoadErrors, trees, treesDetail]);
@@ -243,13 +259,20 @@ export default function TreesCarousel({
     if (!tabs.includes(activeTab)) setActiveTab(tabs[0]);
   }, [activeTab, tabs]);
 
-  const phyloAnnotations = useMemo(() => {
+  const phyloAnnotations = useMemo((): Array<{ label: string } & Record<string, any>> => {
+    const rawRows = annotations?.[idx];
+    if (Array.isArray(rawRows) && rawRows.length) {
+      return rawRows.map((row) => ({
+        label: String(row?.label ?? row?.final_tip_label ?? row?.sequence_id ?? ""),
+        ...row,
+      }));
+    }
     if (!current?.nodeAttributes) return [];
     return Object.entries(current.nodeAttributes).map(([label, attrs]) => ({
       label,
       ...(attrs ?? {}),
     }));
-  }, [current?.nodeAttributes]);
+  }, [annotations, current?.nodeAttributes, idx]);
 
   const displayFields = useMemo(() => {
     const attrs = current?.nodeAttributes ?? {};
@@ -261,12 +284,44 @@ export default function TreesCarousel({
         keySet.add(key);
       }
     }
+    for (const row of phyloAnnotations) {
+      for (const [key, value] of Object.entries(row)) {
+        if (["label", "final_tip_label"].includes(key)) continue;
+        if (value != null && value !== "") keySet.add(key);
+      }
+    }
     const options = Array.from(keySet).sort((a, b) => a.localeCompare(b, "en"));
     if (options.includes("sequence_id")) {
       return ["sequence_id", ...options.filter((k) => k !== "sequence_id")];
     }
     return options;
-  }, [current?.nodeAttributes]);
+  }, [current?.nodeAttributes, phyloAnnotations]);
+
+  const sizeFields = useMemo(() => {
+    const nums = new Set<string>();
+    for (const row of phyloAnnotations) {
+      for (const [key, value] of Object.entries(row)) {
+        if (["label", "final_tip_label"].includes(key)) continue;
+        const n = Number(value);
+        if (Number.isFinite(n)) nums.add(key);
+      }
+    }
+    return Array.from(nums).sort((a, b) => a.localeCompare(b, "en"));
+  }, [phyloAnnotations]);
+
+  useEffect(() => {
+    if (!sizeFields.length) {
+      setSizeByField("");
+      return;
+    }
+    const preferred = tipSizeBy && sizeFields.includes(tipSizeBy) ? tipSizeBy : "";
+    if (preferred) {
+      setSizeByField(preferred);
+      return;
+    }
+    if (sizeByField && sizeFields.includes(sizeByField)) return;
+    setSizeByField("");
+  }, [sizeFields, sizeByField, tipSizeBy, idx]);
 
   useEffect(() => {
     if (!displayFields.length) return;
@@ -334,13 +389,19 @@ export default function TreesCarousel({
 
               {isRenderableTreeTab && (
                 <div className="ml-auto flex items-center gap-4">
-                  <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <label
+                    className="flex items-center gap-2 text-xs text-muted-foreground"
+                    title="Show tip or display labels on tree views"
+                  >
                     <span>Show labels</span>
                     <Switch checked={showLabels} onCheckedChange={setShowLabels} aria-label="Show labels" />
                   </label>
                   {(treesDetail?.length || showInternalNodesDefault) && (
                     <>
-                      <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <label
+                        className="flex items-center gap-2 text-xs text-muted-foreground"
+                        title="Show reconstructed internal node labels on the lineage view"
+                      >
                         <span>Internal nodes</span>
                         <Switch
                           checked={showInternalNodes}
@@ -348,7 +409,10 @@ export default function TreesCarousel({
                           aria-label="Show internal nodes"
                         />
                       </label>
-                      <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <label
+                        className="flex items-center gap-2 text-xs text-muted-foreground"
+                        title="Show Dowser/ape node index numbers on internal nodes"
+                      >
                         <span>Node numbers</span>
                         <Switch
                           checked={showNodeNumbers}
@@ -368,6 +432,28 @@ export default function TreesCarousel({
                         </SelectTrigger>
                         <SelectContent>
                           {displayFields.map((f) => (
+                            <SelectItem key={f} value={f}>
+                              {f}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+
+                  {sizeFields.length > 0 && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground">Tip size by</span>
+                      <Select
+                        value={sizeByField || "__none__"}
+                        onValueChange={(v) => setSizeByField(v === "__none__" ? "" : v)}
+                      >
+                        <SelectTrigger className="w-[180px]">
+                          <SelectValue placeholder="Constant size" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">Constant size</SelectItem>
+                          {sizeFields.map((f) => (
                             <SelectItem key={f} value={f}>
                               {f}
                             </SelectItem>
@@ -405,9 +491,12 @@ export default function TreesCarousel({
               newick={current.phylogenyNewick}
               annotations={phyloAnnotations}
               showLabels={showLabels}
+              showInternalNodes={showInternalNodes}
+              showNodeNumbers={showNodeNumbers}
               colorBy={colorBy}
               unknownValue={unknownValue}
               displayIdField={displayIdField || undefined}
+              sizeBy={sizeByField || undefined}
             />
           )}
 
@@ -417,6 +506,8 @@ export default function TreesCarousel({
               nodeAttributes={current.nodeAttributes}
               displayIdField={displayIdField || undefined}
               showLabels={showLabels}
+              showInternalNodes={showInternalNodes}
+              showNodeNumbers={showNodeNumbers}
               filename={lineageDownloadName}
               newickText={lineageNewick}
             />

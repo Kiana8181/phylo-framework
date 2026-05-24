@@ -13,7 +13,7 @@ import { RunsApi } from "@/features/runs/api";
 import { useRunResult, useRunStatus } from "@/features/runs/hooks";
 import { cleanNewick } from "@/lib/newick";
 import { formatRunDuration } from "@/lib/runDuration";
-import { readDowserResult, readTreeTipColorStats, type MethodInfo, type RunTree, type RunWarning } from "@phylo/contracts";
+import { readDowserResult, readTreeTipColorStats, readTreeTipSizeBy, type MethodInfo, type RunTree, type RunWarning } from "@phylo/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { GitCompare } from "lucide-react";
 import Image from "next/image";
@@ -203,10 +203,11 @@ function DashboardPageContent() {
   );
 
   const { colorBy: svgColorBy, unknownValue: svgUnknown } = readTreeTipColorStats(result?.stats);
+  const svgTipSizeBy = readTreeTipSizeBy(result?.stats);
   const dowserResult = useMemo(() => readDowserResult(result), [result]);
   const showInternalNodesDefault = useMemo(() => {
     const mode = (result?.stats as Record<string, unknown> | undefined)?.analysis_mode;
-    return mode === "tree_with_internal_sequences" || mode === "discrete_trait_analysis";
+    return mode === "tree_with_internal_sequences";
   }, [result?.stats]);
 
   const methodFigureSections = useMemo(() => {
@@ -466,6 +467,7 @@ function DashboardPageContent() {
             cleanNewick={cleanNewick}
             colorBy={svgColorBy}
             unknownValue={svgUnknown}
+            tipSizeBy={svgTipSizeBy}
             showInternalNodesDefault={showInternalNodesDefault}
           />
 

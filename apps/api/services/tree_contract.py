@@ -367,6 +367,57 @@ def _build_lineage_layout(
     }
 
 
+def _merge_dowser_lineage_metadata(
+    lineage_plot: dict[str, Any] | None,
+    node_attributes: dict[str, dict[str, Any]],
+    trees_detail_nodes: list[dict[str, Any]] | None,
+) -> None:
+    if not lineage_plot or not trees_detail_nodes:
+        return
+
+    by_id: dict[str, dict[str, Any]] = {}
+    internals: list[dict[str, Any]] = []
+    for nd in trees_detail_nodes:
+        if not isinstance(nd, dict):
+            continue
+        node_id = str(nd.get("node_id") or "").strip()
+        if node_id:
+            by_id[node_id] = nd
+        if nd.get("is_internal"):
+            internals.append(nd)
+
+    internals.sort(key=lambda x: int(x.get("node") or 0))
+    internal_idx = 0
+
+    for plot_node in lineage_plot.get("nodes") or []:
+        if not isinstance(plot_node, dict):
+            continue
+        label = str(plot_node.get("label") or plot_node.get("id") or "").strip()
+        is_leaf = bool(plot_node.get("isLeaf"))
+        dowser_nd: dict[str, Any] | None = by_id.get(label)
+
+        if not dowser_nd and not is_leaf and internal_idx < len(internals):
+            dowser_nd = internals[internal_idx]
+            internal_idx += 1
+
+        if not dowser_nd:
+            continue
+
+        merged = {
+            "isInternal": bool(dowser_nd.get("is_internal")),
+            "nodeNumber": dowser_nd.get("node"),
+            "node_id": dowser_nd.get("node_id"),
+            "sequence": dowser_nd.get("sequence"),
+            "sequence_alignment": dowser_nd.get("sequence_alignment"),
+            "locus": dowser_nd.get("locus"),
+        }
+        merged = {k: v for k, v in merged.items() if v is not None and v != ""}
+
+        attrs = node_attributes.setdefault(label, {})
+        attrs.update(merged)
+        plot_node.update(merged)
+
+
 def _normalize_service_warning(w: Any) -> str | dict[str, Any]:
     if isinstance(w, str):
         return w
@@ -559,6 +610,16 @@ def assemble_unified_tree_result(
         lineage_plot: dict[str, Any] | None = None
         try:
             lineage_plot = _build_lineage_layout(parsed, node_attributes, normalized_newick)
+            if (method_id or "").lower() == "dowser":
+                trees_detail = raw_result.get("trees_detail")
+                detail_nodes: list[dict[str, Any]] | None = None
+                if isinstance(trees_detail, list) and idx < len(trees_detail):
+                    detail_item = trees_detail[idx]
+                    if isinstance(detail_item, dict):
+                        nodes_raw = detail_item.get("nodes")
+                        if isinstance(nodes_raw, list):
+                            detail_nodes = [n for n in nodes_raw if isinstance(n, dict)]
+                _merge_dowser_lineage_metadata(lineage_plot, node_attributes, detail_nodes)
         except Exception as exc:
             warnings_out.append(
                 {

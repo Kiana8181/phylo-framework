@@ -95,6 +95,8 @@ describe("Dowser result.schema.json", () => {
     expect(result.properties.input_qc).toBeDefined();
     expect(result.properties.data_provenance).toBeDefined();
     expect(result.properties.artifacts).toBeDefined();
+    expect(result.properties.artifact_zip_b64).toBeDefined();
+    expect(result.properties.artifact_name).toBeDefined();
     expect(result.properties.discrete_trait_analysis.additionalProperties).toBe(true);
     expect(result.properties.input_qc.additionalProperties).toBe(true);
     expect(result.properties.igphyml.additionalProperties).toBe(true);

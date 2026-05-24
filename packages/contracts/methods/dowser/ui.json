@@ -33,6 +33,7 @@
     "numeric_annotation_fields",
     "columns",
     "tipsize",
+    "tip_size_by",
     "max_tip_categories",
 
     "return_internal_sequences",
@@ -100,7 +101,8 @@
         "label_field",
         "tip_color_by",
         "annotation_fields",
-        "tipsize"
+        "tipsize",
+        "tip_size_by"
       ]
     },
     {
@@ -157,6 +159,7 @@
     "column_map.locus": "your column → locus (HL mode)",
     "label_field": "display only; canonical Newick uses sequence_id",
     "tip_color_by": "empty = no coloring",
+    "tip_size_by": "e.g. duplicate_count scales tip dot size in Method Output PNG",
     "trait_field": "canonical column name after mapping, e.g. c_call"
   },
   "visibility": {

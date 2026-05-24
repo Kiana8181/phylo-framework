@@ -78,81 +78,402 @@ plot_col_in_trees <- function(trees_tbl, col) {
   if (col %in% names(trees_tbl)) return(TRUE)
   data_col <- trees_tbl$data
   if (is.null(data_col) || !length(data_col)) return(FALSE)
-  any(vapply(data_col, function(d) is.data.frame(d) && col %in% names(d), logical(1)))
+  any(vapply(data_col, function(d) {
+    df <- meta_data_frame(d)
+    is.data.frame(df) && col %in% names(df)
+  }, logical(1)))
 }
 
-render_tree_figures <- function(trees_tbl, p, plot_tip_col, state_overflow, tip_col = NULL) {
+plot_col_is_plottable <- function(trees_tbl, col) {
+  if (!plot_col_in_trees(trees_tbl, col)) return(FALSE)
+  data_col <- trees_tbl$data
+  if (is.null(data_col) || !length(data_col)) return(FALSE)
+  all(vapply(data_col, function(d) {
+    df <- meta_data_frame(d)
+    if (!is.data.frame(df) || !col %in% names(df)) return(FALSE)
+    vals <- df[[col]]
+    if (is.null(vals)) return(FALSE)
+    coerced <- tryCatch(as.character(vals), error = function(e) NULL)
+    !is.null(coerced) && length(coerced) == length(vals)
+  }, logical(1)))
+}
+
+is_airr_clone <- function(x) {
+  inherits(x, "airrClone")
+}
+
+meta_data_frame <- function(meta) {
+  if (is.null(meta)) return(NULL)
+  if (is_airr_clone(meta)) {
+    df <- slot(meta, "data")
+    if (is.data.frame(df)) return(df)
+    return(NULL)
+  }
+  if (inherits(meta, "data.frame")) return(meta)
+  NULL
+}
+
+set_meta_data_frame <- function(meta, df) {
+  if (is_airr_clone(meta)) {
+    slot(meta, "data") <- df
+    return(meta)
+  }
+  if (inherits(meta, "data.frame")) return(df)
+  meta
+}
+
+trees_support_node_coloring <- function(trees_tbl) {
+  if (is.null(trees_tbl$trees) || !length(trees_tbl$trees)) return(FALSE)
+  all(vapply(trees_tbl$trees, function(phy) {
+    if (is.null(phy)) return(FALSE)
+    if ("treedata" %in% class(phy)) return(TRUE)
+    if (!is.null(phy$pars_recon) && "state" %in% names(phy)) {
+      st <- phy$state
+      return(!is.null(st) && (is.character(st) || is.factor(st)))
+    }
+    FALSE
+  }, logical(1)))
+}
+
+resolve_plot_tipsize <- function(p, staging_tbl) {
+  size_by <- p$tip_size_by %||% NULL
+  if (is.character(size_by) && length(size_by) == 1 && nzchar(trimws(size_by))) {
+    col <- trimws(size_by)
+    if (plot_col_in_trees(staging_tbl, col)) return(col)
+  }
+  tipsize <- as.numeric(p$tipsize %||% 2)[1]
+  if (!is.finite(tipsize)) 2 else tipsize
+}
+
+clone_row_metadata <- function(clones, clone_id) {
+  if (is.null(clones) || !is.data.frame(clones) || !nrow(clones)) return(NULL)
+  if (!"clone_id" %in% names(clones) || !"data" %in% names(clones)) return(NULL)
+  idx <- match(as.character(clone_id), as.character(clones$clone_id))
+  if (is.na(idx)) return(NULL)
+  meta <- clones$data[[idx]]
+  if (is_airr_clone(meta) || inherits(meta, "data.frame")) meta else NULL
+}
+
+assign_tip_color_column <- function(meta, tip_col, tips, color_vals, id_col = "sequence_id") {
+  if (!inherits(meta, "data.frame")) return(NULL)
+  if (id_col %in% names(meta)) {
+    idx <- match(as.character(meta[[id_col]]), tips)
+    meta[[tip_col]] <- ifelse(is.na(idx), "Germline", color_vals[idx])
+  } else if (nrow(meta) == length(color_vals)) {
+    meta[[tip_col]] <- color_vals
+  } else {
+    return(NULL)
+  }
+  meta
+}
+
+inject_plot_metadata_from_db <- function(staging_tbl, db, tip_col, plot_tip_col = NULL, id_col = "sequence_id", clones = NULL) {
+  if (is.null(staging_tbl) || !nrow(staging_tbl) || is.null(db) || !is.data.frame(db) || !nrow(db)) {
+    return(staging_tbl)
+  }
+  if (is.null(tip_col) || !nzchar(tip_col)) return(staging_tbl)
+  if (!id_col %in% names(db)) return(staging_tbl)
+
+  color_col <- if (!is.null(plot_tip_col) && nzchar(plot_tip_col) && plot_tip_col %in% names(db)) {
+    plot_tip_col
+  } else if (tip_col %in% names(db)) {
+    tip_col
+  } else {
+    return(staging_tbl)
+  }
+
+  clone_ids <- if ("clone_id" %in% names(staging_tbl)) {
+    as.character(staging_tbl$clone_id)
+  } else {
+    rep(NA_character_, nrow(staging_tbl))
+  }
+
+  if (!length(staging_tbl$trees)) return(staging_tbl)
+
+  if (is.null(staging_tbl$data)) {
+    staging_tbl$data <- vector("list", nrow(staging_tbl))
+  }
+
+  for (i in seq_len(nrow(staging_tbl))) {
+    phy <- staging_tbl$trees[[i]]
+    if (is.null(phy) || is.null(phy$tip.label)) next
+
+    tips <- as.character(phy$tip.label)
+    db_sub <- db
+    cid <- clone_ids[[i]]
+    if (!is.na(cid) && nzchar(cid) && "clone_id" %in% names(db)) {
+      db_sub <- db[as.character(db$clone_id) == cid, , drop = FALSE]
+    }
+    if (!nrow(db_sub)) db_sub <- db
+
+    jj <- match(tips, as.character(db_sub[[id_col]]))
+    color_vals <- ifelse(
+      is.na(jj),
+      "Germline",
+      as.character(db_sub[[color_col]][jj])
+    )
+
+    meta <- staging_tbl$data[[i]]
+    meta_df <- meta_data_frame(meta)
+
+    if (is.null(meta_df)) {
+      fallback <- clone_row_metadata(clones, cid)
+      if (!is.null(fallback)) {
+        meta <- fallback
+        meta_df <- meta_data_frame(meta)
+      }
+    } else if (!id_col %in% names(meta_df)) {
+      fallback <- clone_row_metadata(clones, cid)
+      fallback_df <- meta_data_frame(fallback)
+      if (!is.null(fallback_df)) {
+        meta <- fallback
+        meta_df <- fallback_df
+      }
+    }
+
+    if (is.null(meta_df)) {
+      next
+    }
+
+    updated_df <- assign_tip_color_column(meta_df, tip_col, tips, color_vals, id_col)
+    if (is.null(updated_df)) {
+      next
+    }
+
+    staging_tbl$data[[i]] <- set_meta_data_frame(meta, updated_df)
+  }
+
+  staging_tbl
+}
+
+prepare_trees_tbl_for_plot <- function(trees_tbl, tip_col = NULL, plot_tip_col = NULL, db = NULL, clones = NULL) {
+  if (is.null(trees_tbl) || !nrow(trees_tbl)) {
+    return(list(tbl = trees_tbl, tips_field = NULL, rehydrated = FALSE))
+  }
+
+  staging <- trees_tbl
+  if (requireNamespace("tibble", quietly = TRUE) && is.data.frame(staging)) {
+    staging <- tibble::as_tibble(staging)
+  }
+  tips_field <- NULL
+  rehydrated <- FALSE
+
+  if (!is.null(staging$trees) && length(staging$trees)) {
+    staging$trees <- lapply(staging$trees, function(phy) {
+      if (is.null(phy)) return(phy)
+      if (!is.null(phy$tip.label)) phy$tip.label <- as.character(phy$tip.label)
+      phy
+    })
+  }
+
+  if (!is.null(staging$data) && length(staging$data)) {
+    staging$data <- lapply(staging$data, function(meta) {
+      df <- meta_data_frame(meta)
+      if (is.null(df)) return(meta)
+      if (!is.null(plot_tip_col) && nzchar(plot_tip_col) && plot_tip_col %in% names(df)) {
+        df[[plot_tip_col]] <- as.character(df[[plot_tip_col]])
+      }
+      if (!is.null(tip_col) && nzchar(tip_col) && tip_col %in% names(df)) {
+        if (!is.null(plot_tip_col) && nzchar(plot_tip_col) && plot_tip_col %in% names(df)) {
+          df[[tip_col]] <- as.character(df[[plot_tip_col]])
+        } else {
+          df[[tip_col]] <- as.character(df[[tip_col]])
+        }
+      }
+      set_meta_data_frame(meta, df)
+    })
+  }
+
+  if (!is.null(tip_col) && nzchar(tip_col) && plot_col_is_plottable(staging, tip_col)) {
+    tips_field <- tip_col
+  } else if (!is.null(plot_tip_col) && nzchar(plot_tip_col)) {
+    stripped <- sub("^\\.plot_", "", plot_tip_col)
+    if (nzchar(stripped) && !identical(stripped, plot_tip_col) && plot_col_is_plottable(staging, stripped)) {
+      tips_field <- stripped
+    } else if (plot_col_is_plottable(staging, plot_tip_col)) {
+      tips_field <- plot_tip_col
+    }
+  }
+
+  if (is.null(tips_field) && !is.null(db) && is.data.frame(db) && nrow(db) > 0 &&
+      !is.null(tip_col) && nzchar(tip_col)) {
+    staging <- inject_plot_metadata_from_db(staging, db, tip_col, plot_tip_col, clones = clones)
+    if (plot_col_is_plottable(staging, tip_col)) {
+      tips_field <- tip_col
+      rehydrated <- TRUE
+    }
+  }
+
+  list(tbl = staging, tips_field = tips_field, rehydrated = rehydrated)
+}
+
+render_tree_figures <- function(trees_tbl, p, plot_tip_col, state_overflow, tip_col = NULL, db = NULL, clones = NULL) {
   if (!requireNamespace("ggtree", quietly = TRUE) || !requireNamespace("ggplot2", quietly = TRUE)) {
     return(list(figures_b64 = NULL, render = NULL, warnings = "ggtree/ggplot2 not available; no PNG previews."))
   }
 
   render_warnings <- character(0)
-  plot_tips <- NULL
-  if (!is.null(plot_tip_col) && nzchar(plot_tip_col) && !state_overflow) {
-    if (plot_col_in_trees(trees_tbl, plot_tip_col)) {
-      plot_tips <- plot_tip_col
-    } else {
-      src_col <- tip_col %||% sub("^\\.plot_", "", plot_tip_col)
+  prepared <- prepare_trees_tbl_for_plot(trees_tbl, tip_col, plot_tip_col, db = db, clones = clones)
+  staging_tbl <- prepared$tbl
+  plot_tips <- if (isTRUE(state_overflow)) NULL else prepared$tips_field
+
+  if (isTRUE(prepared$rehydrated)) {
+    render_warnings <- c(
+      render_warnings,
+      "Tip coloring column rehydrated from input data for Method Output PNG (column not retained in getTrees output)."
+    )
+  }
+
+  if (!is.null(plot_tip_col) && nzchar(plot_tip_col) && !state_overflow && is.null(plot_tips)) {
+    src_col <- tip_col %||% sub("^\\.plot_", "", plot_tip_col)
+    render_warnings <- c(
+      render_warnings,
+      sprintf(
+        "Tip coloring was requested using '%s', but no plottable metadata column was found after formatClones. Tree was rendered without tip coloring.",
+        src_col
+      )
+    )
+  }
+
+  show_node_nums <- isTRUE(p$show_node_numbers %||% FALSE)
+  internal_seqs_requested <- isTRUE(p$return_internal_sequences %||% FALSE) ||
+    identical(p$analysis_mode, "tree_with_internal_sequences")
+  show_node_coloring <- internal_seqs_requested && trees_support_node_coloring(staging_tbl)
+
+  if (internal_seqs_requested && !show_node_coloring) {
+    render_warnings <- c(
+      render_warnings,
+      "Internal node trait coloring skipped in Method Output PNG (requires discrete trait reconstruction). Tip colors are still applied; use the Lineage tab for internal node sequences."
+    )
+  }
+
+  if (internal_seqs_requested && exists("safe_get_all_seqs", mode = "function")) {
+    if (is.null(safe_get_all_seqs(staging_tbl))) {
       render_warnings <- c(
         render_warnings,
-        sprintf(
-          "Tip coloring was requested using '%s', but the generated plot-only column '%s' was not present after formatClones. Tree was rendered without tip coloring.",
-          src_col, plot_tip_col
-        )
+        "Internal node sequence reconstruction unavailable (getAllSeqs failed); use Lineage tab when available."
       )
     }
   }
 
-  show_nodes <- isTRUE(p$show_node_numbers %||% FALSE) ||
-    identical(p$analysis_mode, "tree_with_internal_sequences")
+  plot_tipsize <- resolve_plot_tipsize(p, staging_tbl)
 
-  plots <- tryCatch(
-    dowser::plotTrees(
-      trees_tbl,
-      tips = plot_tips,
-      tipsize = as.numeric(p$tipsize %||% 2),
-      nodes = show_nodes,
-      node_nums = show_nodes
-    ),
-    error = function(e) {
-      if (!is.null(plot_tips)) {
-        render_warnings <<- c(
-          render_warnings,
-          sprintf(
-            "plotTrees failed with tips='%s': %s. Tree was rendered without tip coloring.",
-            plot_tips, conditionMessage(e)
-          )
-        )
-      } else {
-        render_warnings <<- c(
-          render_warnings,
-          sprintf("plotTrees failed: %s. No PNG previews generated.", conditionMessage(e))
-        )
-      }
-      NULL
+  call_plot_trees <- function(tbl, use_tips, use_nodes, use_node_nums) {
+    args <- list(
+      trees = tbl,
+      tipsize = plot_tipsize,
+      nodes = use_nodes,
+      node_nums = use_node_nums
+    )
+    if (!is.null(use_tips) && is.character(use_tips) && length(use_tips) == 1 && nzchar(use_tips)) {
+      args$tips <- use_tips
     }
+    do.call(dowser::plotTrees, args)
+  }
+
+  attempts <- list()
+  if (!is.null(plot_tips) && show_node_coloring) {
+    attempts[[length(attempts) + 1]] <- list(
+      tips = plot_tips, nodes = TRUE, node_nums = show_node_nums, label = "colored_nodes"
+    )
+  }
+  if (!is.null(plot_tips)) {
+    attempts[[length(attempts) + 1]] <- list(
+      tips = plot_tips, nodes = FALSE, node_nums = show_node_nums, label = "colored_no_nodes"
+    )
+  }
+  attempts[[length(attempts) + 1]] <- list(
+    tips = NULL, nodes = FALSE, node_nums = show_node_nums, label = "uncolored_plain"
   )
+
+  plots <- NULL
+  render_mode <- NULL
+  for (attempt in attempts) {
+    plots <- tryCatch(
+      call_plot_trees(staging_tbl, attempt$tips, attempt$nodes, attempt$node_nums),
+      error = function(e) {
+        if (identical(attempt$label, "colored_nodes") && !is.null(plot_tips)) {
+          render_warnings <<- c(
+            render_warnings,
+            sprintf(
+              "plotTrees failed with tips='%s' and internal nodes: %s. Retrying without internal node labels.",
+              plot_tips, conditionMessage(e)
+            )
+          )
+        } else if (identical(attempt$label, "colored_no_nodes") && !is.null(plot_tips)) {
+          render_warnings <<- c(
+            render_warnings,
+            sprintf(
+              "plotTrees failed with tips='%s': %s. Retrying without tip coloring.",
+              plot_tips, conditionMessage(e)
+            )
+          )
+        } else {
+          render_warnings <<- c(
+            render_warnings,
+            sprintf("plotTrees failed: %s. No PNG previews generated.", conditionMessage(e))
+          )
+        }
+        NULL
+      }
+    )
+    if (!is.null(plots)) {
+      render_mode <- attempt$label
+      break
+    }
+  }
 
   if (is.null(plots)) {
     return(list(
       figures_b64 = NULL,
-      render = paste0("plotTrees_uncolored_tipsize", p$tipsize),
+      render = paste0("plotTrees_uncolored_tipsize", plot_tipsize),
       warnings = if (length(render_warnings)) render_warnings else NULL
     ))
   }
 
   figures_b64 <- lapply(plots, encode_png)
-  render <- if (is.null(plot_tips)) {
-    paste0("plotTrees_uncolored_tipsize", p$tipsize)
-  } else {
-    paste0("plotTrees_", plot_tips, "_tipsize", p$tipsize)
-  }
+  render <- switch(
+    render_mode,
+    colored_nodes = paste0("plotTrees_", plot_tips, "_nodes_tipsize", plot_tipsize),
+    colored_no_nodes = paste0("plotTrees_", plot_tips, "_tipsize", plot_tipsize),
+    paste0("plotTrees_uncolored_tipsize", plot_tipsize)
+  )
 
   list(
     figures_b64 = figures_b64,
     render = render,
     warnings = if (length(render_warnings)) render_warnings else NULL
   )
+}
+
+zip_export_bundle <- function(export_dir, zip_name = "dowser_artifacts.zip") {
+  all_files <- list.files(export_dir, recursive = TRUE, full.names = TRUE)
+  all_files <- all_files[basename(all_files) != zip_name]
+  if (!length(all_files)) {
+    return(list(b64 = NULL, name = NULL))
+  }
+
+  zip_path <- file.path(export_dir, zip_name)
+  if (file.exists(zip_path)) file.remove(zip_path)
+
+  old_wd <- getwd()
+  setwd(export_dir)
+  on.exit(setwd(old_wd), add = TRUE)
+
+  rel_paths <- unique(sub(paste0("^", export_dir, "/?"), "", all_files, fixed = FALSE))
+  rel_paths <- rel_paths[nzchar(rel_paths)]
+  if (!length(rel_paths)) {
+    return(list(b64 = NULL, name = NULL))
+  }
+
+  utils::zip(zipfile = zip_path, files = rel_paths)
+  sz <- file.info(zip_path)$size
+  if (is.na(sz) || sz <= 0) {
+    return(list(b64 = NULL, name = NULL))
+  }
+
+  zip_raw <- readBin(zip_path, what = "raw", n = sz)
+  list(b64 = jsonlite::base64_enc(zip_raw), name = zip_name)
 }
 
 build_export_bundle <- function(out_dir, result_parts, p) {

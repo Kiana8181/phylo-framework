@@ -422,6 +422,42 @@ export type DowserInputQc = {
   excluded_records?: Array<Record<string, unknown>>;
 };
 
+function asCount(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (Array.isArray(value)) return value.length;
+  return undefined;
+}
+
+function normalizeDowserInputQc(raw: Record<string, unknown> | null | undefined): DowserInputQc | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+
+  const nInputRows = asCount(raw.n_input_rows ?? raw.n_rows_original);
+  const nWorkingRows = asCount(
+    raw.n_working_rows ?? raw.n_rows_after_trait_exclusion ?? raw.n_rows_after_derived_fields,
+  );
+  const nClonesInput = asCount(raw.n_clones_input ?? raw.n_clones_original);
+  const nClonesWorking = asCount(raw.n_clones_working ?? raw.n_clones_after_trait_exclusion);
+  const nExcludedTraitMissing = asCount(raw.n_excluded_trait_missing ?? raw.excluded_missing_trait);
+  const nLengthMismatch = asCount(raw.n_length_mismatch ?? raw.length_mismatch);
+  const nDuplicateSequenceId = asCount(raw.n_duplicate_sequence_id ?? raw.duplicate_sequence_ids);
+
+  const normalized: DowserInputQc = {};
+  if (nInputRows != null) normalized.n_input_rows = nInputRows;
+  if (nWorkingRows != null) normalized.n_working_rows = nWorkingRows;
+  if (nClonesInput != null) normalized.n_clones_input = nClonesInput;
+  if (nClonesWorking != null) normalized.n_clones_working = nClonesWorking;
+  if (nExcludedTraitMissing != null) normalized.n_excluded_trait_missing = nExcludedTraitMissing;
+  if (nLengthMismatch != null) normalized.n_length_mismatch = nLengthMismatch;
+  if (nDuplicateSequenceId != null) normalized.n_duplicate_sequence_id = nDuplicateSequenceId;
+
+  const nMissingSeq = asCount(raw.n_missing_sequence_alignment);
+  if (nMissingSeq != null) normalized.n_missing_sequence_alignment = nMissingSeq;
+  const nMissingGerm = asCount(raw.n_missing_germline_alignment);
+  if (nMissingGerm != null) normalized.n_missing_germline_alignment = nMissingGerm;
+
+  return Object.keys(normalized).length ? normalized : undefined;
+}
+
 export type DowserStats = TreeTipColorStats & {
   analysis_mode?: DowserAnalysisMode;
   tree_build?: DowserTreeBuild;
@@ -430,7 +466,16 @@ export type DowserStats = TreeTipColorStats & {
   n_trees?: number;
   total_seqs?: number;
   label_field?: string;
+  tip_size_by?: string;
 };
+
+export function readTreeTipSizeBy(
+  stats: (BrepPhyloStats & TreeTipColorStats & DowserStats) | Record<string, unknown> | null | undefined,
+): string | undefined {
+  if (!stats || typeof stats !== "object") return undefined;
+  const field = (stats as DowserStats).tip_size_by;
+  return typeof field === "string" && field.length > 0 ? field : undefined;
+}
 
 export function readTreeTipColorStats(
   stats: (BrepPhyloStats & TreeTipColorStats & DowserStats) | Record<string, unknown> | null | undefined,
@@ -481,7 +526,7 @@ export function readDowserResult(result: RunResult | Record<string, unknown> | n
     timeEvolution: r.time_evolution,
     igphyml: r.igphyml,
     chainQc: r.chain_qc,
-    inputQc: r.input_qc,
+    inputQc: normalizeDowserInputQc(r.input_qc as Record<string, unknown> | undefined),
     dataProvenance: r.data_provenance,
     artifacts: r.artifacts ?? [],
     isDowser,

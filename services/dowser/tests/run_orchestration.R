@@ -176,9 +176,146 @@ p_render <- list(analysis_mode = "tree_only", tipsize = 2, show_node_numbers = F
 fig_missing <- render_tree_figures(trees_without_plot, p_render, ".plot_tissue", FALSE, "tissue")
 assert_true(!is.null(fig_missing$warnings), "render_tree_figures emits warning when plot column missing")
 assert_true(
-  any(grepl("not present after formatClones", fig_missing$warnings, fixed = TRUE)),
-  "render warning mentions formatClones retention failure"
+  any(grepl("no plottable metadata column was found after formatClones", fig_missing$warnings, fixed = TRUE)),
+  "render warning mentions missing plottable metadata column"
 )
+
+# prepare_trees_tbl_for_plot resolves biological tip_col for plotTrees
+trees_ccall <- data.frame(
+  clone_id = "c1",
+  trees = I(list(phy_min)),
+  data = I(list(data.frame(
+    sequence_id = c("s1", "s2"),
+    c_call = factor(c("IGHM", "IGHG1")),
+    `.plot_c_call` = factor(c("unknown", "IGHG1")),
+    check.names = FALSE,
+    stringsAsFactors = FALSE
+  ))),
+  stringsAsFactors = FALSE
+)
+prepared_ccall <- prepare_trees_tbl_for_plot(trees_ccall, "c_call", ".plot_c_call")
+assert_equal(prepared_ccall$tips_field, "c_call", "plot staging resolves tips to biological c_call")
+assert_true(is.character(prepared_ccall$tbl$data[[1]]$c_call), "c_call coerced to character for plot")
+assert_equal(prepared_ccall$tbl$data[[1]]$c_call[[1]], "unknown", "sanitized plot values copied into c_call")
+assert_true(plot_col_is_plottable(prepared_ccall$tbl, "c_call"), "plot_col_is_plottable true after staging")
+assert_true(!plot_col_is_plottable(trees_without_plot, "c_call"), "plot_col_is_plottable false when column missing")
+
+# rehydrate tip coloring from db when getTrees output drops metadata columns
+trees_no_ccall <- data.frame(
+  clone_id = "c1",
+  trees = I(list(phy_min)),
+  data = I(list(data.frame(sequence_id = c("s1", "s2"), stringsAsFactors = FALSE))),
+  stringsAsFactors = FALSE
+)
+db_ccall <- data.frame(
+  sequence_id = c("s1", "s2"),
+  clone_id = c("c1", "c1"),
+  c_call = c("IGHM", "IGHG1"),
+  `.plot_c_call` = c("unknown", "IGHG1"),
+  check.names = FALSE,
+  stringsAsFactors = FALSE
+)
+prepared_rehydrate <- prepare_trees_tbl_for_plot(trees_no_ccall, "c_call", ".plot_c_call", db = db_ccall)
+assert_equal(prepared_rehydrate$tips_field, "c_call", "rehydrated tips_field is biological c_call")
+assert_true(isTRUE(prepared_rehydrate$rehydrated), "rehydrated flag set when metadata injected from db")
+assert_equal(prepared_rehydrate$tbl$data[[1]]$c_call[[1]], "unknown", "rehydrated c_call uses sanitized plot values")
+assert_true(!inherits(prepared_rehydrate$tbl$data[[1]], "data.frame") || ncol(prepared_rehydrate$tbl$data[[1]]) >= 2,
+            "rehydrated metadata retains multiple columns")
+
+# clone metadata fallback when trees_tbl$data element is missing
+trees_null_data <- data.frame(
+  clone_id = "c1",
+  trees = I(list(phy_min)),
+  data = I(list(NULL)),
+  stringsAsFactors = FALSE
+)
+clones_meta <- data.frame(
+  clone_id = "c1",
+  data = I(list(data.frame(
+    sequence_id = c("s1", "s2"),
+    c_call = c("IGHM", "IGHG1"),
+    stringsAsFactors = FALSE
+  ))),
+  stringsAsFactors = FALSE
+)
+prepared_clone_fb <- prepare_trees_tbl_for_plot(
+  trees_null_data, "c_call", ".plot_c_call", db = db_ccall, clones = clones_meta
+)
+assert_equal(prepared_clone_fb$tips_field, "c_call", "clone fallback enables tip coloring")
+assert_true(isTRUE(prepared_clone_fb$rehydrated), "clone fallback sets rehydrated flag")
+
+# airrClone metadata in trees_tbl$data is recognized for tip coloring
+if (requireNamespace("dowser", quietly = TRUE)) {
+  data(ExampleClones, package = "dowser", envir = environment())
+  ex_clones <- ExampleClones[1:2, , drop = FALSE]
+  ex_trees <- dowser::getTrees(ex_clones)
+  prepared_airr <- prepare_trees_tbl_for_plot(ex_trees, "c_call", ".plot_c_call")
+  assert_equal(prepared_airr$tips_field, "c_call", "airrClone metadata supports c_call tip coloring")
+  assert_true(is_airr_clone(prepared_airr$tbl$data[[1]]), "airrClone class preserved during plot staging")
+}
+
+# rehydrate c_call into airrClone data slot when column was dropped
+if (requireNamespace("dowser", quietly = TRUE)) {
+  data(ExampleClones, package = "dowser", envir = environment())
+  ex_clones <- ExampleClones[1, , drop = FALSE]
+  ex_trees <- dowser::getTrees(ex_clones)
+  ac <- ex_trees$data[[1]]
+  ac_df <- slot(ac, "data")
+  ac_df$c_call <- NULL
+  slot(ac, "data") <- ac_df
+  ex_trees$data[[1]] <- ac
+  db_airr <- as.data.frame(slot(ExampleClones$data[[1]], "data"))
+  db_airr$".plot_c_call" <- as.character(db_airr$c_call)
+  prepared_airr_rehydrate <- prepare_trees_tbl_for_plot(
+    ex_trees, "c_call", ".plot_c_call", db = db_airr, clones = ex_clones
+  )
+  assert_equal(prepared_airr_rehydrate$tips_field, "c_call", "airrClone rehydration restores c_call")
+  assert_true(is_airr_clone(prepared_airr_rehydrate$tbl$data[[1]]), "airrClone preserved after rehydration")
+  rehydrated_df <- slot(prepared_airr_rehydrate$tbl$data[[1]], "data")
+  assert_true("c_call" %in% names(rehydrated_df), "c_call present in airrClone data slot after rehydration")
+}
+
+# factor tip.label coerced before plotting
+phy_factor <- phy_min
+phy_factor$tip.label <- factor(c("s1", "s2"))
+trees_factor_tips <- data.frame(
+  clone_id = "c1",
+  trees = I(list(phy_factor)),
+  data = trees_ccall$data,
+  stringsAsFactors = FALSE
+)
+prepared_factor <- prepare_trees_tbl_for_plot(trees_factor_tips, "c_call", ".plot_c_call")
+assert_true(is.character(prepared_factor$tbl$trees[[1]]$tip.label), "phy tip.label coerced to character")
+
+# internal-node PNG gating skips trait node coloring on standard phylo trees
+p_internal <- list(
+  analysis_mode = "tree_with_internal_sequences",
+  tipsize = 2,
+  show_node_numbers = FALSE,
+  return_internal_sequences = TRUE
+)
+fig_internal <- render_tree_figures(trees_ccall, p_internal, ".plot_c_call", FALSE, "c_call")
+assert_true(!is.null(fig_internal$warnings), "internal mode emits guidance when node trait coloring unavailable")
+assert_true(
+  any(grepl("Internal node trait coloring skipped", fig_internal$warnings, fixed = TRUE)),
+  "internal-node PNG gating explains trait coloring limitation"
+)
+assert_true(
+  !any(grepl("and internal nodes:", fig_internal$warnings, fixed = TRUE)),
+  "internal-node gating avoids plotTrees internal-node failure"
+)
+
+# tip_size_by passes numeric column name to plotTrees for variable tip sizes
+if (requireNamespace("dowser", quietly = TRUE)) {
+  data(ExampleClones, package = "dowser", envir = environment())
+  ex_trees <- dowser::getTrees(ExampleClones[1, , drop = FALSE])
+  p_size <- list(analysis_mode = "tree_only", tipsize = 2, tip_size_by = "duplicate_count")
+  fig_size <- render_tree_figures(ex_trees, p_size, NULL, FALSE, "c_call")
+  assert_true(
+    !is.null(fig_size$figures_b64) && length(fig_size$figures_b64) > 0,
+    "tip_size_by duplicate_count renders PNG previews"
+  )
+}
 
 cat("\n")
 if (failures > 0) {

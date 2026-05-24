@@ -331,6 +331,7 @@ build_annotations <- function(trees_tbl, db, p, tip_col, plot_tip_col = NULL) {
 
     out <- data.frame(
       label = disp,
+      final_tip_label = tips,
       sequence_id = ifelse(is.na(jj), NA_character_, as.character(db$sequence_id[jj])),
       stringsAsFactors = FALSE
     )
@@ -342,6 +343,20 @@ build_annotations <- function(trees_tbl, db, p, tip_col, plot_tip_col = NULL) {
     for (fld in parse_vec(p$annotation_fields)) {
       if (fld %in% names(db)) {
         out[[fld]] <- ifelse(is.na(jj), NA_character_, as.character(db[[fld]][jj]))
+      }
+    }
+
+    num_fields <- unique(c(
+      parse_vec(p$numeric_annotation_fields),
+      "duplicate_count",
+      "umi_count",
+      "clone_count",
+      "consensus_count"
+    ))
+    for (fld in num_fields) {
+      if (fld %in% names(db)) {
+        vals <- suppressWarnings(as.numeric(db[[fld]][jj]))
+        out[[fld]] <- ifelse(is.na(jj), NA_real_, vals)
       }
     }
 

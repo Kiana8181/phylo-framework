@@ -185,11 +185,36 @@ function splitByHighlight(text: string, highlight: string): Array<{ text: string
   return parts.length ? parts : [{ text, highlight: false }];
 }
 
+function resolveNodeDisplayLabel(
+  node: LineagePlotNode,
+  attrs: NodeAttrs | undefined,
+  displayIdField: string | null | undefined,
+  showInternalNodes: boolean,
+  showNodeNumbers: boolean,
+): string {
+  if (!node.isLeaf && showInternalNodes) {
+    const nodeId = String(attrs?.node_id ?? "").trim();
+    const seq = String(attrs?.sequence ?? "").trim();
+    const nodeNum = attrs?.nodeNumber ?? attrs?.node;
+    if (showNodeNumbers && nodeNum != null && String(nodeNum).trim()) {
+      const numLabel = `#${nodeNum}`;
+      if (nodeId) return `${numLabel} ${nodeId}`;
+      if (seq) return `${numLabel} ${seq.slice(0, 12)}`;
+      return numLabel;
+    }
+    if (nodeId) return nodeId;
+    if (seq) return seq.length > 16 ? `${seq.slice(0, 16)}…` : seq;
+  }
+  return resolveDisplayLabel(node, attrs, displayIdField);
+}
+
 function buildLayout(
   lineagePlot: LineagePlot,
   nodeAttributes: Record<string, NodeAttrs> | undefined,
   displayIdField: string | null | undefined,
   showLabels: boolean,
+  showInternalNodes: boolean,
+  showNodeNumbers: boolean,
 ): LayoutResult {
   const warnings: LayoutWarning[] = [];
   let invalidNodeCount = 0;
@@ -286,7 +311,13 @@ function buildLayout(
     const attrs = resolveNodeAttrs(node, nodeAttributes);
     const abundance = toAbundance(node.abundance ?? attrs?.abundance, 1);
     const radius = radiusForAbundance(abundance, minAbundance, maxAbundance);
-    const displayLabel = resolveDisplayLabel(node, attrs, displayIdField);
+    const displayLabel = resolveNodeDisplayLabel(
+      node,
+      attrs,
+      displayIdField,
+      showInternalNodes,
+      showNodeNumbers,
+    );
     return {
       id: node.id,
       label: node.label,
@@ -316,8 +347,8 @@ function buildLayout(
   const maxChars = leafLabels.length ? Math.max(...leafLabels.map((label) => label.length)) : 0;
   const labelWidth = clamp(maxChars * LABEL_CHAR_WIDTH, MIN_LABEL_AREA, MAX_LABEL_AREA);
   const maxLabelChars = Math.max(1, Math.floor(labelWidth / LABEL_CHAR_WIDTH));
-  const labelAreaWidth = showLabels ? LABEL_PAD + labelWidth : 0;
-  if (showLabels) maxX += labelAreaWidth;
+  const labelAreaWidth = showLabels || showInternalNodes ? LABEL_PAD + labelWidth : 0;
+  if (showLabels || showInternalNodes) maxX += labelAreaWidth;
 
   const offsetX = PAD - minX;
   const offsetY = PAD - minY;
@@ -332,8 +363,8 @@ function buildLayout(
     (acc, node) => Math.max(acc, node.x + node.radius),
     Number.NEGATIVE_INFINITY,
   );
-  const labelX = showLabels ? plotRightX + LABEL_PAD : 0;
-  const connectorX = showLabels ? Math.round(labelX) - LABEL_CONNECTOR_GAP : 0;
+  const labelX = showLabels || showInternalNodes ? plotRightX + LABEL_PAD : 0;
+  const connectorX = showLabels || showInternalNodes ? Math.round(labelX) - LABEL_CONNECTOR_GAP : 0;
 
   const renderEdges: RenderEdge[] = edges.map((edge, idx) => {
     const source = coords.get(edge.source);
@@ -373,6 +404,8 @@ export default function LineageSVG({
   nodeAttributes,
   displayIdField,
   showLabels = true,
+  showInternalNodes = false,
+  showNodeNumbers = false,
   filename = "tree",
   newickText,
   highlightText,
@@ -381,6 +414,8 @@ export default function LineageSVG({
   nodeAttributes?: Record<string, NodeAttrs>;
   displayIdField?: string | null;
   showLabels?: boolean;
+  showInternalNodes?: boolean;
+  showNodeNumbers?: boolean;
   filename?: string;
   newickText?: string | null;
   highlightText?: string | null;
@@ -389,8 +424,16 @@ export default function LineageSVG({
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
 
   const layout = useMemo(
-    () => buildLayout(lineagePlot, nodeAttributes, displayIdField, showLabels),
-    [displayIdField, lineagePlot, nodeAttributes, showLabels],
+    () =>
+      buildLayout(
+        lineagePlot,
+        nodeAttributes,
+        displayIdField,
+        showLabels,
+        showInternalNodes ?? false,
+        showNodeNumbers ?? false,
+      ),
+    [displayIdField, lineagePlot, nodeAttributes, showInternalNodes, showLabels, showNodeNumbers],
   );
 
   useEffect(() => {
@@ -539,7 +582,7 @@ export default function LineageSVG({
                   >
                     <title>{node.title}</title>
                   </circle>
-                  {showLabels && node.isLeaf && (
+                  {((showLabels && node.isLeaf) || (showInternalNodes && !node.isLeaf)) && (
                     <g>
                       <line
                         x1={node.x}
