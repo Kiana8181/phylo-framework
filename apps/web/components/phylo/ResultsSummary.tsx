@@ -313,7 +313,17 @@ export default function ResultsSummary({
           </div>
           <div className="px-4 py-3 text-xs space-y-1 text-muted-foreground">
             {dowserInputQc?.n_input_rows != null && (
-              <div>Input rows: {dowserInputQc.n_input_rows} → working: {dowserInputQc.n_working_rows ?? "—"}</div>
+              <div>
+                Input rows: {dowserInputQc.n_input_rows} → working: {dowserInputQc.n_working_rows ?? "—"}
+              </div>
+            )}
+            {dowserInputQc?.n_clones_input != null && (
+              <div>
+                Input clones: {dowserInputQc.n_clones_input} → working: {dowserInputQc.n_clones_working ?? "—"}
+              </div>
+            )}
+            {dowserInputQc?.n_duplicate_sequence_id != null && dowserInputQc.n_duplicate_sequence_id > 0 && (
+              <div>Duplicate sequence IDs: {dowserInputQc.n_duplicate_sequence_id}</div>
             )}
             {dowserInputQc?.n_length_mismatch != null && dowserInputQc.n_length_mismatch > 0 && (
               <div className="text-yellow-800 dark:text-yellow-200">

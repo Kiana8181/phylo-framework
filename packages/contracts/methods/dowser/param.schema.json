@@ -103,7 +103,13 @@
     "numeric_annotation_fields": { "type": "string", "default": "", "title": "Numeric annotation columns" },
     "columns": { "type": "string", "default": "", "title": "Additional columns to retain" },
     "unknown_value": { "type": "string", "default": "unknown", "title": "Unknown fill (plotting only)" },
-    "tipsize": { "type": "number", "default": 2, "title": "Tip size" },
+    "tipsize": { "type": "number", "default": 2, "title": "Tip size (constant)" },
+    "tip_size_by": {
+      "type": "string",
+      "default": "",
+      "title": "Scale tip size by (column)",
+      "description": "Numeric metadata column for variable tip sizes in Method Output PNG (e.g. duplicate_count). Overrides constant tipsize when the column is present after formatClones."
+    },
     "max_tip_categories": { "type": "integer", "default": 30, "title": "Max tip categories" },
 
     "return_internal_sequences": { "type": "boolean", "default": false, "title": "Return internal sequences" },
