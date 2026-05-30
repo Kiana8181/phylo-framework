@@ -337,94 +337,291 @@ is_truthy <- function(x) {
   !is.na(x) && x %in% c(TRUE, "T", "true", "1", 1)
 }
 
-validate_igphyml_sequences <- function(db, id_col = "sequence_id", clone_col = "clone_id", seq_col = "sequence_alignment") {
+has_airr_validity_fields <- function(db) {
+  any(c("productive", "vj_in_frame", "stop_codon", "complete_vdj") %in% names(db))
+}
+
+detect_stops_and_frame <- function(db, seq_col = "sequence_alignment") {
+  n <- nrow(db)
+  frame_bad <- rep(FALSE, n)
+  stop_bad <- rep(FALSE, n)
+  if (!seq_col %in% names(db) || n == 0) {
+    return(list(frame_bad = frame_bad, stop = stop_bad))
+  }
+  gap_re <- "[-\\.\\s]"
+  x <- toupper(gsub(gap_re, "", as.character(db[[seq_col]]), perl = TRUE))
+  x[is.na(x)] <- ""
+  frame_bad <- (nchar(x) %% 3) != 0 & nzchar(x)
+  ok <- !frame_bad & nzchar(x)
+  if (any(ok) && requireNamespace("Biostrings", quietly = TRUE)) {
+    aa <- Biostrings::translate(Biostrings::DNAStringSet(x[ok]), if.fuzzy.codon = "X")
+    stop_bad[ok] <- grepl("\\*", as.character(aa))
+  }
+  list(frame_bad = frame_bad, stop = stop_bad)
+}
+
+build_igphyml_validation_record <- function(db, i, reasons, id_col = "sequence_id", clone_col = "clone_id") {
+  list(
+    row = i,
+    sequence_id = if (id_col %in% names(db)) as.character(db[[id_col]][i]) else NA_character_,
+    clone_id = if (clone_col %in% names(db)) as.character(db[[clone_col]][i]) else NA_character_,
+    reason = paste(unique(reasons), collapse = ";")
+  )
+}
+
+truncate_igphyml_records <- function(records, max_n = 100L) {
+  truncated <- length(records) > max_n
+  if (truncated) records <- records[seq_len(max_n)]
+  list(records = records, truncated = truncated)
+}
+
+validate_igphyml_structural <- function(db, seq_col, germ_col, id_col, clone_col) {
+  n <- nrow(db)
+  if (n == 0) return(list(ok = TRUE, structural_idx = logical(0), reason_map = list()))
+
+  missing_cols <- setdiff(c(seq_col, germ_col), names(db))
+  if (length(missing_cols)) {
+    return(list(
+      ok = FALSE,
+      error = sprintf(
+        "IgPhyML requires columns %s and %s (missing: %s).",
+        seq_col, germ_col, paste(missing_cols, collapse = ", ")
+      ),
+      records = list(),
+      bad_count = n
+    ))
+  }
+
+  structural_idx <- rep(FALSE, n)
+  reason_map <- vector("list", n)
+  usable_idx <- rep(FALSE, n)
+
+  add_structural_reason <- function(i, reason) {
+    structural_idx[i] <<- TRUE
+    reason_map[[i]] <<- unique(c(reason_map[[i]] %||% character(0), reason))
+  }
+
+  for (i in seq_len(n)) {
+    seq_val <- db[[seq_col]][i]
+    germ_val <- db[[germ_col]][i]
+    seq_chr <- as.character(seq_val)
+    germ_chr <- as.character(germ_val)
+
+    if (is.na(seq_val) || !nzchar(trimws(seq_chr))) {
+      add_structural_reason(i, "missing_sequence_alignment")
+      next
+    }
+    if (is.na(germ_val) || !nzchar(trimws(germ_chr))) {
+      add_structural_reason(i, "missing_germline_alignment_d_mask")
+      next
+    }
+    if (!is.atomic(seq_val) || !is.atomic(germ_val)) {
+      add_structural_reason(i, "invalid_alignment_type")
+      next
+    }
+    if (nchar(seq_chr) != nchar(germ_chr)) {
+      add_structural_reason(i, "length_mismatch")
+      next
+    }
+    usable_idx[i] <- TRUE
+  }
+
+  if (any(structural_idx)) {
+    bad_rows <- which(structural_idx)
+    records <- lapply(bad_rows, function(i) {
+      build_igphyml_validation_record(db, i, reason_map[[i]], id_col, clone_col)
+    })
+    tr <- truncate_igphyml_records(records)
+    return(list(
+      ok = FALSE,
+      error = sprintf(
+        "IgPhyML sequence validation found %d unusable alignment records.",
+        sum(structural_idx)
+      ),
+      records = tr$records,
+      bad_count = sum(structural_idx),
+      truncated = tr$truncated
+    ))
+  }
+
+  list(ok = TRUE, structural_idx = structural_idx, reason_map = reason_map, usable_idx = usable_idx)
+}
+
+build_igphyml_heuristic_warnings <- function(db, seq_col, id_col, clone_col) {
+  heuristic <- detect_stops_and_frame(db, seq_col)
+  frame_bad <- which(heuristic$frame_bad)
+  stop_bad <- which(heuristic$stop)
+  warnings <- character(0)
+  records <- list()
+
+  if (length(frame_bad)) {
+    warnings <- c(
+      warnings,
+      sprintf(
+        "Heuristic IgPhyML frame check found %d sequences whose ungapped length is not divisible by 3. These were not rejected because AIRR frame validity fields are absent.",
+        length(frame_bad)
+      )
+    )
+    records <- c(
+      records,
+      lapply(frame_bad, function(i) {
+        build_igphyml_validation_record(db, i, "heuristic_out_of_frame", id_col, clone_col)
+      })
+    )
+  }
+  if (length(stop_bad)) {
+    warnings <- c(
+      warnings,
+      sprintf(
+        "Heuristic IgPhyML stop-codon check found %d sequences with translated stop codons. These were not rejected because AIRR stop_codon field is absent.",
+        length(stop_bad)
+      )
+    )
+    records <- c(
+      records,
+      lapply(stop_bad, function(i) {
+        build_igphyml_validation_record(db, i, "heuristic_stop_codon", id_col, clone_col)
+      })
+    )
+  }
+  if (length(warnings)) {
+    warnings <- c(
+      "AIRR validity fields were not present; heuristic IgPhyML sequence checks were reported as warnings only.",
+      warnings
+    )
+  }
+  tr <- truncate_igphyml_records(records)
+  list(
+    warnings = warnings,
+    details = list(
+      heuristic_warning_records = tr$records,
+      heuristic_warning_truncated = tr$truncated,
+      used_authoritative_airr_fields = FALSE
+    )
+  )
+}
+
+validate_igphyml_sequences <- function(
+  db,
+  id_col = "sequence_id",
+  clone_col = "clone_id",
+  seq_col = "sequence_alignment",
+  germ_col = "germline_alignment_d_mask"
+) {
   n <- nrow(db)
   if (n == 0) return(list(ok = TRUE))
 
-  airr_fields <- c("productive", "vj_in_frame", "stop_codon", "complete_vdj")
-  has_airr <- any(airr_fields %in% names(db))
+  structural <- validate_igphyml_structural(db, seq_col, germ_col, id_col, clone_col)
+  if (isFALSE(structural$ok)) {
+    return(list(
+      ok = FALSE,
+      error = structural$error,
+      step = "dowser.preflight.igphyml.sequence_validity",
+      details = list(
+        records = structural$records,
+        summary = list(n_structural = structural$bad_count),
+        truncated = structural$truncated %||% FALSE,
+        used_authoritative_airr_fields = FALSE
+      )
+    ))
+  }
 
+  has_airr <- has_airr_validity_fields(db)
   bad_idx <- rep(FALSE, n)
   reason_map <- vector("list", n)
+  warnings <- character(0)
+  complete_vdj_warn_records <- list()
+  details <- list()
 
-  add_reason <- function(idx, reason) {
+  add_reason <- function(idx, reason, hard = TRUE) {
     if (!length(idx)) return(invisible(NULL))
-    bad_idx[idx] <<- TRUE
+    if (hard) bad_idx[idx] <<- TRUE
     for (i in idx) {
       reason_map[[i]] <<- unique(c(reason_map[[i]] %||% character(0), reason))
     }
   }
 
-  if ("productive" %in% names(db)) {
-    add_reason(which(vapply(db$productive, is_falsey, logical(1))), "productive=false")
-  }
-  if ("vj_in_frame" %in% names(db)) {
-    add_reason(which(vapply(db$vj_in_frame, is_falsey, logical(1))), "vj_in_frame=false")
-  }
-  if ("stop_codon" %in% names(db)) {
-    add_reason(which(vapply(db$stop_codon, is_truthy, logical(1))), "stop_codon=true")
-  }
-  if ("complete_vdj" %in% names(db)) {
-    add_reason(which(vapply(db$complete_vdj, is_falsey, logical(1))), "complete_vdj=false")
-  }
-
-  if (!has_airr && seq_col %in% names(db)) {
-    gap_re <- "[-\\.\\s]"
-    x <- toupper(gsub(gap_re, "", as.character(db[[seq_col]]), perl = TRUE))
-    x[is.na(x)] <- ""
-    frame_bad <- (nchar(x) %% 3) != 0 & nzchar(x)
-    stop_bad <- rep(FALSE, n)
-    ok <- !frame_bad & nzchar(x)
-    if (any(ok) && requireNamespace("Biostrings", quietly = TRUE)) {
-      aa <- Biostrings::translate(Biostrings::DNAStringSet(x[ok]), if.fuzzy.codon = "X")
-      stop_bad[ok] <- grepl("\\*", as.character(aa))
+  if (has_airr) {
+    if ("productive" %in% names(db)) {
+      add_reason(which(vapply(db$productive, is_falsey, logical(1))), "productive=false")
     }
-    add_reason(which(stop_bad), "heuristic_stop_codon")
-    add_reason(which(frame_bad), "heuristic_out_of_frame")
-  }
-
-  if (!any(bad_idx)) {
-    if (!has_airr) {
-      return(list(
-        ok = TRUE,
-        warnings = "IgPhyML sequence validity fields were not present; only conservative checks were applied."
-      ))
+    if ("vj_in_frame" %in% names(db)) {
+      add_reason(which(vapply(db$vj_in_frame, is_falsey, logical(1))), "vj_in_frame=false")
     }
-    return(list(ok = TRUE))
+    if ("stop_codon" %in% names(db)) {
+      add_reason(which(vapply(db$stop_codon, is_truthy, logical(1))), "stop_codon=true")
+    }
+    if ("complete_vdj" %in% names(db)) {
+      cv_idx <- which(vapply(db$complete_vdj, is_falsey, logical(1)))
+      if (length(cv_idx)) {
+        complete_vdj_warn_records <- lapply(cv_idx, function(i) {
+          build_igphyml_validation_record(db, i, "complete_vdj=false", id_col, clone_col)
+        })
+        warnings <- c(
+          warnings,
+          sprintf(
+            "Found %d sequences with complete_vdj=false; reported as warnings (IgPhyML does not require complete VDJ in this service).",
+            length(cv_idx)
+          )
+        )
+      }
+    }
+    details$used_authoritative_airr_fields <- TRUE
+  } else {
+    heur <- build_igphyml_heuristic_warnings(db, seq_col, id_col, clone_col)
+    warnings <- heur$warnings
+    details <- heur$details
   }
 
-  bad_rows <- which(bad_idx)
-  records <- lapply(bad_rows, function(i) {
-    list(
-      sequence_id = if (id_col %in% names(db)) as.character(db[[id_col]][i]) else NA_character_,
-      clone_id = if (clone_col %in% names(db)) as.character(db[[clone_col]][i]) else NA_character_,
-      reason = paste(reason_map[[i]], collapse = ";")
+  if (any(bad_idx)) {
+    bad_rows <- which(bad_idx)
+    records <- lapply(bad_rows, function(i) {
+      build_igphyml_validation_record(db, i, reason_map[[i]], id_col, clone_col)
+    })
+    summary <- list(
+      n_stop_codon = sum(vapply(records, function(r) grepl("stop_codon=true", r$reason), logical(1))),
+      n_vj_out_of_frame = sum(vapply(records, function(r) grepl("vj_in_frame=false", r$reason), logical(1))),
+      n_non_productive = sum(vapply(records, function(r) grepl("productive=false", r$reason), logical(1))),
+      n_incomplete_vdj = length(complete_vdj_warn_records)
     )
-  })
-
-  summary <- list(
-    n_stop_codon = sum(vapply(records, function(r) grepl("stop_codon=true", r$reason), logical(1))),
-    n_vj_out_of_frame = sum(vapply(records, function(r) grepl("vj_in_frame=false", r$reason), logical(1))),
-    n_non_productive = sum(vapply(records, function(r) grepl("productive=false", r$reason), logical(1))),
-    n_incomplete_vdj = sum(vapply(records, function(r) grepl("complete_vdj=false", r$reason), logical(1)))
-  )
-
-  truncated <- length(records) > 100
-  if (truncated) records <- records[1:100]
-
-  list(
-    ok = FALSE,
-    error = sprintf(
-      "IgPhyML requires productive in-frame sequences without in-frame stop codons. Found %d problematic records.",
-      sum(bad_idx)
-    ),
-    step = "dowser.preflight.igphyml.sequence_validity",
-    details = list(
-      records = records,
-      summary = summary,
-      truncated = truncated
+    tr <- truncate_igphyml_records(records)
+    out <- list(
+      ok = FALSE,
+      error = sprintf(
+        "IgPhyML requires productive in-frame sequences without in-frame stop codons. Found %d problematic records.",
+        sum(bad_idx)
+      ),
+      step = "dowser.preflight.igphyml.sequence_validity",
+      details = list(
+        records = tr$records,
+        summary = summary,
+        truncated = tr$truncated,
+        used_authoritative_airr_fields = TRUE
+      )
     )
-  )
+    if (length(complete_vdj_warn_records)) {
+      tr_cv <- truncate_igphyml_records(complete_vdj_warn_records)
+      out$details$complete_vdj_warning_records <- tr_cv$records
+      out$details$complete_vdj_warning_truncated <- tr_cv$truncated
+    }
+    if (length(warnings)) out$warnings <- warnings
+    return(out)
+  }
+
+  if (length(complete_vdj_warn_records)) {
+    tr_cv <- truncate_igphyml_records(complete_vdj_warn_records)
+    details$complete_vdj_warning_records <- tr_cv$records
+    details$complete_vdj_warning_truncated <- tr_cv$truncated
+    details$summary <- list(n_incomplete_vdj = length(complete_vdj_warn_records))
+  }
+
+  if (length(warnings)) {
+    return(list(ok = TRUE, warnings = warnings, details = details))
+  }
+  if (length(details)) {
+    return(list(ok = TRUE, details = details))
+  }
+  list(ok = TRUE)
 }
 
 clone_meta_data_frame <- function(meta) {

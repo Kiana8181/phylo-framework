@@ -166,24 +166,73 @@ igv <- validate_igphyml_sequences(db_ig)
 assert_true(!isTRUE(igv$ok), "stop_codon=true triggers IgPhyML validation error")
 assert_true(length(igv$details$records) >= 1, "problematic records listed")
 assert_true(!is.null(igv$details$summary), "summary included")
+assert_true(isTRUE(igv$details$used_authoritative_airr_fields), "authoritative AIRR fields flagged for stop_codon")
 
 db_ig2 <- db_junc
 db_ig2$vj_in_frame <- c(TRUE, FALSE, TRUE)
 igv2 <- validate_igphyml_sequences(db_ig2)
 assert_true(!isTRUE(igv2$ok), "vj_in_frame=false triggers validation error")
 assert_true(any(grepl("vj_in_frame=false", vapply(igv2$details$records, function(r) r$reason, character(1)))), "vj_in_frame reason present")
+assert_true(isTRUE(igv2$details$used_authoritative_airr_fields), "authoritative AIRR fields flagged for vj_in_frame")
 
 db_ig3 <- db_junc
 db_ig3$productive <- c(TRUE, FALSE, TRUE)
 igv3 <- validate_igphyml_sequences(db_ig3)
 assert_true(!isTRUE(igv3$ok), "productive=false triggers validation error")
+assert_true(isTRUE(igv3$details$used_authoritative_airr_fields), "authoritative AIRR fields flagged for productive")
 
 db_ig4 <- db_junc
-db_ig4$sequence_alignment <- c("ACGTACGTA", "ACGTACGTA", "ACGTACGTA")
-db_ig4$germline_alignment_d_mask <- c("ACGTACGTA", "ACGTACGTA", "ACGTACGTA")
+db_ig4$complete_vdj <- c(TRUE, FALSE, TRUE)
 igv4 <- validate_igphyml_sequences(db_ig4)
-assert_true(isTRUE(igv4$ok), "no validity fields returns ok with warning")
-assert_true(!is.null(igv4$warnings), "warning when AIRR validity fields absent")
+assert_true(isTRUE(igv4$ok), "complete_vdj=false is warning-only")
+assert_true(length(igv4$warnings %||% character(0)) >= 1, "complete_vdj=false produces warning")
+assert_true(any(grepl("complete_vdj", igv4$warnings, ignore.case = TRUE)), "complete_vdj mentioned in warning")
+
+db_ig5 <- db_junc
+n_before <- nrow(db_ig5)
+igv5 <- validate_igphyml_sequences(db_ig5)
+assert_true(isTRUE(igv5$ok), "ungapped length not mod 3 returns ok without AIRR fields")
+assert_equal(nrow(db_ig5), n_before, "validation does not drop rows (frame heuristic)")
+assert_true(length(igv5$warnings %||% character(0)) >= 1, "frame heuristic warning emitted")
+assert_true(isFALSE(igv5$details$used_authoritative_airr_fields), "heuristic path marks non-authoritative")
+assert_true(length(igv5$details$heuristic_warning_records %||% list()) >= 1, "heuristic records included")
+
+db_ig6 <- db_junc
+db_ig6$sequence_alignment <- c("AAATAATAA", "ACGTACGA", "ACGTACGC")
+db_ig6$germline_alignment_d_mask <- c("AAATAATAA", "ACGTACGT", "ACGTACGT")
+igv6 <- validate_igphyml_sequences(db_ig6)
+assert_true(isTRUE(igv6$ok), "heuristic stop codon returns ok without AIRR fields")
+assert_true(any(grepl("stop-codon", igv6$warnings, ignore.case = TRUE)), "stop heuristic warning emitted")
+
+db_ig7 <- db_junc
+db_ig7$sequence_alignment <- c("ACGTACGT", NA, "ACGTACGC")
+igv7 <- validate_igphyml_sequences(db_ig7)
+assert_true(!isTRUE(igv7$ok), "missing sequence_alignment fails in IgPhyML validator")
+assert_equal(igv7$step, "dowser.preflight.igphyml.sequence_validity", "structural failure step")
+
+db_ig8 <- db_junc
+db_ig8$germline_alignment_d_mask <- c("ACGTACGT", "", "ACGTACGT")
+igv8 <- validate_igphyml_sequences(db_ig8)
+assert_true(!isTRUE(igv8$ok), "empty germline_alignment_d_mask fails in IgPhyML validator")
+
+db_ig9 <- db_junc
+db_ig9$sequence_alignment <- c("ACGTACGTA", "ACGTACGTA", "ACGTACGTA")
+db_ig9$germline_alignment_d_mask <- c("ACGTACGTA", "ACGTACGTA", "ACGTACGTA")
+igv9 <- validate_igphyml_sequences(db_ig9)
+assert_true(isTRUE(igv9$ok), "clean alignments without AIRR fields return ok")
+assert_true(isFALSE(igv9$details$used_authoritative_airr_fields %||% TRUE), "no AIRR fields uses heuristic metadata flag")
+
+db_ig10 <- db_junc
+db_ig10$stop_codon <- c(FALSE, TRUE, FALSE)
+igv10 <- validate_igphyml_sequences(db_ig10)
+assert_true(!isTRUE(igv10$ok), "IgPhyML validation failure does not imply ok")
+assert_true(!identical(igv10$ok, "igphyml"), "no tree_build fallback encoded in validation result")
+
+db_ig11 <- db_junc
+db_ig11$sequence_alignment <- c("AAATAATAA", "ACGT", "ACGTACGC")
+db_ig11$germline_alignment_d_mask <- c("AAATAATAA", "ACGT", "ACGTACGT")
+heur_both <- build_igphyml_heuristic_warnings(db_ig11, "sequence_alignment", "sequence_id", "clone_id")
+assert_true(length(heur_both$warnings) >= 2, "frame and stop heuristics can both emit warnings")
 
 formatted_ok <- data.frame(
   clone_id = "c1",
