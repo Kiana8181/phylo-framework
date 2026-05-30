@@ -18,12 +18,20 @@
     "column_map.junction",
     "column_map.cell_id",
     "column_map.locus",
+    "column_map.v_region_start",
+    "column_map.v_region_end",
+    "column_map.j_region_start",
+    "column_map.j_region_end",
 
     "analysis_mode",
     "tree_build",
     "minseq",
     "nproc",
     "collapse_identical_sequences",
+    "trait_fields",
+    "mod3",
+    "filterstop",
+    "use_regions",
     "collapse_internal_nodes",
     "check_divergence",
     "label_field",
@@ -42,6 +50,7 @@
 
     "trait_field",
     "trait_model",
+    "modelfile",
     "permutations",
     "tip_switch",
     "permute_all",
@@ -54,8 +63,6 @@
 
     "partition_model",
     "return_igphyml_parameters",
-    "igphyml_exec",
-    "igphyml_motifs",
 
     "chain_mode",
     "heavy_locus",
@@ -67,6 +74,9 @@
     "time_permutations",
     "time_as_numeric"
   ],
+  "widgets": {
+    "modelfile": "textarea"
+  },
   "sections": [
     {
       "id": "inputMapping",
@@ -83,7 +93,11 @@
         "column_map.junction_length",
         "column_map.junction",
         "column_map.cell_id",
-        "column_map.locus"
+        "column_map.locus",
+        "column_map.v_region_start",
+        "column_map.v_region_end",
+        "column_map.j_region_start",
+        "column_map.j_region_end"
       ]
     },
     {
@@ -96,30 +110,48 @@
         "minseq",
         "nproc",
         "collapse_identical_sequences",
+        "trait_fields",
+        "mod3",
+        "filterstop",
+        "use_regions",
         "collapse_internal_nodes",
-        "check_divergence",
+        "check_divergence"
+      ]
+    },
+    {
+      "id": "outputPlotting",
+      "label": "Output & Plotting",
+      "order": 2,
+      "fields": [
         "label_field",
         "tip_color_by",
+        "unknown_value",
         "annotation_fields",
+        "numeric_annotation_fields",
+        "columns",
         "tipsize",
-        "tip_size_by"
+        "tip_size_by",
+        "max_tip_categories"
       ]
     },
     {
       "id": "internalSequences",
       "label": "Internal Sequences",
-      "order": 2,
+      "order": 3,
       "fields": ["return_internal_sequences", "show_node_numbers", "export_all_sequences_fasta"]
     },
     {
       "id": "dta",
       "label": "Discrete Trait Analysis",
-      "order": 3,
+      "order": 4,
       "fields": [
         "trait_field",
         "trait_model",
+        "modelfile",
         "permutations",
         "tip_switch",
+        "permute_all",
+        "alternative",
         "isotype_order",
         "isotype_exceptions",
         "run_test_ps",
@@ -130,19 +162,19 @@
     {
       "id": "igphyml",
       "label": "IgPhyML",
-      "order": 4,
-      "fields": ["partition_model", "return_igphyml_parameters", "igphyml_exec", "igphyml_motifs"]
+      "order": 5,
+      "fields": ["partition_model", "return_igphyml_parameters"]
     },
     {
       "id": "pairedChain",
       "label": "Paired H/L Chains",
-      "order": 5,
+      "order": 6,
       "fields": ["chain_mode", "heavy_locus", "split_light", "light_traits", "majoronly"]
     },
     {
       "id": "timeEvolution",
       "label": "Time Evolution",
-      "order": 6,
+      "order": 7,
       "fields": ["time_field", "time_permutations", "time_as_numeric"]
     }
   ],
@@ -157,10 +189,16 @@
     "column_map.junction": "your column → junction (optional)",
     "column_map.cell_id": "your column → cell_id (HL mode)",
     "column_map.locus": "your column → locus (HL mode)",
+    "column_map.v_region_start": "your column → v_region_start (use regions)",
+    "column_map.v_region_end": "your column → v_region_end (use regions)",
+    "column_map.j_region_start": "your column → j_region_start (use regions)",
+    "column_map.j_region_end": "your column → j_region_end (use regions)",
     "label_field": "display only; canonical Newick uses sequence_id",
     "tip_color_by": "empty = no coloring",
     "tip_size_by": "e.g. duplicate_count scales tip dot size in Method Output PNG",
-    "trait_field": "canonical column name after mapping, e.g. c_call"
+    "trait_field": "canonical column name after mapping, e.g. c_call",
+    "trait_fields": "optional extra trait columns to preserve during clone formatting",
+    "modelfile": "#BEGIN\n3\n\n#STATES\nA\nB\nC\n\n#CONSTRAINTS\nC A 1000\nC B 1000\n\n\n#AMBIGUOUS\nGERM A\nGERM B\nGERM C"
   },
   "visibility": {
     "column_map.sequence_id": { "when": { "doMapping": true } },
@@ -177,11 +215,24 @@
     "column_map.locus": {
       "whenAll": [{ "doMapping": true }, { "chain_mode": "HL" }]
     },
+    "column_map.v_region_start": {
+      "whenAll": [{ "doMapping": true }, { "use_regions": true }]
+    },
+    "column_map.v_region_end": {
+      "whenAll": [{ "doMapping": true }, { "use_regions": true }]
+    },
+    "column_map.j_region_start": {
+      "whenAll": [{ "doMapping": true }, { "use_regions": true }]
+    },
+    "column_map.j_region_end": {
+      "whenAll": [{ "doMapping": true }, { "use_regions": true }]
+    },
 
     "return_internal_sequences": {
       "whenAny": [
         { "analysis_mode": "tree_with_internal_sequences" },
-        { "analysis_mode": "tree_only" }
+        { "analysis_mode": "tree_only" },
+        { "analysis_mode": "discrete_trait_analysis" }
       ]
     },
     "show_node_numbers": {
@@ -194,6 +245,7 @@
 
     "trait_field": { "when": { "analysis_mode": "discrete_trait_analysis" } },
     "trait_model": { "when": { "analysis_mode": "discrete_trait_analysis" } },
+    "modelfile": { "when": { "analysis_mode": "discrete_trait_analysis" } },
     "permutations": { "when": { "analysis_mode": "discrete_trait_analysis" } },
     "tip_switch": { "when": { "analysis_mode": "discrete_trait_analysis" } },
     "permute_all": { "when": { "analysis_mode": "discrete_trait_analysis" } },
@@ -216,8 +268,11 @@
 
     "partition_model": { "when": { "tree_build": "igphyml" } },
     "return_igphyml_parameters": { "when": { "tree_build": "igphyml" } },
-    "igphyml_exec": { "when": { "tree_build": "igphyml" } },
-    "igphyml_motifs": { "when": { "tree_build": "igphyml" } },
+
+    "heavy_locus": { "when": { "chain_mode": "HL" } },
+    "split_light": { "when": { "chain_mode": "HL" } },
+    "light_traits": { "when": { "chain_mode": "HL" } },
+    "majoronly": { "when": { "chain_mode": "HL" } },
 
     "time_field": { "when": { "analysis_mode": "time_evolution" } },
     "time_permutations": { "when": { "analysis_mode": "time_evolution" } },

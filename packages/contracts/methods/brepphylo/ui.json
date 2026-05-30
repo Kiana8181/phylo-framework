@@ -34,6 +34,45 @@
     "isotype_column"
   ],
 
+  "sections": [
+    {
+      "id": "inputColumns",
+      "label": "Input Columns",
+      "order": 0,
+      "fields": ["sequence_column", "clone_id_column", "germline_id_column", "label_column"]
+    },
+    {
+      "id": "cloneSelection",
+      "label": "Clone Selection",
+      "order": 1,
+      "fields": ["which_clones", "ignore_clones", "min_clone_size"]
+    },
+    {
+      "id": "inputPreparation",
+      "label": "Input Preparation",
+      "order": 2,
+      "fields": ["input_sequence_mode", "algorithm", "species", "germline_set_text"]
+    },
+    {
+      "id": "treeInference",
+      "label": "Tree Inference",
+      "order": 3,
+      "fields": ["tree_type", "collapse_and_replace", "igphyml_accuracy", "make_alignment_pdf"]
+    },
+    {
+      "id": "outputPlots",
+      "label": "Output Plots",
+      "order": 4,
+      "fields": ["plot_type", "plot_format", "gather_plots"]
+    },
+    {
+      "id": "csrIsotypeAnalysis",
+      "label": "CSR / Isotype Analysis",
+      "order": 5,
+      "fields": ["enable_csr_analysis", "isotype_column"]
+    }
+  ],
+
   "widgets": {
     "germline_set_text": "textarea"
   },

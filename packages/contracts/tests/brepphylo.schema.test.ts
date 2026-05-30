@@ -10,6 +10,18 @@ function loadJson(name: string) {
   return JSON.parse(readFileSync(path.join(methodDir, name), "utf8"));
 }
 
+function sectionFieldMap(ui: { sections?: Array<{ id: string; fields?: string[] }> }) {
+  const fields = new Map<string, string[]>();
+
+  for (const section of ui.sections ?? []) {
+    for (const field of section.fields ?? []) {
+      fields.set(field, [...(fields.get(field) ?? []), section.id]);
+    }
+  }
+
+  return fields;
+}
+
 describe("BrepPhylo param.schema.json", () => {
   const param = loadJson("param.schema.json");
 
@@ -89,6 +101,34 @@ describe("BrepPhylo ui.json", () => {
     expect(ui.visibility.algorithm).toEqual({ when: { input_sequence_mode: "raw_sequence" } });
     expect(ui.visibility.germline_set_text).toEqual({ when: { species: "custom" } });
     expect(ui.visibility.isotype_column).toEqual({ when: { enable_csr_analysis: true } });
+  });
+
+  it("defines meaningful UI sections", () => {
+    const ids = (ui.sections ?? []).map((section: { id: string }) => section.id);
+
+    expect(ids).toEqual([
+      "inputColumns",
+      "cloneSelection",
+      "inputPreparation",
+      "treeInference",
+      "outputPlots",
+      "csrIsotypeAnalysis",
+    ]);
+  });
+
+  it("assigns every ordered field to exactly one section", () => {
+    const sectionFields = sectionFieldMap(ui);
+
+    for (const field of ui.order ?? []) {
+      expect(sectionFields.get(field), `${field} should be sectioned`).toHaveLength(1);
+    }
+
+    expect(sectionFields.get("sequence_column")).toEqual(["inputColumns"]);
+    expect(sectionFields.get("which_clones")).toEqual(["cloneSelection"]);
+    expect(sectionFields.get("algorithm")).toEqual(["inputPreparation"]);
+    expect(sectionFields.get("igphyml_accuracy")).toEqual(["treeInference"]);
+    expect(sectionFields.get("plot_type")).toEqual(["outputPlots"]);
+    expect(sectionFields.get("isotype_column")).toEqual(["csrIsotypeAnalysis"]);
   });
 
   it("does not order removed fields", () => {

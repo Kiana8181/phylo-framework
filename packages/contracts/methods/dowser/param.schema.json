@@ -61,6 +61,26 @@
           "type": "string",
           "title": "Locus column (paired H/L)",
           "default": ""
+        },
+        "v_region_start": {
+          "type": "string",
+          "title": "V region start column",
+          "default": ""
+        },
+        "v_region_end": {
+          "type": "string",
+          "title": "V region end column",
+          "default": ""
+        },
+        "j_region_start": {
+          "type": "string",
+          "title": "J region start column",
+          "default": ""
+        },
+        "j_region_end": {
+          "type": "string",
+          "title": "J region end column",
+          "default": ""
         }
       }
     },
@@ -77,20 +97,34 @@
       "default": "pratchet",
       "title": "Tree build method"
     },
-    "tree_model": {
-      "type": "string",
-      "enum": ["mp", "ml", "igphyml", "pratchet", "pml", "dnapars", "dnaml", "raxml"],
-      "title": "Tree model (deprecated alias for tree_build)"
-    },
 
     "minseq": { "type": "integer", "default": 3, "title": "Min seq/clone" },
     "nproc": { "type": "integer", "default": 1, "title": "Threads" },
-    "collapse_identical_sequences": { "type": "boolean", "default": true, "title": "Collapse identical sequences" },
+    "collapse_identical_sequences": {
+      "type": "boolean",
+      "default": true,
+      "title": "Collapse identical sequences"
+    },
     "collapse_internal_nodes": { "type": "boolean", "default": true, "title": "Collapse internal nodes" },
     "check_divergence": { "type": "boolean", "default": true, "title": "Check divergence" },
-    "mod3": { "type": "boolean", "default": false, "title": "Mod3 (formatClones)", "description": "When true, formatClones may apply mod3 codon filtering. Default false to avoid silent sequence removal." },
-    "filterstop": { "type": "boolean", "default": false, "title": "Filter stop codons (formatClones)", "description": "When true, formatClones may filter stop-codon sequences. Default false; IgPhyML preflight validates sequences explicitly." },
-    "use_regions": { "type": "boolean", "default": false, "title": "Use region columns (formatClones)", "description": "Opt-in region-aware formatting. Requires v/j region start/end columns." },
+    "mod3": {
+      "type": "boolean",
+      "default": false,
+      "title": "Pad to codon length (formatClones)",
+      "description": "When true, Dowser formatClones pads sequence ends to make lengths multiples of three. Default false in this framework to avoid changing sequence lengths unless requested."
+    },
+    "filterstop": {
+      "type": "boolean",
+      "default": false,
+      "title": "Remove stop-codon sequences (formatClones)",
+      "description": "When true, Dowser formatClones removes sequences with in-frame stop codons. Default false in this framework to avoid silent sequence removal."
+    },
+    "use_regions": {
+      "type": "boolean",
+      "default": false,
+      "title": "Use region columns (formatClones)",
+      "description": "When true, Dowser formatClones assigns CDR/FWR regions. Requires region start/end columns in the input."
+    },
 
     "label_field": {
       "type": "string",
@@ -112,12 +146,25 @@
     },
     "max_tip_categories": { "type": "integer", "default": 30, "title": "Max tip categories" },
 
-    "return_internal_sequences": { "type": "boolean", "default": false, "title": "Return internal sequences" },
+    "return_internal_sequences": {
+      "type": "boolean",
+      "default": false,
+      "title": "Return internal sequences"
+    },
     "show_node_numbers": { "type": "boolean", "default": false, "title": "Show node numbers in plot" },
-    "export_all_sequences_fasta": { "type": "boolean", "default": false, "title": "Export all sequences FASTA" },
+    "export_all_sequences_fasta": {
+      "type": "boolean",
+      "default": false,
+      "title": "Export all sequences FASTA"
+    },
 
     "trait_field": { "type": "string", "default": "", "title": "Trait field (DTA)" },
-    "trait_fields": { "type": "string", "default": "", "title": "Trait fields (advanced)" },
+    "trait_fields": {
+      "type": "string",
+      "default": "",
+      "title": "Trait columns to preserve (advanced)",
+      "description": "Optional comma- or space-separated columns passed to Dowser formatClones as traits, so identical sequences with different trait values are not collapsed together. In DTA mode, leave empty to use Trait field (DTA)."
+    },
     "trait_model": {
       "type": "string",
       "enum": ["unconstrained", "isotype_irreversible"],
@@ -141,14 +188,17 @@
 
     "partition_model": {
       "type": "string",
-      "enum": ["single", "cf", "hl", "hlcf"],
+      "enum": ["single", "cf", "hl", "hlf", "hlc", "hlcf"],
       "default": "single",
       "title": "IgPhyML partition model"
     },
     "return_igphyml_parameters": { "type": "boolean", "default": true, "title": "Return IgPhyML parameters" },
-    "igphyml_exec": { "type": "string", "default": "", "title": "IgPhyML executable path" },
-    "igphyml_motifs": { "type": "string", "default": "", "title": "IgPhyML motifs directory" },
-    "modelfile": { "type": "string", "default": "", "title": "Custom trait model file" },
+    "modelfile": {
+      "type": "string",
+      "default": "",
+      "title": "Custom trait model file",
+      "description": "Paste Dowser parsimony model-file content."
+    },
 
     "chain_mode": {
       "type": "string",

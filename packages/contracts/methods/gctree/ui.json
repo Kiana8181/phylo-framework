@@ -33,14 +33,41 @@
   "sections": [
     {
       "id": "inputMapping",
-      "label": "Input mapping",
+      "label": "Input & Mapping",
       "order": 0,
-      "fields": ["doMapping", "column_map.sequence_id", "column_map.sequence_alignment"]
+      "fields": [
+        "input_scenario",
+        "doMapping",
+        "column_map.sequence_id",
+        "column_map.sequence_alignment",
+        "root"
+      ]
+    },
+    {
+      "id": "inferenceRanking",
+      "label": "Inference & Ranking",
+      "order": 1,
+      "fields": ["frame", "top_n", "ranking_strategy", "quick", "jumble"]
+    },
+    {
+      "id": "outputRendering",
+      "label": "Output Rendering",
+      "order": 2,
+      "fields": [
+        "img_type",
+        "outbase",
+        "idlabel",
+        "show_nucleotide_mutations",
+        "summarize_forest",
+        "tree_stats",
+        "apply_coloring_settings",
+        "color_mode"
+      ]
     },
     {
       "id": "advanced",
       "label": "Advanced",
-      "order": 1,
+      "order": 3,
       "fields": ["frame2", "chain_split", "apply_isotype"]
     }
   ],
