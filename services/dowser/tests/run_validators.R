@@ -64,6 +64,8 @@ assert_true(failed, "missing junction_length and junction fails")
 # 4. removed filter params rejected via dowser_validation_error
 removed_msg <- reject_removed_params(list(apply_filters = TRUE, gap_policy = "remove"))
 assert_true(!is.null(removed_msg), "deprecated apply_filters rejected message exists")
+tree_model_msg <- reject_removed_params(list(tree_model = "mp"))
+assert_true(grepl("Use tree_build instead", tree_model_msg, fixed = TRUE), "deprecated tree_model rejected message exists")
 removed_err <- tryCatch(
   dowser_validation_error(removed_msg, step = "dowser.params.removed"),
   error = function(e) e
@@ -183,6 +185,22 @@ igv4 <- validate_igphyml_sequences(db_ig4)
 assert_true(isTRUE(igv4$ok), "no validity fields returns ok with warning")
 assert_true(!is.null(igv4$warnings), "warning when AIRR validity fields absent")
 
+formatted_ok <- data.frame(
+  clone_id = "c1",
+  data = I(list(db_ig[-2, , drop = FALSE])),
+  stringsAsFactors = FALSE
+)
+igv_formatted_ok <- validate_igphyml_sequences_after_format_clones(formatted_ok)
+assert_true(isTRUE(igv_formatted_ok$ok), "IgPhyML validation uses post-formatClones retained records")
+
+formatted_bad <- data.frame(
+  clone_id = "c1",
+  data = I(list(db_ig)),
+  stringsAsFactors = FALSE
+)
+igv_formatted_bad <- validate_igphyml_sequences_after_format_clones(formatted_bad)
+assert_true(!isTRUE(igv_formatted_bad$ok), "IgPhyML validation still fails retained bad records")
+
 # 16. dnapars/dnaml exec passed to getTrees args
 p_dn <- list(tree_build = "dnapars", analysis_mode = "tree_only", nproc = 1L, collapse_internal_nodes = TRUE, check_divergence = TRUE)
 pref <- list(phylip = list(exec = "/usr/local/bin/dnapars", tool = "dnapars"))
@@ -242,6 +260,9 @@ assert_true(isTRUE(validate_partition_model(list(tree_build = "igphyml", partiti
 assert_true(!isTRUE(validate_partition_model(list(tree_build = "pratchet", partition_model = "cf", chain_mode = "H"))$ok), "cf+pratchet rejected")
 assert_true(!isTRUE(validate_partition_model(list(tree_build = "igphyml", partition_model = "hl", chain_mode = "H"))$ok), "hl+H rejected")
 assert_true(isTRUE(validate_partition_model(list(tree_build = "igphyml", partition_model = "hl", chain_mode = "HL"))$ok), "hl+HL accepted")
+assert_true(!isTRUE(validate_partition_model(list(tree_build = "igphyml", partition_model = "hlf", chain_mode = "H"))$ok), "hlf+H rejected")
+assert_true(isTRUE(validate_partition_model(list(tree_build = "igphyml", partition_model = "hlf", chain_mode = "HL"))$ok), "hlf+HL accepted")
+assert_true(isTRUE(validate_partition_model(list(tree_build = "igphyml", partition_model = "hlc", chain_mode = "HL"))$ok), "hlc+HL accepted")
 
 # 21. multi-stage input_qc
 qc <- init_input_qc(db_trait, "clone_id", "sequence_id")
@@ -479,6 +500,27 @@ assert_true(".plot_tissue" %in% args_plot$text_fields, "plot-only column in text
 assert_true(".plot_tissue" %in% args_plot$columns, "plot-only column in columns")
 assert_true("tissue" %in% args_plot$text_fields, "original tip_col retained in text_fields")
 
+# 35b. numeric color-by column is not passed as text_fields when preserved as numeric
+db_numeric_plot <- db_junc
+db_numeric_plot$timepoint <- c(1, 2, 3)
+tc_numeric_plot <- prepare_tip_color_column(db_numeric_plot, "timepoint", "unknown")
+p_numeric_plot <- list(
+  analysis_mode = "time_evolution",
+  trait_field = NULL,
+  tip_color_by = "timepoint",
+  annotation_fields = tc_numeric_plot$plot_tip_col,
+  numeric_annotation_fields = "timepoint",
+  columns = tc_numeric_plot$plot_tip_col,
+  collapse_identical_sequences = TRUE,
+  mod3 = FALSE,
+  filterstop = FALSE,
+  use_regions = FALSE
+)
+args_numeric_plot <- build_format_clones_args(tc_numeric_plot$db, p_numeric_plot)
+assert_true(".plot_timepoint" %in% args_numeric_plot$text_fields, "numeric color-by plot column retained as text_fields")
+assert_true(!("timepoint" %in% args_numeric_plot$text_fields), "numeric color-by original excluded from text_fields")
+assert_true("timepoint" %in% args_numeric_plot$num_fields, "numeric color-by original retained as num_fields")
+
 # 36. .plot_* stripped from traits even if injected
 db_dta_plot <- db_junc
 db_dta_plot$c_call <- c("IGHM", "IGHG1", "IGHG1")
@@ -527,6 +569,150 @@ db_dta_ccall$c_call <- c("IGHM", "IGHG1", "IGHG1")
 db_dta_ccall$".plot_c_call" <- c("unknown", "IGHG1", "IGHG1")
 args_dta_ccall <- build_format_clones_args(db_dta_ccall, p_dta_ccall)
 assert_equal(args_dta_ccall$traits, "c_call", "DTA traits use original c_call")
+
+# 39. custom trait model textarea content is validated and wired into tree/DTA args
+model_text <- paste(c(
+  "#BEGIN",
+  "3",
+  "",
+  "#STATES",
+  "A",
+  "B",
+  "C",
+  "",
+  "#CONSTRAINTS",
+  "C A 1000",
+  "C B 1000",
+  "",
+  "",
+  "#AMBIGUOUS",
+  "GERM A",
+  "GERM B",
+  "GERM C"
+), collapse = "\n")
+mv <- validate_trait_modelfile_text(model_text)
+assert_true(isTRUE(mv$ok), "custom trait model text validates")
+tmp_model_dir <- tempfile("dowser_model_test_")
+dir.create(tmp_model_dir, showWarnings = FALSE)
+model_info <- resolve_trait_modelfile(list(modelfile = model_text), tmp_model_dir)
+assert_true(file.exists(model_info$path), "custom trait model text written to temp file")
+p_model <- list(
+  tree_build = "pratchet",
+  analysis_mode = "discrete_trait_analysis",
+  trait_field = "state",
+  modelfile = model_info$path,
+  nproc = 1L,
+  collapse_internal_nodes = TRUE,
+  check_divergence = TRUE,
+  permutations = 10L,
+  tip_switch = 5L
+)
+tree_args_model <- build_get_trees_args(list(), p_model, list(), tmp_model_dir, "run_model")
+assert_equal(tree_args_model$modelfile, model_info$path, "custom trait model passed to getTrees")
+switch_args_model <- build_find_switches_args(list(), p_model, model_info$path, list(), fixtrees = TRUE)
+assert_equal(switch_args_model$modelfile, model_info$path, "custom trait model passed to findSwitches")
+unlink(tmp_model_dir, recursive = TRUE)
+
+# 39. resolve_correlation_test_fn prefers exported correlationTest
+if (requireNamespace("dowser", quietly = TRUE)) {
+  fn_corr <- resolve_correlation_test_fn()
+  assert_true(is.function(fn_corr), "resolve_correlation_test_fn returns a function")
+  exports <- getNamespaceExports("dowser")
+  if ("correlationTest" %in% exports) {
+    assert_equal(fn_corr, getFromNamespace("correlationTest", "dowser"), "exported correlationTest preferred")
+  }
+}
+
+# 40. time_evolution auto-retains time_field in formatClones num_fields
+db_time <- db_junc
+db_time$timepoint <- c(1, 2, 3)
+p_time <- list(
+  analysis_mode = "time_evolution",
+  time_field = "timepoint",
+  collapse_identical_sequences = TRUE,
+  mod3 = FALSE,
+  filterstop = FALSE,
+  use_regions = FALSE
+)
+args_time <- build_format_clones_args(db_time, p_time)
+assert_true("timepoint" %in% args_time$num_fields, "time_field auto-retained for time_evolution")
+
+# 41. extract_time_evolution_results drops non-JSON object columns
+mock_time_res <- data.frame(
+  clone_id = "c1",
+  locus = "IGH",
+  seqs = 3L,
+  slope = 0.12,
+  p = 0.04,
+  correlation = 0.81,
+  random_correlation = 0.1,
+  min_p = 0.01,
+  nposs = 10,
+  nclust = 3L,
+  stringsAsFactors = FALSE
+)
+mock_time_res$data <- I(list(structure(list(), class = "airrClone")))
+mock_time_res$trees <- I(list(structure(list(), class = "phylo")))
+time_records <- extract_time_evolution_results(mock_time_res)
+assert_equal(length(time_records), 1L, "extract_time_evolution_results returns one row")
+assert_true(is.null(time_records[[1]]$data), "airrClone column omitted from time results")
+assert_true(is.null(time_records[[1]]$trees), "phylo column omitted from time results")
+assert_equal(time_records[[1]]$correlation, 0.81, "time stat columns retained")
+
+# 42. single-clone result keeps schema-required arrays when auto_unbox is disabled
+minimal_result <- prepare_dowser_result(list(
+  ok = TRUE,
+  trees = c("((A,B):0.1);"),
+  trees_detail = list(list(
+    clone_id = "c1",
+    canonical_newick = "((A,B):0.1);",
+    display_newick = NULL,
+    lineage_newick = "((A,B):0.1);",
+    tip_label_map = list(list(sequence_id = "s1", display_label = "s1")),
+    nodes = list(),
+    all_sequences = list(),
+    show_node_numbers = TRUE
+  )),
+  clones = list(clone_id = list("c1"), seqs = list(5L)),
+  annotations = list(data.frame(label = "s1", sequence_id = "s1", stringsAsFactors = FALSE)),
+  figures = list(phylogeny = list("cGFnZW5vbmU=")),
+  stats = list(
+    n_clones = 1L,
+    n_trees = 1L,
+    total_seqs = 5L,
+    analysis_mode = "tree_with_internal_sequences",
+    tree_build = "dnapars",
+    canonical_ids = "sequence_id"
+  ),
+  input_qc = list(),
+  data_provenance = list(),
+  discrete_trait_analysis = NULL,
+  time_evolution = NULL,
+  igphyml = NULL,
+  chain_qc = NULL,
+  artifacts = list(),
+  artifact_zip_b64 = list(clone_bundle_zip = NULL),
+  artifact_name = "dowser_artifacts.zip",
+  warnings = list(),
+  logs = list(),
+  render = NULL
+))
+minimal_json <- serialize_dowser_result(minimal_result)
+parsed_minimal <- jsonlite::fromJSON(minimal_json, simplifyVector = FALSE)
+assert_true(is.list(parsed_minimal$trees), "single tree serialized as JSON array")
+assert_equal(length(parsed_minimal$trees), 1L, "single tree array length preserved")
+assert_true(is.list(parsed_minimal$clones$clone_id), "single clone_id serialized as JSON array")
+assert_true(is.list(parsed_minimal$clones$seqs), "single seqs serialized as JSON array")
+assert_true(is.list(parsed_minimal$annotations), "single annotation entry serialized as JSON array")
+assert_true(is.list(parsed_minimal$figures$phylogeny), "single figure serialized as JSON array")
+contracts_dir <- Sys.getenv("CONTRACTS_DIR", file.path(root, "..", "..", "packages", "contracts"))
+schema_path <- file.path(contracts_dir, "methods", "dowser", "result.schema.json")
+if (file.exists(schema_path)) {
+  assert_true(
+    validate_dowser_result_contract(minimal_result, schema_path),
+    "single-clone minimal result passes result.schema.json"
+  )
+}
 
 cat("\n")
 if (failures > 0) {

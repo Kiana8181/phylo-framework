@@ -57,17 +57,21 @@ build_format_clones_args <- function(db, p) {
   tip_col <- p$tip_color_by
   if (is.character(tip_col) && length(tip_col) == 1 && !nzchar(tip_col)) tip_col <- NULL
 
-  text_keep <- unique(c(trait_fields, annotation_fields, tip_col))
-  text_keep <- intersect(text_keep, names(db))
-
   default_num <- c("duplicate_count", "umi_count", "clone_count", "consensus_count")
   user_num <- parse_vec(p$numeric_annotation_fields)
+  mode <- p$analysis_mode %||% "tree_only"
+  if (identical(mode, "time_evolution") && !is.null(p$time_field) && nzchar(p$time_field)) {
+    user_num <- unique(c(user_num, p$time_field))
+  }
   num_keep <- intersect(unique(c(default_num, user_num)), names(db))
+
+  text_keep <- unique(c(trait_fields, annotation_fields, tip_col))
+  text_keep <- intersect(text_keep, names(db))
+  text_keep <- setdiff(text_keep, num_keep)
 
   extra_columns <- unique(c(text_keep, num_keep, parse_vec(p$columns)))
   extra_columns <- intersect(extra_columns, names(db))
 
-  mode <- p$analysis_mode %||% "tree_only"
   use_traits <- if (identical(mode, "discrete_trait_analysis")) trait_fields else trait_fields
 
   args <- list(

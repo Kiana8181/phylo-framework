@@ -19,9 +19,6 @@ parse_dowser_params <- function(raw) {
     dowser_validation_error(build_res$error, step = "dowser.params.tree_build")
   }
   p$tree_build <- build_res$build
-  if (!is.null(p$tree_model) && is.null(p$tree_build)) {
-    p$tree_build <- build_res$build
-  }
 
   tc <- p$tip_color_by %||% NULL
   if (is.character(tc) && length(tc) == 1 && !nzchar(tc)) tc <- NULL
@@ -69,6 +66,8 @@ parse_dowser_params <- function(raw) {
   p$run_test_ps <- as_bool(p$run_test_ps, TRUE)
   p$run_test_sp <- as_bool(p$run_test_sp, TRUE)
   p$run_test_sc <- as_bool(p$run_test_sc, TRUE)
+  p$modelfile <- normalize_modelfile_text(p$modelfile %||% NULL)
+  p$modelfile_text <- normalize_modelfile_text(p$modelfile_text %||% NULL)
 
   p$partition_model <- normalize_col(p$partition_model, "single")
   p$return_igphyml_parameters <- as_bool(p$return_igphyml_parameters, TRUE)
@@ -272,14 +271,6 @@ run_handler_impl <- function(req, res) {
       preflight$igphyml <- ig_res
     }
 
-    if (identical(p$tree_build, "igphyml")) {
-      igv <- validate_igphyml_sequences(db_working)
-      if (!isTRUE(igv$ok)) {
-        return(fail_local(igv$error, step = igv$step, details = igv$details))
-      }
-      if (!is.null(igv$warnings)) warnings <- c(warnings, igv$warnings)
-    }
-
     fc <- run_format_clones(db_working, p)
     clones <- fc$clones
     chain_qc <- fc$chain_qc
@@ -287,6 +278,14 @@ run_handler_impl <- function(req, res) {
       return(fail_local(sprintf("No clones met minseq=%d.", p$minseq), step = "dowser.clones.format"))
     }
     input_qc$n_clones_after_formatClones <- nrow(clones)
+
+    if (identical(p$tree_build, "igphyml")) {
+      igv <- validate_igphyml_sequences_after_format_clones(clones)
+      if (!isTRUE(igv$ok)) {
+        return(fail_local(igv$error, step = igv$step, details = igv$details))
+      }
+      if (!is.null(igv$warnings)) warnings <- c(warnings, igv$warnings)
+    }
 
     data_provenance$transformations[[length(data_provenance$transformations) + 1]] <- list(
       action = "dowser_formatClones",
@@ -312,10 +311,24 @@ run_handler_impl <- function(req, res) {
     on.exit(unlink(tmpdir, recursive = TRUE), add = TRUE)
 
     modelfile_info <- NULL
-    if (identical(p$analysis_mode, "discrete_trait_analysis") &&
-        identical(p$trait_model, "isotype_irreversible")) {
-      modelfile_info <- build_trait_modelfile(p, tmpdir)
-      p$modelfile <- modelfile_info$path
+    if (identical(p$analysis_mode, "discrete_trait_analysis")) {
+      modelfile_info <- resolve_trait_modelfile(p, tmpdir)
+      if (is.null(modelfile_info) && identical(p$trait_model, "isotype_irreversible")) {
+        modelfile_info <- build_trait_modelfile(p, tmpdir)
+      }
+      if (!is.null(modelfile_info)) {
+        p$modelfile <- modelfile_info$path
+      }
+      if (isTRUE(p$collapse_internal_nodes) && !identical(p$tree_build, "igphyml")) {
+        p$collapse_internal_nodes <- FALSE
+        warnings <- c(warnings, paste(
+          "collapse_internal_nodes was disabled for discrete_trait_analysis with",
+          sprintf("tree_build='%s'", p$tree_build),
+          "because Dowser trait reconstruction can fail during collapseNodes."
+        ))
+      }
+    } else if (!is.null(p$modelfile) || !is.null(p$modelfile_text)) {
+      warnings <- c(warnings, "Custom trait model file is ignored unless analysis_mode is discrete_trait_analysis.")
     }
 
     tb <- run_get_trees(clones, p, preflight, tmpdir, basename(tmpdir))
@@ -361,7 +374,7 @@ run_handler_impl <- function(req, res) {
     requested_part <- p$partition_model %||% "single"
     effective_part <- if (identical(p$tree_build, "igphyml")) requested_part else "single"
     partition_supported <- identical(p$tree_build, "igphyml") &&
-      requested_part %in% c("single", "cf", "hl", "hlcf")
+      requested_part %in% PARTITION_MODEL_ENUM
     partition_output_detected <- any(c("partition", "parameters") %in% names(trees_tbl))
 
     stats <- list(
@@ -412,7 +425,7 @@ run_handler_impl <- function(req, res) {
 
     legacy_newicks <- vapply(trees_detail, function(x) x$canonical_newick, character(1))
 
-    result <- list(
+    result <- prepare_dowser_result(list(
       ok = TRUE,
       trees = unname(legacy_newicks),
       trees_detail = trees_detail,
@@ -432,13 +445,9 @@ run_handler_impl <- function(req, res) {
       warnings = as.list(as.character(unique(warnings))),
       logs = logs,
       render = fig$render
-    )
+    ))
 
-    if (!jsonvalidate::json_validate(
-      jsonlite::toJSON(result, auto_unbox = TRUE, null = "null"),
-      RESULT_SCHEMA_PATH,
-      verbose = TRUE
-    )) {
+    if (!validate_dowser_result_contract(result, RESULT_SCHEMA_PATH)) {
       return(fail_local("Result failed contract validation.", status = 500, step = "dowser.contract.validate"))
     }
 

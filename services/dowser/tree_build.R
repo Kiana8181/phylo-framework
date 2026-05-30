@@ -212,7 +212,7 @@ extract_igphyml_metadata <- function(trees_tbl, preflight, p) {
   effective <- if (identical(p$tree_build, "igphyml")) requested else "single"
   output_detected <- any(c("partition", "parameters") %in% names(trees_tbl))
   supported <- identical(p$tree_build, "igphyml") &&
-    requested %in% c("single", "cf", "hl", "hlcf")
+    requested %in% PARTITION_MODEL_ENUM
   warning_msg <- if (!output_detected && !identical(effective, "single")) {
     "Partition model was passed to Dowser/IgPhyML according to service validation, but no partition-specific output column was detected."
   } else {
