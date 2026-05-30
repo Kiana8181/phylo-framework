@@ -21,6 +21,16 @@ type VisibilityRule = {
   whenAny?: Array<Record<string, unknown>>;
 };
 
+type UiSection = {
+  id?: string;
+  key?: string;
+  name?: string;
+  title?: string;
+  label?: string;
+  order?: number | string;
+  fields?: unknown;
+};
+
 type JSONSchema = {
   type?: string;
   title?: string;
@@ -34,6 +44,7 @@ type JSONSchema = {
     placeholders?: Record<string, string>;
     widgets?: Record<string, FieldWidget>;
     visibility?: Record<string, VisibilityRule>;
+    sections?: unknown;
   };
 };
 
@@ -44,6 +55,108 @@ type LeafField = {
   path: string;
   def: JSONSchema;
 };
+
+export type FormSectionGroup = {
+  id: string;
+  label: string;
+  fields: string[];
+};
+
+const DEFAULT_SECTION_ID = "__parameters";
+const DEFAULT_SECTION_LABEL = "Parameters";
+
+function pickString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+function toOrder(value: unknown, fallback: number): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function toStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => (typeof item === "string" ? item : String(item)))
+    .filter((item) => item.trim().length > 0);
+}
+
+export function buildFormSectionGroups(
+  uiHints: JSONSchema["uiHints"] | undefined,
+  orderedFields: string[],
+  fieldNames?: Iterable<string>,
+): FormSectionGroup[] {
+  const rawSections = uiHints?.sections;
+  if (!rawSections) return [];
+
+  const validFields = new Set(fieldNames ?? orderedFields);
+  const normalizedOrder = orderedFields.filter((field) => validFields.has(field));
+  const sections: Array<FormSectionGroup & { order: number }> = [];
+  const sectionIds = new Set<string>();
+  const byField = new Map<string, string>();
+
+  const addSection = (
+    rawSection: UiSection | Record<string, unknown>,
+    fallbackId: string,
+    fallbackOrder: number,
+  ) => {
+    const sectionId = pickString(
+      rawSection.id,
+      rawSection.key,
+      rawSection.name,
+      rawSection.title,
+      fallbackId,
+    );
+    if (!sectionId || sectionIds.has(sectionId)) return;
+
+    const label = pickString(rawSection.label, rawSection.title, rawSection.name, sectionId) ?? sectionId;
+    const fields = toStringArray(rawSection.fields).filter((field) => validFields.has(field));
+    fields.forEach((field) => byField.set(field, sectionId));
+    sections.push({ id: sectionId, label, order: toOrder(rawSection.order, fallbackOrder), fields: [] });
+    sectionIds.add(sectionId);
+  };
+
+  if (Array.isArray(rawSections)) {
+    rawSections.forEach((rawSection, idx) => {
+      const sectionRec = asObject(rawSection);
+      if (sectionRec) addSection(sectionRec, `section-${idx}`, idx);
+    });
+  } else {
+    const sectionMap = asObject(rawSections);
+    if (sectionMap) {
+      Object.entries(sectionMap).forEach(([sectionId, rawValue], idx) => {
+        const sectionRec = asObject(rawValue) ?? {};
+        addSection({ ...sectionRec, id: sectionId }, sectionId, idx);
+      });
+    }
+  }
+
+  sections.sort((a, b) => a.order - b.order || a.label.localeCompare(b.label, "en"));
+  const groupsById = new Map(sections.map((section) => [section.id, section]));
+
+  for (const field of normalizedOrder) {
+    const sectionId = byField.get(field);
+    if (!sectionId) continue;
+    groupsById.get(sectionId)?.fields.push(field);
+  }
+
+  const fallbackFields = normalizedOrder.filter((field) => !byField.has(field));
+  const groups = sections.filter((section) => section.fields.length > 0);
+  if (fallbackFields.length > 0) {
+    groups.push({
+      id: DEFAULT_SECTION_ID,
+      label: DEFAULT_SECTION_LABEL,
+      order: Number.MAX_SAFE_INTEGER,
+      fields: fallbackFields,
+    });
+  }
+
+  return groups.map(({ id, label, fields }) => ({ id, label, fields }));
+}
 
 function enumValuesFromSchema(def: JSONSchema): EnumPrimitive[] {
   if (!Array.isArray(def.enum)) return [];
@@ -241,6 +354,11 @@ export default function FormBuilder({
     return [...(filteredExplicit || []), ...remaining];
   }, [schema.uiHints?.order, fieldMap, leafFields]);
 
+  const sectionGroups = useMemo(
+    () => buildFormSectionGroups(schema.uiHints, order, fieldMap.keys()),
+    [schema.uiHints, order, fieldMap],
+  );
+
   const testWhen = (cond: Record<string, unknown>) =>
     Object.entries(cond).every(([k, expected]) => {
       const v = getNestedValue(values, k);
@@ -390,7 +508,7 @@ export default function FormBuilder({
                   ref={field.ref}
                   placeholder={placeholder}
                   disabled={disabled}
-                  rows={6}
+                  rows={4}
                   className="font-mono text-xs"
                 />
               );
@@ -414,8 +532,7 @@ export default function FormBuilder({
     );
   }
 
-  function GroupBox({ controller }: { controller: string }) {
-    const childrenInOrder = order.filter((n) => groupMap.get(controller)?.includes(n));
+  function GroupBox({ controller, childrenInOrder }: { controller: string; childrenInOrder: string[] }) {
     const visibleChildren = childrenInOrder.filter((n) => isFieldVisible(n));
     if (!visibleChildren.length) return null;
 
@@ -434,8 +551,61 @@ export default function FormBuilder({
   }
 
   const basicFields = order.filter((name) => !groupedChildren.has(name));
+  const hasSections = sectionGroups.length > 0;
 
   const [submitError, setSubmitError] = useState<string | null>(null);
+
+  function renderFieldsWithGroups(fields: string[]) {
+    const fieldSet = new Set(fields);
+    const controllers = [...groupMap.keys()].filter((controller) => {
+      const children = groupMap.get(controller) ?? [];
+      return children.some((child) => fieldSet.has(child));
+    });
+
+    return (
+      <>
+        {fields
+          .filter((name) => !groupedChildren.has(name))
+          .map((name) => (isFieldVisible(name) ? renderField(name) : null))}
+
+        {controllers.map((controller) => {
+          const childrenInOrder = fields.filter((name) => groupMap.get(controller)?.includes(name));
+          return (
+            <GroupBox
+              key={`${controller}-${childrenInOrder.join("|")}`}
+              controller={controller}
+              childrenInOrder={childrenInOrder}
+            />
+          );
+        })}
+      </>
+    );
+  }
+
+  function hasVisibleFieldsWithGroups(fields: string[]) {
+    const fieldSet = new Set(fields);
+    const visibleBasic = fields.some((name) => !groupedChildren.has(name) && isFieldVisible(name));
+    const visibleGrouped = [...groupMap.values()]
+      .flat()
+      .some((name) => fieldSet.has(name) && isFieldVisible(name));
+
+    return visibleBasic || visibleGrouped;
+  }
+
+  function renderSection(group: FormSectionGroup) {
+    if (!hasVisibleFieldsWithGroups(group.fields)) return null;
+
+    return (
+      <section key={group.id} className="col-span-full rounded-lg border bg-card/30">
+        <div className="border-b px-4 py-3">
+          <h4 className="text-sm font-semibold">{group.label}</h4>
+        </div>
+        <div className="grid grid-cols-1 gap-4 p-4 md:grid-cols-2 xl:grid-cols-3">
+          {renderFieldsWithGroups(group.fields)}
+        </div>
+      </section>
+    );
+  }
 
   return (
     <form
@@ -456,11 +626,21 @@ export default function FormBuilder({
           {submitError}
         </div>
       )}
-      {basicFields.map((name) => (isFieldVisible(name) ? renderField(name) : null))}
+      {hasSections ? (
+        sectionGroups.map((group) => renderSection(group))
+      ) : (
+        <>
+          {basicFields.map((name) => (isFieldVisible(name) ? renderField(name) : null))}
 
-      {[...groupMap.keys()].map((controller) => (
-        <GroupBox key={controller} controller={controller} />
-      ))}
+          {[...groupMap.keys()].map((controller) => (
+            <GroupBox
+              key={controller}
+              controller={controller}
+              childrenInOrder={order.filter((n) => groupMap.get(controller)?.includes(n))}
+            />
+          ))}
+        </>
+      )}
       {footer}
       <div className="col-span-full flex justify-end">
         <Button type="submit" disabled={disabled}>
