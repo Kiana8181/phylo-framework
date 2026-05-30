@@ -107,6 +107,43 @@
         "column_map.d_sequence_start",
         "column_map.d_sequence_end"
       ]
+    },
+    {
+      "id": "runSelection",
+      "label": "Run Selection",
+      "order": 1,
+      "fields": ["run_name", "abundance_threshold", "top_clones", "clonotypes_per_clone"]
+    },
+    {
+      "id": "cloneClustering",
+      "label": "Clone Clustering",
+      "order": 2,
+      "fields": ["clone_cdr3_similarity"]
+    },
+    {
+      "id": "refinement",
+      "label": "Refinement",
+      "order": 3,
+      "fields": [
+        "use_refinement",
+        "v_distance",
+        "j_distance",
+        "cdr3_distance",
+        "combine_distance",
+        "merge_singleton"
+      ]
+    },
+    {
+      "id": "clonotypeGrouping",
+      "label": "Clonotype Grouping",
+      "order": 4,
+      "fields": ["clonotype_method", "clonotype_similarity_threshold"]
+    },
+    {
+      "id": "treeConstruction",
+      "label": "Tree Construction",
+      "order": 5,
+      "fields": ["tree_use_abundance", "tree_revision"]
     }
   ],
   "placeholders": {
