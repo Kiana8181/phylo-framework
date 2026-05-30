@@ -10,6 +10,7 @@ from apps.api.preprocess.column_requirements import (
     CLONALTREE_BASE_REQUIRED_KEYS,
     CLONALTREE_REFINEMENT_REQUIRED_KEYS,
     DOWSER_HL_REQUIRED_KEYS,
+    DOWSER_REGION_REQUIRED_KEYS,
     DOWSER_REQUIRED_KEYS,
     REQUIRED_KEYS_BY_METHOD,
 )
@@ -120,6 +121,8 @@ def active_required_keys(method_id: str, params: dict[str, Any]) -> list[str]:
         chain_mode = str(params.get("chain_mode") or "H").strip().upper()
         if chain_mode == "HL":
             required.extend(DOWSER_HL_REQUIRED_KEYS)
+        if _truthy(params.get("use_regions")):
+            required.extend(DOWSER_REGION_REQUIRED_KEYS)
         return required
     return list(REQUIRED_KEYS_BY_METHOD.get(method, []))
 
@@ -200,6 +203,86 @@ def _unsupported_input_error(method_id: str, input_ext: str) -> PreprocessError:
     )
 
 
+def _join_readable(items: list[str], *, limit: int = 12) -> str:
+    if not items:
+        return ""
+    if len(items) <= limit:
+        return ", ".join(items)
+    remainder = len(items) - limit
+    return f"{', '.join(items[:limit])}, and {remainder} more"
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if str(item).strip()]
+
+
+def _canonical_keys_for_source(column_map: dict[str, str], source_column: str) -> list[str]:
+    return [canonical for canonical, source in column_map.items() if source == source_column]
+
+
+def _column_mapping_step_message(
+    exc: ConversionError,
+    *,
+    column_map: dict[str, str],
+    step: str,
+) -> str:
+    details = exc.details or {}
+
+    if exc.code == "COLUMN_NOT_FOUND":
+        requested = details.get("requested_column")
+        if isinstance(requested, str) and requested.strip():
+            canonical_keys = _canonical_keys_for_source(column_map, requested.strip())
+            if canonical_keys:
+                return (
+                    f"Column mapping at step '{step}' could not find source column "
+                    f"'{requested}' (mapped from {_join_readable(canonical_keys)})."
+                )
+            return (
+                f"Column mapping at step '{step}' could not find column "
+                f"'{requested}' in the input table."
+            )
+
+    if exc.code == "AMBIGUOUS_COLUMN":
+        duplicated = _string_list(details.get("duplicated_headers"))
+        if duplicated:
+            return (
+                f"Column mapping at step '{step}' would create duplicate headers: "
+                f"{_join_readable(duplicated)}."
+            )
+
+        source_column = details.get("source_column")
+        canonical_keys = _string_list(details.get("canonical_keys"))
+        if isinstance(source_column, str) and source_column.strip() and canonical_keys:
+            return (
+                f"Column mapping at step '{step}' maps multiple fields to the same source column "
+                f"'{source_column}': {_join_readable(canonical_keys)}."
+            )
+
+        requested = details.get("requested_column")
+        matches = _string_list(details.get("matches"))
+        if isinstance(requested, str) and requested.strip() and matches:
+            return (
+                f"Column mapping at step '{step}' is ambiguous for '{requested}': "
+                f"matches multiple headers ({_join_readable(matches)})."
+            )
+
+    if exc.code in INVALID_FILE_CONVERTER_CODES:
+        return f"Column mapping at step '{step}' failed while reading the input table: {exc.message}"
+
+    return f"Column mapping at step '{step}' failed: {exc.message}"
+
+
+def _missing_mapping_message(missing: list[str], *, step: str) -> str:
+    if missing:
+        return (
+            f"Input is missing required columns after column mapping at step '{step}': "
+            f"{_join_readable(missing)}."
+        )
+    return f"Input is missing one or more required columns after column mapping at step '{step}'."
+
+
 def _conversion_error(
     method_id: str,
     input_ext: str,
@@ -208,6 +291,7 @@ def _conversion_error(
     *,
     code: str = "CONVERSION_FAILED",
     step: str | None = None,
+    extra_details: dict[str, Any] | None = None,
 ) -> PreprocessError:
     details: dict[str, Any] = {
         "method_id": method_id,
@@ -220,6 +304,8 @@ def _conversion_error(
     }
     if converter_error is not None:
         details["converter_error"] = converter_error.to_dict()
+    if extra_details:
+        details.update(extra_details)
     return PreprocessError(code=code, message=message, details=details)
 
 
@@ -232,18 +318,22 @@ def _missing_mapping_error(
     converter_error: ConversionError,
     step: str,
 ) -> PreprocessError:
-    missing_keys = converter_error.details.get("missing_required_keys")
-    missing = missing_keys if isinstance(missing_keys, list) else []
+    missing = _string_list(converter_error.details.get("missing_required_keys"))
+    input_columns = _string_list(converter_error.details.get("available_columns"))
+    resolved_map = converter_error.details.get("resolved_map")
+    resolved = resolved_map if isinstance(resolved_map, dict) else {}
     example_mapping = {key: f"<column for {key}>" for key in required_keys}
     return PreprocessError(
         code="MISSING_COLUMN_MAPPING",
-        message="Input is missing one or more required columns after column mapping.",
+        message=_missing_mapping_message(missing, step=step),
         details={
             "method_id": method_id,
             "input_ext": input_ext,
             "step": step,
             "required_keys": required_keys,
             "missing_keys": missing,
+            "input_columns": input_columns,
+            "resolved_map": resolved,
             "column_map": column_map,
             "example_column_map": example_mapping,
             "converter_error": converter_error.to_dict(),
@@ -356,10 +446,14 @@ def prepare_input_for_method(
             raise _conversion_error(
                 method_id=method,
                 input_ext=current_ext,
-                message=f"Safe conversion failed at step '{step_name}'.",
+                message=_column_mapping_step_message(exc, column_map=column_map, step=step_name),
                 converter_error=exc,
                 code=mapped_code,
                 step=step_name,
+                extra_details={
+                    "column_map": column_map,
+                    "input_columns": _string_list(exc.details.get("available_columns")),
+                },
             ) from exc
 
         step_report["input_path"] = str(current_path)
