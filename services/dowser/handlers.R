@@ -284,7 +284,12 @@ run_handler_impl <- function(req, res) {
       if (!isTRUE(igv$ok)) {
         return(fail_local(igv$error, step = igv$step, details = igv$details))
       }
-      if (!is.null(igv$warnings)) warnings <- c(warnings, igv$warnings)
+      if (length(igv$warnings %||% character(0))) {
+        warnings <- c(warnings, igv$warnings)
+      }
+      if (length(igv$details %||% list())) {
+        input_qc$igphyml_sequence_validity <- igv$details
+      }
     }
 
     data_provenance$transformations[[length(data_provenance$transformations) + 1]] <- list(
