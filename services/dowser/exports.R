@@ -11,6 +11,73 @@ write_json_file <- function(obj, path) {
   jsonlite::write_json(obj, path, auto_unbox = TRUE, null = "null", pretty = TRUE)
 }
 
+serialize_dowser_result <- function(result) {
+  jsonlite::toJSON(prepare_dowser_result(result), auto_unbox = TRUE, null = "null", na = "null")
+}
+
+preserve_json_array <- function(x) {
+  if (is.null(x)) return(NULL)
+  I(x)
+}
+
+ensure_json_object <- function(x) {
+  if (is.null(x)) return(NULL)
+  if (is.list(x) && (is.null(names(x)) || !length(names(x)))) {
+    return(structure(list(), names = character(0)))
+  }
+  x
+}
+
+prepare_dowser_result <- function(result) {
+  if (!is.null(result$trees)) {
+    result$trees <- preserve_json_array(unname(result$trees))
+  }
+  if (!is.null(result$clones) && is.list(result$clones)) {
+    if (!is.null(result$clones$clone_id)) {
+      result$clones$clone_id <- preserve_json_array(unname(as.list(result$clones$clone_id)))
+    }
+    if (!is.null(result$clones$seqs)) {
+      result$clones$seqs <- preserve_json_array(unname(as.list(result$clones$seqs)))
+    }
+  }
+  if (!is.null(result$annotations)) {
+    result$annotations <- preserve_json_array(result$annotations)
+  }
+  if (!is.null(result$trees_detail)) {
+    result$trees_detail <- preserve_json_array(result$trees_detail)
+  }
+  if (!is.null(result$figures) && is.list(result$figures) && !is.null(result$figures$phylogeny)) {
+    result$figures$phylogeny <- preserve_json_array(unname(result$figures$phylogeny))
+  }
+  if (!is.null(result$warnings)) {
+    result$warnings <- preserve_json_array(result$warnings)
+  }
+  if (!is.null(result$artifacts)) {
+    result$artifacts <- preserve_json_array(result$artifacts)
+  }
+  if (!is.null(result$logs)) {
+    result$logs <- preserve_json_array(result$logs)
+  }
+  if (!is.null(result$input_qc)) {
+    result$input_qc <- ensure_json_object(result$input_qc)
+  }
+  if (!is.null(result$data_provenance)) {
+    result$data_provenance <- ensure_json_object(result$data_provenance)
+  }
+  result
+}
+
+validate_dowser_result_contract <- function(result, schema_path) {
+  if (is.null(schema_path) || !nzchar(schema_path) || !file.exists(schema_path)) {
+    return(FALSE)
+  }
+  jsonvalidate::json_validate(
+    serialize_dowser_result(result),
+    schema_path,
+    verbose = TRUE
+  )
+}
+
 write_tsv_file <- function(df, path) {
   if (is.null(df) || !is.data.frame(df) || !nrow(df)) {
     return(invisible(NULL))

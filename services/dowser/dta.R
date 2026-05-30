@@ -1,5 +1,193 @@
 # Discrete Trait Analysis (DTA) and class-switching constraints.
 
+MAX_MODELFILE_TEXT_BYTES <- 65536L
+
+normalize_modelfile_text <- function(text) {
+  if (is.null(text)) return(NULL)
+  text <- as.character(text)[1]
+  text <- gsub("\r\n?", "\n", text)
+  if (!nzchar(trimws(text))) return(NULL)
+  text
+}
+
+looks_like_modelfile_text <- function(value) {
+  value <- normalize_modelfile_text(value)
+  if (is.null(value)) return(FALSE)
+  grepl("\n", value, fixed = TRUE) ||
+    grepl("^\\s*#BEGIN\\b", value, perl = TRUE) ||
+    grepl("#STATES", value, fixed = TRUE)
+}
+
+validate_trait_modelfile_text <- function(text) {
+  text <- normalize_modelfile_text(text)
+  if (is.null(text)) {
+    return(list(ok = FALSE, error = "Custom trait model file content is empty."))
+  }
+  if (nchar(text, type = "bytes") > MAX_MODELFILE_TEXT_BYTES) {
+    return(list(
+      ok = FALSE,
+      error = sprintf(
+        "Custom trait model file content is too large (%d bytes > %d bytes).",
+        nchar(text, type = "bytes"), MAX_MODELFILE_TEXT_BYTES
+      )
+    ))
+  }
+
+  lines <- trimws(strsplit(text, "\n", fixed = TRUE)[[1]])
+  marker_line <- function(marker) which(lines == marker)
+
+  required <- c("#BEGIN", "#STATES", "#CONSTRAINTS", "#AMBIGUOUS")
+  missing <- required[!vapply(required, function(m) length(marker_line(m)) == 1L, logical(1))]
+  if (length(missing)) {
+    return(list(
+      ok = FALSE,
+      error = sprintf(
+        "Custom trait model file must contain exactly one of each required section marker: %s. Missing or duplicated: %s.",
+        paste(required, collapse = ", "),
+        paste(missing, collapse = ", ")
+      )
+    ))
+  }
+
+  begin_idx <- marker_line("#BEGIN")
+  states_idx <- marker_line("#STATES")
+  constraints_idx <- marker_line("#CONSTRAINTS")
+  ambiguous_idx <- marker_line("#AMBIGUOUS")
+  if (!(begin_idx < states_idx && states_idx < constraints_idx && constraints_idx < ambiguous_idx)) {
+    return(list(
+      ok = FALSE,
+      error = "Custom trait model file sections must be ordered as #BEGIN, #STATES, #CONSTRAINTS, #AMBIGUOUS."
+    ))
+  }
+  if (begin_idx + 1L >= states_idx || !grepl("^[0-9]+$", lines[begin_idx + 1L])) {
+    return(list(ok = FALSE, error = "#BEGIN must be followed by the number of model states."))
+  }
+
+  section_lines <- function(start_idx, end_idx) {
+    if (start_idx + 1L > end_idx - 1L) return(character(0))
+    lines[(start_idx + 1L):(end_idx - 1L)]
+  }
+
+  states <- section_lines(states_idx, constraints_idx)
+  states <- states[nzchar(states)]
+  if (!length(states)) {
+    return(list(ok = FALSE, error = "#STATES must contain at least one trait state."))
+  }
+  if (anyDuplicated(states)) {
+    return(list(ok = FALSE, error = "#STATES contains duplicate trait states."))
+  }
+  declared_n <- as.integer(lines[begin_idx + 1L])
+  if (!identical(declared_n, length(states))) {
+    return(list(
+      ok = FALSE,
+      error = sprintf("#BEGIN declares %d states, but #STATES contains %d.", declared_n, length(states))
+    ))
+  }
+
+  bad_state <- states[grepl("\\s", states, perl = TRUE)]
+  if (length(bad_state)) {
+    return(list(
+      ok = FALSE,
+      error = sprintf("Trait state names must not contain whitespace: %s.", paste(bad_state, collapse = ", "))
+    ))
+  }
+
+  constraints <- section_lines(constraints_idx, ambiguous_idx)
+  constraints <- constraints[nzchar(constraints)]
+  for (line in constraints) {
+    parts <- strsplit(line, "\\s+", perl = TRUE)[[1]]
+    if (length(parts) != 3L || !parts[1] %in% states || !parts[2] %in% states || is.na(suppressWarnings(as.numeric(parts[3])))) {
+      return(list(
+        ok = FALSE,
+        error = sprintf("Invalid #CONSTRAINTS row '%s'; expected '<from_state> <to_state> <numeric_penalty>'.", line)
+      ))
+    }
+  }
+
+  ambiguous <- if (ambiguous_idx < length(lines)) lines[(ambiguous_idx + 1L):length(lines)] else character(0)
+  ambiguous <- ambiguous[nzchar(ambiguous)]
+  for (line in ambiguous) {
+    parts <- strsplit(line, "\\s+", perl = TRUE)[[1]]
+    if (length(parts) != 2L || !parts[2] %in% states) {
+      return(list(
+        ok = FALSE,
+        error = sprintf("Invalid #AMBIGUOUS row '%s'; expected '<ambiguous_name> <state>'.", line)
+      ))
+    }
+  }
+
+  normalized_lines <- c(
+    "#BEGIN",
+    as.character(length(states)),
+    "",
+    "#STATES",
+    states,
+    "",
+    "#CONSTRAINTS",
+    constraints,
+    "",
+    "",
+    "#AMBIGUOUS",
+    ambiguous
+  )
+
+  list(ok = TRUE, error = NULL, lines = normalized_lines, states = states)
+}
+
+write_trait_modelfile_text_tmp <- function(text, tmpdir) {
+  validated <- validate_trait_modelfile_text(text)
+  if (!isTRUE(validated$ok)) {
+    dowser_validation_error(validated$error, step = "dowser.validate.modelfile")
+  }
+  path <- file.path(tmpdir, "custom_trait_model.txt")
+  writeLines(validated$lines, path, useBytes = TRUE)
+  normalizePath(path, mustWork = FALSE)
+}
+
+resolve_trait_modelfile <- function(p, tmpdir) {
+  text <- normalize_modelfile_text(p$modelfile_text %||% NULL)
+  raw_value <- normalize_modelfile_text(p$modelfile %||% NULL)
+  if (!is.null(text) && !is.null(raw_value)) {
+    dowser_validation_error(
+      "Provide only one custom trait model source: modelfile_text or modelfile.",
+      step = "dowser.validate.modelfile"
+    )
+  }
+
+  if (!is.null(text)) {
+    path <- write_trait_modelfile_text_tmp(text, tmpdir)
+    return(list(path = path, source = "text", trait_model = "custom"))
+  }
+  if (is.null(raw_value)) return(NULL)
+
+  if (looks_like_modelfile_text(raw_value)) {
+    path <- write_trait_modelfile_text_tmp(raw_value, tmpdir)
+    return(list(path = path, source = "text", trait_model = "custom"))
+  }
+
+  path <- normalizePath(raw_value, mustWork = FALSE)
+  if (!file.exists(path) || isTRUE(file.info(path)$isdir)) {
+    dowser_validation_error(
+      sprintf("Custom trait model file path does not exist or is not a file: %s", raw_value),
+      step = "dowser.validate.modelfile"
+    )
+  }
+  if (file.access(path, 4) != 0) {
+    dowser_validation_error(
+      sprintf("Custom trait model file path is not readable: %s", path),
+      step = "dowser.validate.modelfile"
+    )
+  }
+  file_text <- paste(readLines(path, warn = FALSE), collapse = "\n")
+  valid <- validate_trait_modelfile_text(file_text)
+  if (!isTRUE(valid$ok)) {
+    dowser_validation_error(valid$error, step = "dowser.validate.modelfile")
+  }
+  tmp_path <- file.path(tmpdir, "custom_trait_model.txt")
+  writeLines(valid$lines, tmp_path, useBytes = TRUE)
+  list(path = normalizePath(tmp_path, mustWork = FALSE), source = "path", trait_model = "custom")
+}
+
 build_trait_modelfile <- function(p, tmpdir) {
   trait_model <- p$trait_model %||% "unconstrained"
   if (!identical(trait_model, "isotype_irreversible")) return(NULL)

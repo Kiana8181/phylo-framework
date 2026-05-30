@@ -14,7 +14,7 @@ ANALYSIS_MODE_ENUM <- c(
 
 TREE_BUILD_ENUM <- c("pratchet", "pml", "dnapars", "dnaml", "igphyml", "raxml")
 TRAIT_MODEL_ENUM <- c("unconstrained", "isotype_irreversible")
-PARTITION_MODEL_ENUM <- c("single", "cf", "hl", "hlcf")
+PARTITION_MODEL_ENUM <- c("single", "cf", "hl", "hlf", "hlc", "hlcf")
 CHAIN_MODE_ENUM <- c("H", "HL")
 ALTERNATIVE_ENUM <- c("greater", "less", "two.sided")
 
@@ -27,17 +27,6 @@ DEFAULT_ISOTYPE_EXCEPTIONS <- c("IGHD,IGHM")
 REMOVED_PARAMS <- c(
   "apply_filters", "uppercase", "gap_policy", "noniupac_policy",
   "len_policy", "ig_stop_policy"
-)
-
-LEGACY_TREE_MODEL_MAP <- c(
-  "mp" = "pratchet",
-  "ml" = "pml",
-  "igphyml" = "igphyml",
-  "pratchet" = "pratchet",
-  "pml" = "pml",
-  "dnapars" = "dnapars",
-  "dnaml" = "dnaml",
-  "raxml" = "raxml"
 )
 
 parse_vec <- function(x) {
@@ -100,10 +89,10 @@ validate_partition_model <- function(p) {
       step = "dowser.params.partition_model"
     ))
   }
-  if (part %in% c("hl", "hlcf") && !identical(p$chain_mode, "HL")) {
+  if (part %in% c("hl", "hlf", "hlc", "hlcf") && !identical(p$chain_mode, "HL")) {
     return(list(
       ok = FALSE,
-      error = "partition_model 'hl' or 'hlcf' requires chain_mode='HL'.",
+      error = "partition_model 'hl', 'hlf', 'hlc', or 'hlcf' requires chain_mode='HL'.",
       step = "dowser.params.partition_model"
     ))
   }
@@ -135,15 +124,14 @@ reject_removed_params <- function(params) {
       paste(present, collapse = ", ")
     ))
   }
+  if ("tree_model" %in% names(params)) {
+    return("Removed parameter no longer supported: tree_model. Use tree_build instead.")
+  }
   NULL
 }
 
 resolve_tree_build <- function(p) {
   build <- normalize_col(p$tree_build, NULL)
-  if (is.null(build) && !is.null(p$tree_model)) {
-    legacy <- normalize_col(p$tree_model, "mp")
-    build <- LEGACY_TREE_MODEL_MAP[[legacy]] %||% "pratchet"
-  }
   build <- build %||% "pratchet"
   if (!build %in% TREE_BUILD_ENUM) {
     return(list(
@@ -408,8 +396,8 @@ validate_igphyml_sequences <- function(db, id_col = "sequence_id", clone_col = "
   bad_rows <- which(bad_idx)
   records <- lapply(bad_rows, function(i) {
     list(
-      sequence_id = as.character(db[[id_col]][i]),
-      clone_id = as.character(db[[clone_col]][i]),
+      sequence_id = if (id_col %in% names(db)) as.character(db[[id_col]][i]) else NA_character_,
+      clone_id = if (clone_col %in% names(db)) as.character(db[[clone_col]][i]) else NA_character_,
       reason = paste(reason_map[[i]], collapse = ";")
     )
   })
@@ -437,6 +425,49 @@ validate_igphyml_sequences <- function(db, id_col = "sequence_id", clone_col = "
       truncated = truncated
     )
   )
+}
+
+clone_meta_data_frame <- function(meta) {
+  if (inherits(meta, "data.frame")) return(meta)
+  if (methods::is(meta, "airrClone") && "data" %in% methods::slotNames(meta)) {
+    df <- methods::slot(meta, "data")
+    if (inherits(df, "data.frame")) return(df)
+  }
+  NULL
+}
+
+igphyml_validation_db_from_clones <- function(clones) {
+  if (is.null(clones) || !inherits(clones, "data.frame") || !nrow(clones)) return(NULL)
+  if (!"data" %in% names(clones)) return(clones)
+
+  rows <- list()
+  for (i in seq_len(nrow(clones))) {
+    df <- clone_meta_data_frame(clones$data[[i]])
+    if (is.null(df) || !nrow(df)) next
+    if (!"clone_id" %in% names(df) && "clone_id" %in% names(clones)) {
+      df$clone_id <- as.character(clones$clone_id[[i]])
+    }
+    rows[[length(rows) + 1L]] <- df
+  }
+  if (!length(rows)) return(NULL)
+  all_names <- unique(unlist(lapply(rows, names), use.names = FALSE))
+  rows <- lapply(rows, function(df) {
+    missing <- setdiff(all_names, names(df))
+    for (col in missing) df[[col]] <- NA
+    df[, all_names, drop = FALSE]
+  })
+  do.call(rbind, rows)
+}
+
+validate_igphyml_sequences_after_format_clones <- function(clones) {
+  db <- igphyml_validation_db_from_clones(clones)
+  if (is.null(db)) {
+    return(list(
+      ok = TRUE,
+      warnings = "IgPhyML sequence validity could not inspect formatted clone records; relying on Dowser/IgPhyML runtime checks."
+    ))
+  }
+  validate_igphyml_sequences(db)
 }
 
 validate_clone_consistency <- function(db, clone_col, seq_col, germ_col, junc_col, v_col, j_col, id_col = "sequence_id") {
