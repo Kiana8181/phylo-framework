@@ -508,7 +508,7 @@ export default function FormBuilder({
                   ref={field.ref}
                   placeholder={placeholder}
                   disabled={disabled}
-                  rows={4}
+                  rows={2}
                   className="font-mono text-xs"
                 />
               );
