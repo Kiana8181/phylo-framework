@@ -63,6 +63,21 @@ good_fasta <- paste0(
 fasta_ok <- validate_germline_set_text(good_fasta)
 assert_true(isTRUE(fasta_ok$ok), "valid FASTA accepted")
 
+normalized_custom <- normalize_custom_germline_set_text(paste0(
+  ">M99641|IGHV1-18*01|Homo_sapiens|F|V-REGION\n",
+  "CAGGTTCAGCTGGTGCAGTCT\n"
+))
+assert_true(
+  grepl(">custom|IGHV1-18*01|custom|custom-germline", normalized_custom, fixed = TRUE),
+  "custom IMGT FASTA is rewritten with BrepPhylo-compatible species key"
+)
+
+normalized_simple <- normalize_custom_germline_set_text(good_fasta)
+assert_true(
+  grepl(">custom|IGHV1-69*01|custom|custom-germline", normalized_simple, fixed = TRUE),
+  "simple allele FASTA is rewritten with BrepPhylo-compatible species key"
+)
+
 bad_fasta <- "not a fasta"
 fasta_bad <- validate_germline_set_text(bad_fasta)
 assert_true(!isTRUE(fasta_bad$ok), "invalid FASTA rejected")
