@@ -894,7 +894,7 @@ run_handler_impl <- function(req, res) {
       }
       fasta_val <- validate_germline_set_text(germline_set_text)
       if (!isTRUE(fasta_val$ok)) return(fail_local(fasta_val$error))
-      species_effective <- NULL
+      species_effective <- BREPPHYLO_CUSTOM_SPECIES_KEY
     } else if (nzchar(trimws(as.character(germline_set_text)[1]))) {
       warnings <- c(warnings, "germline_set_text is ignored unless species is 'custom'.")
     }
@@ -989,7 +989,11 @@ run_handler_impl <- function(req, res) {
     dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
     if (identical(species, "custom")) {
-      germline_set_path <- write_germline_fasta_tmp(germline_set_text, out_dir)
+      germline_set_path <- write_germline_fasta_tmp(
+        germline_set_text,
+        out_dir,
+        species_key = BREPPHYLO_CUSTOM_SPECIES_KEY
+      )
     }
 
     tree_type_effective <- tree_type

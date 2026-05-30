@@ -9,6 +9,7 @@ SPECIES_ENUM <- c(
   "Homo_sapiens", "Mus_musculus", "Bos_taurus", "Gallus_gallus",
   "Oryctolagus_cuniculus", "Sus_scrofa", "custom"
 )
+BREPPHYLO_CUSTOM_SPECIES_KEY <- "custom"
 
 PLOT_TYPE_ENUM <- c("phylogram", "cladogram", "fan", "radial")
 INPUT_SEQUENCE_MODE_ENUM <- c("raw_sequence", "aligned_imgt_gapped")
@@ -137,6 +138,20 @@ imgt_like_header <- function(header) {
   FALSE
 }
 
+extract_imgt_allele <- function(header) {
+  parts <- strsplit(header, "|", fixed = TRUE)[[1]]
+  if (length(parts) >= 2L && grepl(IMGT_GENE_RE, parts[2], ignore.case = TRUE)) {
+    return(parts[2])
+  }
+
+  m <- regexpr(IMGT_GENE_RE, header, ignore.case = TRUE)
+  if (m[[1]] > 0L) {
+    return(regmatches(header, m)[[1]])
+  }
+
+  NA_character_
+}
+
 validate_germline_set_text <- function(text) {
   parsed <- parse_fasta_records(text)
   if (!isTRUE(parsed$ok)) {
@@ -180,13 +195,32 @@ validate_germline_set_text <- function(text) {
   list(ok = TRUE, error = NULL, content = text, records = parsed$records)
 }
 
-write_germline_fasta_tmp <- function(text, out_dir) {
+normalize_custom_germline_set_text <- function(text, species_key = BREPPHYLO_CUSTOM_SPECIES_KEY) {
   validated <- validate_germline_set_text(text)
   if (!isTRUE(validated$ok)) {
     stop(validated$error)
   }
+
+  lines <- character(0)
+  for (rec in validated$records) {
+    allele <- extract_imgt_allele(rec$header)
+    if (is.na(allele) || !nzchar(allele)) {
+      stop(sprintf("Could not determine germline allele from FASTA header '%s'.", rec$header))
+    }
+    lines <- c(
+      lines,
+      sprintf(">%s|%s|%s|custom-germline", species_key, allele, species_key),
+      rec$sequence
+    )
+  }
+
+  paste(lines, collapse = "\n")
+}
+
+write_germline_fasta_tmp <- function(text, out_dir, species_key = BREPPHYLO_CUSTOM_SPECIES_KEY) {
+  normalized <- normalize_custom_germline_set_text(text, species_key = species_key)
   path <- file.path(out_dir, "custom_germline_set.fasta")
-  writeLines(strsplit(trimws(text), "\n", fixed = TRUE)[[1]], path, useBytes = TRUE)
+  writeLines(strsplit(normalized, "\n", fixed = TRUE)[[1]], path, useBytes = TRUE)
   normalizePath(path, mustWork = FALSE)
 }
 
