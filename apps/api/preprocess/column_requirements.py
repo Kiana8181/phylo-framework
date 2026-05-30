@@ -14,6 +14,7 @@ DOWSER_REQUIRED_KEYS = [
 ]
 
 DOWSER_HL_REQUIRED_KEYS = ["cell_id", "locus"]
+DOWSER_REGION_REQUIRED_KEYS = ["v_region_start", "v_region_end", "j_region_start", "j_region_end"]
 
 # ClonalTree requirements from base-codes formatter + downstream scripts.
 CLONALTREE_BASE_REQUIRED_KEYS = [
