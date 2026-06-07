@@ -48,6 +48,14 @@ describe("computeNodes", () => {
     expect(nodes[0].id).toBe("QUEUED");
     expect(nodes[0].state).toBe("active");
   });
+
+  it("does not highlight Queued when API status is RUNNING", () => {
+    const nodes = computeNodes("dowser", "RUNNING", "QUEUED");
+    const queued = nodes.find((n) => n.id === "QUEUED");
+    const running = nodes.find((n) => n.id === "RUNNING_METHOD");
+    expect(queued?.state).toBe("done");
+    expect(running?.state).toBe("active");
+  });
 });
 
 describe("sanitizeLabel", () => {

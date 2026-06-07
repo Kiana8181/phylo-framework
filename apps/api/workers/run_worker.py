@@ -17,9 +17,10 @@ import asyncio
 import os
 import socket
 import traceback
-from datetime import datetime
 from typing import Any, Optional
 from uuid import UUID
+
+from sqlalchemy.sql import func
 
 from apps.api.database.base import AsyncSessionLocal
 from apps.api.database.models import RunStatus
@@ -33,6 +34,7 @@ from apps.api.services.run_staging import (
     normalize_failed_result_payload,
     prepare_method_input,
 )
+from apps.api.services.stage_map import progress_for_stage
 from apps.api.services.tree_contract import assemble_unified_tree_result
 from apps.api.storage import get_storage
 
@@ -47,6 +49,23 @@ storage = get_storage()
 def _log(msg: str, **fields: Any) -> None:
     suffix = " ".join(f"{k}={v}" for k, v in fields.items() if v is not None)
     print(f"[run_worker] {msg} {suffix}".rstrip(), flush=True)
+
+
+def _normalize_method_poll_stage(
+    method_status: str,
+    stage: str | None,
+    progress: int | None,
+) -> tuple[str, int | None]:
+    """Never regress a claimed run back to QUEUED in the API stage column."""
+    normalized = stage or "RUNNING_METHOD"
+    if normalized == "QUEUED" or method_status == "QUEUED":
+        normalized = "RUNNING_METHOD"
+    mapped = progress_for_stage(normalized)
+    if progress is None or progress == 0:
+        progress = mapped
+    elif mapped is not None:
+        progress = max(progress, mapped)
+    return normalized, progress
 
 
 async def _resolve_input_storage_path(run, file_repo: FileRepository) -> Optional[str]:
@@ -93,7 +112,7 @@ async def _persist_error(
             stage_message=normalized_error,
             progress=100,
             result=payload,
-            finished_at=datetime.utcnow(),
+            finished_at=func.now(),
             worker_lease_until=None,
         )
     _log("run errored", run_id=run_id)
@@ -113,7 +132,7 @@ async def _persist_staging_error(run_id: UUID, err: StagingError) -> None:
             stage_message=err.message,
             progress=100,
             result=err.error_payload,
-            finished_at=datetime.utcnow(),
+            finished_at=func.now(),
             worker_lease_until=None,
         )
     _log("run staging error", run_id=run_id, code=err.code)
@@ -284,13 +303,18 @@ async def _poll_method_job(
 
         # In-progress: reflect the method's stage/progress/message (no fake timers).
         if not cancel_requested:
+            poll_stage, poll_progress = _normalize_method_poll_stage(
+                method_status,
+                status.stage,
+                status.progress,
+            )
             async with AsyncSessionLocal() as db:
                 run_repo = RunRepository(db)
                 await run_repo.update_stage(
                     run_id,
-                    status.stage or "RUNNING_METHOD",
+                    poll_stage,
                     message=status.message,
-                    progress=status.progress,
+                    progress=poll_progress,
                 )
 
         await asyncio.sleep(METHOD_POLL_INTERVAL)

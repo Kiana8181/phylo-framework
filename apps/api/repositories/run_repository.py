@@ -4,11 +4,12 @@ from typing import Optional, List
 from uuid import UUID
 from datetime import datetime, timezone, timedelta
 
-from sqlalchemy import and_, case, exists, or_, select, update
+from sqlalchemy import and_, case, exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.database.models import Run, RunStatus, ACTIVE_RUN_STATUSES
 from apps.api.repositories.base_repository import BaseRepository
+from apps.api.utils.datetime_util import utc_now
 
 TERMINAL_RUN_STATUSES = (RunStatus.DONE, RunStatus.ERROR, RunStatus.CANCELLED)
 
@@ -128,9 +129,9 @@ class RunRepository(BaseRepository[Run]):
             update_data["message"] = message
 
         if status == RunStatus.RUNNING:
-            update_data["started_at"] = datetime.utcnow()
+            update_data["started_at"] = utc_now()
         elif status in (RunStatus.DONE, RunStatus.ERROR, RunStatus.CANCELLED):
-            update_data["finished_at"] = datetime.utcnow()
+            update_data["finished_at"] = func.now()
 
         return await self.update(run_id, **update_data)
 
@@ -147,7 +148,7 @@ class RunRepository(BaseRepository[Run]):
         """
         update_data = {
             "status": RunStatus.RUNNING,
-            "started_at": datetime.utcnow(),
+            "started_at": utc_now(),
             "progress": case(
                 (Run.progress < 5, 5),
                 else_=Run.progress,
@@ -178,7 +179,7 @@ class RunRepository(BaseRepository[Run]):
 
         Commits the claim and returns the leased Run, or None when idle.
         """
-        now = datetime.now(timezone.utc)
+        now = utc_now()
         lease_until = now + timedelta(seconds=lease_seconds)
 
         candidate_stmt = (
@@ -209,7 +210,7 @@ class RunRepository(BaseRepository[Run]):
                 status=RunStatus.RUNNING,
                 worker_id=worker_id,
                 worker_lease_until=lease_until,
-                started_at=case((Run.started_at.is_(None), now), else_=Run.started_at),
+                started_at=case((Run.started_at.is_(None), func.now()), else_=Run.started_at),
             )
             .returning(Run)
         )
@@ -224,7 +225,7 @@ class RunRepository(BaseRepository[Run]):
         lease_seconds: int = 120,
     ) -> bool:
         """Extend the worker lease for a run still owned by this worker."""
-        lease_until = datetime.now(timezone.utc) + timedelta(seconds=lease_seconds)
+        lease_until = utc_now() + timedelta(seconds=lease_seconds)
         stmt = (
             update(Run)
             .where(Run.id == run_id, Run.worker_id == worker_id, Run.status == RunStatus.RUNNING)
@@ -282,7 +283,7 @@ class RunRepository(BaseRepository[Run]):
 
         Used when a user cancels before the worker picks up the run.
         """
-        now = datetime.now(timezone.utc)
+        now = utc_now()
         stmt = (
             update(Run)
             .where(
@@ -296,7 +297,7 @@ class RunRepository(BaseRepository[Run]):
                 stage_message=message or "Cancelled before execution",
                 message=message or "Cancelled before execution",
                 cancel_requested_at=now,
-                finished_at=now,
+                finished_at=func.now(),
                 worker_lease_until=None,
             )
             .returning(Run.id)
@@ -307,7 +308,7 @@ class RunRepository(BaseRepository[Run]):
 
     async def request_cancel(self, run_id: UUID, message: Optional[str] = None) -> Optional[Run]:
         """Mark a RUNNING run as cancel-requested so the worker terminates it."""
-        now = datetime.now(timezone.utc)
+        now = utc_now()
         stmt = (
             update(Run)
             .where(Run.id == run_id, Run.status.in_(ACTIVE_RUN_STATUSES))
@@ -334,7 +335,7 @@ class RunRepository(BaseRepository[Run]):
             stage="CANCELLED",
             stage_message=message or "Run cancelled",
             message=message or "Run cancelled",
-            finished_at=datetime.utcnow(),
+            finished_at=func.now(),
             worker_lease_until=None,
         )
 
@@ -387,7 +388,7 @@ class RunRepository(BaseRepository[Run]):
             stage_message="Completed" if status == RunStatus.DONE else None,
             progress=100,
             message="Completed",
-            finished_at=datetime.utcnow(),
+            finished_at=func.now(),
             worker_lease_until=None,
         )
 
@@ -404,7 +405,7 @@ class RunRepository(BaseRepository[Run]):
             error=error,
             progress=100,
             message=error,
-            finished_at=datetime.utcnow(),
+            finished_at=func.now(),
             worker_lease_until=None,
         )
 
@@ -413,7 +414,7 @@ class RunRepository(BaseRepository[Run]):
         result = await self.session.execute(
             select(Run)
             .where(Run.expires_at.isnot(None))
-            .where(Run.expires_at < datetime.utcnow())
+            .where(Run.expires_at < utc_now())
         )
         return list(result.scalars().all())
 

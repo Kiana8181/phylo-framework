@@ -54,12 +54,16 @@ job_manager_submit <- function(mgr, file_path, params, run_id) {
     )
   )
   runner <- .job_find_runner()
-  # setsid -> new session/group so cancellation can kill nested tool processes.
-  cmd <- sprintf(
-    "setsid Rscript '%s' --job-id '%s' --state-dir '%s' >'%s/job.log' 2>&1 </dev/null &",
-    runner, job_id, sd, sd
+  log_path <- file.path(sd, "job.log")
+  # Use system(wait=FALSE): system2("sh","-c",...) mangles setsid quoting; system()
+  # appends its own "&" so do not add a trailing ampersand here.
+  cmd <- paste0(
+    "setsid -- Rscript ", shQuote(runner),
+    " --job-id ", shQuote(job_id),
+    " --state-dir ", shQuote(sd),
+    " >>", shQuote(log_path), " 2>&1 </dev/null"
   )
-  system2("sh", c("-c", cmd), wait = TRUE)
+  system(cmd, wait = FALSE)
   job_id
 }
 

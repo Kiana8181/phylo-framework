@@ -8,6 +8,7 @@ import { formatRunDuration } from "@/lib/runDuration";
 import { useCancelRun } from "@/features/runs/hooks";
 import { notify } from "@/lib/notify";
 import RunStageFlowchart from "./RunStageFlowchart";
+import { humanizeStage } from "@phylo/contracts";
 
 const MAX_INLINE_ERROR = 200;
 
@@ -86,6 +87,10 @@ export default function RunProgress({
   const badge = getStatusBadge(status, isStatusError);
   const label = getStatusLabel(status, isStatusError);
   const durationLabel = formatRunDuration(startedAt, finishedAt);
+  const displayStage =
+    status === "RUNNING" && stage === "QUEUED"
+      ? "Running method"
+      : humanizeStage(stage) || (status ?? "PENDING");
 
   return (
     <Card className="p-4 space-y-3">
@@ -156,9 +161,7 @@ export default function RunProgress({
 
       {!isStatusError && status !== "ERROR" && (
         <div className="text-sm">
-          <span className="font-medium">
-            {stage ? stage.replace(/_/g, " ") : (status ?? "PENDING")}
-          </span>
+          <span className="font-medium">{displayStage}</span>
           {Number.isFinite(progress) ? (
             <span className="text-muted-foreground"> ({progress}%)</span>
           ) : null}
