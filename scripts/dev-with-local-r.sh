@@ -244,7 +244,7 @@ BREP_CONTRACTS_REL="$(relpath_from_dir "$ABS_CONTRACTS" "$BREP_DIR")"
 cleanup(){
   echo
   echo "${YLW}Shutting down...${CLR}"
-  kill ${R_PID:-} ${API_PID:-} ${GCTREE_PID:-} ${CLONAL_PID:-} ${BREP_PID:-} 2>/dev/null || true
+  kill ${R_PID:-} ${WORKER_PID:-} ${API_PID:-} ${GCTREE_PID:-} ${CLONAL_PID:-} ${BREP_PID:-} 2>/dev/null || true
   docker compose --profile dev stop postgres >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
@@ -327,6 +327,17 @@ echo "${BLU}==> Starting API on :${API_PORT}${CLR}"
 uvicorn apps.api.main:app --host 0.0.0.0 --port "$API_PORT" >/tmp/api.log 2>&1 &
 API_PID=$!
 wait_http "$API_PORT" || { echo "${YLW}Last 200 API logs:${CLR}"; tail -n 200 /tmp/api.log || true; die "API failed readiness check"; }
+
+echo "${BLU}==> Starting run worker (processes QUEUED runs)${CLR}"
+python -m apps.api.workers.run_worker >/tmp/run-worker.log 2>&1 &
+WORKER_PID=$!
+sleep 1
+if ! kill -0 "$WORKER_PID" 2>/dev/null; then
+  echo "${YLW}Last 50 run-worker logs:${CLR}"
+  tail -n 50 /tmp/run-worker.log 2>/dev/null || true
+  die "Run worker failed to start"
+fi
+echo "${GRN}Run worker started (pid ${WORKER_PID}).${CLR}"
 
 echo "${BLU}==> Starting GCtree (FastAPI) on :${GCTREE_PORT}${CLR}"
 (

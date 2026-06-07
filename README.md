@@ -417,6 +417,14 @@ export HOST_RUNTIME_SHARED_ROOT="$STORAGE_ABS"
 npm run dev:api
 ```
 
+### 5b) Start run worker
+
+Processes `QUEUED` runs (required for async orchestration). Run in a **separate terminal** from API and web. Requires postgres and method services to be up. Uses the same root `.env` as `dev:api` (DB URL, `METHOD_*_URL`, storage paths).
+
+```bash
+npm run dev:worker
+```
+
 ### 6) Start web UI
 
 ```bash
