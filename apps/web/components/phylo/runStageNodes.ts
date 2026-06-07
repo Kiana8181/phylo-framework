@@ -42,7 +42,11 @@ export function computeNodes(
 
   // A method may report a stage not in the canonical sequence; insert it so the
   // diagram never crashes and the active step is still visible.
-  const activeStage = stage ?? null;
+  let activeStage = stage ?? null;
+  // API run is RUNNING but method job still reports QUEUED before child starts.
+  if (status === "RUNNING" && activeStage === "QUEUED") {
+    activeStage = "RUNNING_METHOD";
+  }
   if (
     activeStage &&
     !isTerminal(activeStage) &&
