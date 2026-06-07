@@ -18,6 +18,8 @@ x-method-common-env: &method_common_env
   STRICT_CONTRACT_ROUTES: ${STRICT_CONTRACT_ROUTES:-true}
   RUNS_DIR: ${METHOD_SERVICE_FILE_PREFIX:-/runtime/storage}
   METHOD_SERVICE_FILE_PREFIX: ${METHOD_SERVICE_FILE_PREFIX:-/runtime/storage}
+  # Writable directory for per-job state/result/error files (async /jobs).
+  METHOD_JOBS_DIR: ${METHOD_JOBS_DIR:-/runtime/method-jobs}
 
 services:
   postgres:
@@ -128,6 +130,31 @@ services:
     command: sh -lc "alembic upgrade head && exec uvicorn apps.api.main:app --host 0.0.0.0 --port 8000 --reload"
     profiles: ["dev"]
 
+  api-worker:
+    image: phylo-api:latest
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    env_file:
+      - ./.env
+    environment:
+      <<: *api_common_env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_started
+    volumes:
+      - type: bind
+        source: ./packages/contracts
+        target: /contracts
+        read_only: true
+      - type: bind
+        source: ${STORAGE_LOCAL_PATH:-runtime/storage}
+        target: /runtime/storage
+    command: sh -lc "python -m apps.api.workers.run_worker"
+    profiles: ["dev"]
+
   api-prod:
     build:
       context: .
@@ -167,6 +194,31 @@ services:
       start_period: 15s
     profiles: ["prod"]
 
+  api-worker-prod:
+    image: phylo-api:latest
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    env_file:
+      - ./.env
+    environment:
+      <<: *api_common_env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api-prod:
+        condition: service_healthy
+    volumes:
+      - type: bind
+        source: ./packages/contracts
+        target: /contracts
+        read_only: true
+      - type: bind
+        source: ${STORAGE_LOCAL_PATH:-runtime/storage}
+        target: /runtime/storage
+    command: sh -lc "python -m apps.api.workers.run_worker"
+    profiles: ["prod"]
+
   dowser:
     platform: ${IMMCANTATION_PLATFORM:-linux/amd64}
     build:
@@ -192,6 +244,9 @@ services:
         source: ${STORAGE_LOCAL_PATH:-runtime/storage}
         target: /runtime/storage
         read_only: true
+      - type: volume
+        source: method_jobs
+        target: /runtime/method-jobs
     expose:
       - "${METHOD_DOWSER_CONTAINER_PORT:-8001}"
     command:
@@ -221,6 +276,9 @@ services:
         source: ${STORAGE_LOCAL_PATH:-runtime/storage}
         target: /runtime/storage
         read_only: true
+      - type: volume
+        source: method_jobs
+        target: /runtime/method-jobs
     expose:
       - "${METHOD_GCTREE_CONTAINER_PORT:-8002}"
     command: sh -lc "uvicorn app:app --host 0.0.0.0 --port ${METHOD_GCTREE_CONTAINER_PORT:-8002}"
@@ -249,6 +307,9 @@ services:
         source: ${STORAGE_LOCAL_PATH:-runtime/storage}
         target: /runtime/storage
         read_only: true
+      - type: volume
+        source: method_jobs
+        target: /runtime/method-jobs
     expose:
       - "${METHOD_BREPPHYLO_CONTAINER_PORT:-8003}"
     command:
@@ -278,6 +339,9 @@ services:
         source: ${STORAGE_LOCAL_PATH:-runtime/storage}
         target: /runtime/storage
         read_only: true
+      - type: volume
+        source: method_jobs
+        target: /runtime/method-jobs
     expose:
       - "${METHOD_CLONALTREE_CONTAINER_PORT:-8004}"
     command: sh -lc "uvicorn app:app --host 0.0.0.0 --port ${METHOD_CLONALTREE_CONTAINER_PORT:-8004}"
@@ -285,3 +349,4 @@ services:
 
 volumes:
   postgres_data:
+  method_jobs:

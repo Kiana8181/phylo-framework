@@ -112,12 +112,22 @@ def load_spec_from_contracts(method_id: str) -> Dict[str, Any]:
     }
 
 
+_DEFAULT_SERVICE_ROUTES = {
+    "spec": "/spec",
+    "run": "/run",
+    "jobs": "/jobs",
+    "jobStatus": "/jobs/{job_id}/status",
+    "jobResult": "/jobs/{job_id}/result",
+    "jobCancel": "/jobs/{job_id}/cancel",
+}
+
+
 def get_service_routes(method_id: str) -> dict:
     p = METHODS_DIR / method_id / "service.routes.json"
+    routes = dict(_DEFAULT_SERVICE_ROUTES)
     if p.exists():
         d = _read_json(p)
-        return {
-            "spec": d.get("spec", "/spec"),
-            "run":  d.get("run",  "/run"),
-        }
-    return {"spec": "/spec", "run": "/run"}
+        for key in routes:
+            if isinstance(d.get(key), str) and d[key].strip():
+                routes[key] = d[key]
+    return routes

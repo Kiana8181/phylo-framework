@@ -5,8 +5,13 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { AlertCircle, ChevronDown, ChevronRight } from "lucide-react";
 import { formatRunDuration } from "@/lib/runDuration";
+import { useCancelRun } from "@/features/runs/hooks";
+import { notify } from "@/lib/notify";
+import RunStageFlowchart from "./RunStageFlowchart";
 
 const MAX_INLINE_ERROR = 200;
+
+const ACTIVE_STATUSES = new Set(["PENDING", "QUEUED", "RUNNING"]);
 
 function getStatusBadge(status?: string, isError?: boolean) {
   if (isError) return "bg-red-100 text-red-700 border-red-200 dark:bg-red-950/50 dark:text-red-300 dark:border-red-800";
@@ -25,6 +30,10 @@ export default function RunProgress({
   status,
   progress,
   message,
+  stage,
+  stageMessage,
+  cancelRequested,
+  methodId,
   startedAt,
   finishedAt,
   statusError,
@@ -34,12 +43,28 @@ export default function RunProgress({
   status?: string;
   progress: number;
   message?: string;
+  stage?: string | null;
+  stageMessage?: string | null;
+  cancelRequested?: boolean;
+  methodId?: string | null;
   startedAt?: string | null;
   finishedAt?: string | null;
   statusError?: unknown;
   onDismiss?: () => void;
 }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const cancelRun = useCancelRun();
+  const isCancelling = stage === "CANCELLING" || !!cancelRequested;
+  const canStop = !!status && ACTIVE_STATUSES.has(status) && !isCancelling;
+
+  async function handleStop() {
+    try {
+      await cancelRun.mutateAsync(runId);
+      notify.success("Cancelling run…");
+    } catch {
+      /* error toast handled in hook */
+    }
+  }
   const isStatusError = !!statusError;
   const httpStatus = (statusError as any)?.response?.status;
   const apiErrorMessage =
@@ -76,6 +101,17 @@ export default function RunProgress({
             <span className="text-xs px-2 py-0.5 rounded border shrink-0 bg-muted text-muted-foreground">
               Duration: {durationLabel}
             </span>
+          )}
+          {!isStatusError && (canStop || isCancelling) && (
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={handleStop}
+              disabled={!canStop || cancelRun.isPending}
+              className="shrink-0"
+            >
+              {isCancelling ? "Cancelling…" : "Stop run"}
+            </Button>
           )}
           {onDismiss && (
             <Button variant="ghost" size="sm" onClick={onDismiss} className="shrink-0">
@@ -119,10 +155,19 @@ export default function RunProgress({
       )}
 
       {!isStatusError && status !== "ERROR" && (
-        <div className="text-sm text-muted-foreground">
-          {status ?? "PENDING"}
-          {Number.isFinite(progress) ? ` (${progress}%)` : ""}
-          {message ? ` — ${message}` : ""}
+        <div className="text-sm">
+          <span className="font-medium">
+            {stage ? stage.replace(/_/g, " ") : (status ?? "PENDING")}
+          </span>
+          {Number.isFinite(progress) ? (
+            <span className="text-muted-foreground"> ({progress}%)</span>
+          ) : null}
+          {(stageMessage || message) ? (
+            <span className="text-muted-foreground">
+              {" "}
+              — {stageMessage || message}
+            </span>
+          ) : null}
         </div>
       )}
 
@@ -133,6 +178,16 @@ export default function RunProgress({
             style={{ width: `${progress ?? 0}%` }}
           />
         </div>
+      )}
+
+      {!isStatusError && (
+        <RunStageFlowchart
+          methodId={methodId}
+          status={status}
+          stage={stage}
+          progress={progress}
+          stageMessage={stageMessage}
+        />
       )}
     </Card>
   );

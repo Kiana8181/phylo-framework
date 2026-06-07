@@ -9,6 +9,7 @@ export const API_ROUTES = {
   runCurrent: () => `/runs/current`,
   runStatus: (runId: string) => `/runs/${encodeURIComponent(runId)}/status`,
   runResult: (runId: string) => `/runs/${encodeURIComponent(runId)}/result`,
+  runCancel: (runId: string) => `/runs/${encodeURIComponent(runId)}/cancel`,
   runTrees: (runId: string) => `/runs/${encodeURIComponent(runId)}/trees`,
   runTree: (runId: string, treeId: string) =>
     `/runs/${encodeURIComponent(runId)}/trees/${encodeURIComponent(treeId)}`,
@@ -16,6 +17,9 @@ export const API_ROUTES = {
     `/runs/${encodeURIComponent(runId)}/same-dataset`,
   filesList: () => `/files`,
   filesDelete: (id: string) => `/files/${encodeURIComponent(id)}`,
+  uploadInit: () => `/uploads/init`,
+  uploadContent: (uploadId: string) => `/uploads/${encodeURIComponent(uploadId)}/content`,
+  uploadCancel: (uploadId: string) => `/uploads/${encodeURIComponent(uploadId)}`,
   authLogin: () => `/auth/login`,
   authRegister: () => `/auth/register`,
   authForgotPassword: () => `/auth/forgot-password`,

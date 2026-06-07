@@ -24,6 +24,7 @@ export type RunSummary = {
   status: string;
   progress?: number;
   message?: string | null;
+  stage?: string | null;
   params?: RunParams;
   dataset_name?: string | null;
   dataset_files?: string[];
@@ -53,6 +54,12 @@ export type RunStatus = {
   status: "PENDING" | "RUNNING" | "DONE" | "ERROR" | "QUEUED" | "CANCELLED";
   progress?: number;
   message?: string;
+  /** High-level stage identifier (e.g. STAGING_INPUT, BUILDING_TREES, CANCELLING). */
+  stage?: string | null;
+  /** User-facing message tied to the current stage. */
+  stage_message?: string | null;
+  /** True once cancellation has been requested (worker is winding down). */
+  cancel_requested?: boolean;
   method_id?: string;
   params?: RunParams;
   dataset_name?: string | null;
@@ -65,6 +72,28 @@ export type RunStatus = {
     details?: Record<string, unknown>;
   };
 };
+
+export type UploadInitResponse = {
+  upload_id: string;
+  content_url: string;
+  status: string;
+};
+
+export type UploadedFileResponse = {
+  upload_id: string;
+  file_id: string;
+  original_filename: string;
+  file_size: number;
+  mime_type?: string | null;
+  storage_url?: string | null;
+};
+
+export type UploadSessionStatus =
+  | "INITIATED"
+  | "UPLOADING"
+  | "COMPLETED"
+  | "CANCELLED"
+  | "ERROR";
 
 export type FigurePayload = {
   phylogeny?: string[];

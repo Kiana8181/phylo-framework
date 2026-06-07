@@ -45,7 +45,15 @@ ROUTES_JSON_PATH = METHOD_DIR / "service.routes.json"
 
 SPEC_JSON = _read_json(SPEC_JSON_PATH, {})
 UI_JSON = _read_json(UI_JSON_PATH, {})
-ROUTES = _read_json(ROUTES_JSON_PATH, {"spec": "/spec", "run": "/run"})
+_DEFAULT_ROUTES = {
+    "spec": "/spec",
+    "run": "/run",
+    "jobs": "/jobs",
+    "jobStatus": "/jobs/{job_id}/status",
+    "jobResult": "/jobs/{job_id}/result",
+    "jobCancel": "/jobs/{job_id}/cancel",
+}
+ROUTES = {**_DEFAULT_ROUTES, **(_read_json(ROUTES_JSON_PATH, {}) or {})}
 STRICT_CONTRACT_ROUTES = os.environ.get("STRICT_CONTRACT_ROUTES", "true").lower() in (
     "1",
     "true",
@@ -1161,3 +1169,103 @@ if not STRICT_CONTRACT_ROUTES:
     @app.post("/run")  # type: ignore
     async def _run_alias(request: Request):
         return await run_handler(request)
+
+
+# ---------- Async job execution (/jobs contract) ----------
+from job_manager import JobManager  # noqa: E402
+
+job_manager = JobManager(METHOD_ID)
+
+
+def run_job_sync(file_path, params) -> Tuple[int, Any]:
+    """Invoke the existing /run handler synchronously in this (child) process."""
+    import asyncio
+
+    async def _call():
+        body = json.dumps({"file_path": file_path, "params": params or {}}).encode("utf-8")
+        scope = {
+            "type": "http",
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": ROUTES["run"],
+            "raw_path": ROUTES["run"].encode("utf-8"),
+            "query_string": b"",
+            "root_path": "",
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode("ascii")),
+            ],
+            "client": ("127.0.0.1", 0),
+            "server": ("127.0.0.1", 80),
+        }
+        sent = False
+
+        async def receive():
+            nonlocal sent
+            if not sent:
+                sent = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            return {"type": "http.disconnect"}
+
+        return await run_handler(Request(scope, receive))
+
+    resp = asyncio.run(_call())
+    raw = resp.body
+    if isinstance(raw, (bytes, bytearray)):
+        payload = json.loads(raw.decode("utf-8"))
+    else:
+        payload = json.loads(raw)
+    return resp.status_code, payload
+
+
+@app.post(ROUTES["jobs"])
+async def submit_job_endpoint(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        return err("JSON body required", 400)
+    if not isinstance(body, dict):
+        return err("JSON body must be an object", 400)
+    file_path = body.get("file_path")
+    params = body.get("params") or {}
+    run_id = body.get("run_id")
+    try:
+        job_id = job_manager.submit(file_path=file_path, params=params, run_id=run_id)
+    except Exception as e:  # noqa: BLE001
+        return err(f"Failed to start job: {e}", 500)
+    return ok({"ok": True, "job_id": job_id, "status": "QUEUED"})
+
+
+@app.get(ROUTES["jobStatus"])
+async def job_status_endpoint(job_id: str):
+    st = job_manager.status(job_id)
+    if st is None:
+        return err("Job not found", 404)
+    return ok(st)
+
+
+@app.get(ROUTES["jobResult"])
+async def job_result_endpoint(job_id: str):
+    payload, code = job_manager.result(job_id)
+    if code == 404:
+        return err("Job not found", 404)
+    if code == 409:
+        return err("Job not finished", 409)
+    return ok(payload)
+
+
+@app.post(ROUTES["jobCancel"])
+async def job_cancel_post_endpoint(job_id: str):
+    st = job_manager.cancel(job_id)
+    if st is None:
+        return err("Job not found", 404)
+    return ok(st)
+
+
+@app.delete(ROUTES["jobCancel"])
+async def job_cancel_delete_endpoint(job_id: str):
+    st = job_manager.cancel(job_id)
+    if st is None:
+        return err("Job not found", 404)
+    return ok(st)

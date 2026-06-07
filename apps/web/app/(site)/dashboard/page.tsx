@@ -275,6 +275,10 @@ function DashboardPageContent() {
           status={status?.status}
           progress={status?.progress ?? 0}
           message={status?.message}
+          stage={status?.stage}
+          stageMessage={status?.stage_message}
+          cancelRequested={status?.cancel_requested}
+          methodId={runMethodKey}
           startedAt={status?.started_at}
           finishedAt={status?.finished_at}
           statusError={statusError ? statusErr : undefined}

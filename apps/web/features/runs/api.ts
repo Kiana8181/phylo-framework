@@ -1,4 +1,3 @@
-import { postFormWithProgress } from "@/lib/utils";
 import { serviceHandler, Method } from "@/lib/http/serviceHandler";
 import {
   API_ROUTES,
@@ -41,14 +40,23 @@ export const RunsApi = {
 
   async create(
     methodId: string,
-    fd: FormData,
-    opts?: { onProgress?: (p: number) => void }
+    body: { params?: Record<string, unknown>; file_id?: string | null }
   ): Promise<CreateRunResponse> {
-    // For file uploads with progress, we still use the custom utility
-    // since serviceHandler doesn't support progress tracking
-    const url = API_ROUTES.createRun(methodId);
-    const res = await postFormWithProgress(url, fd, opts?.onProgress ?? (() => {}));
-    return res as CreateRunResponse; 
+    // Uploads are decoupled: run creation only references an already-uploaded
+    // file_id and returns quickly with a run_id.
+    return serviceHandler<CreateRunResponse>({
+      method: Method.Post,
+      url: API_ROUTES.createRun(methodId),
+      data: { params: body.params ?? {}, file_id: body.file_id ?? null },
+    });
+  },
+
+  async cancel(id: string): Promise<RunStatus> {
+    return serviceHandler<RunStatus>({
+      method: Method.Post,
+      url: API_ROUTES.runCancel(id),
+      allowDuplicateRequests: true,
+    });
   },
 
   async status(id: string): Promise<RunStatus> {

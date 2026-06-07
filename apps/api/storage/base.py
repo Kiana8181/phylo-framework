@@ -86,6 +86,22 @@ class StorageInterface(ABC):
         pass
 
     @abstractmethod
+    async def move(self, src_path: str, dst_path: str) -> str:
+        """
+        Move/rename an object within storage.
+
+        For object stores (S3/MinIO) this may be implemented as copy + delete.
+
+        Args:
+            src_path: Source storage path/key
+            dst_path: Destination storage path/key
+
+        Returns:
+            The destination storage path/key
+        """
+        pass
+
+    @abstractmethod
     def get_storage_type(self) -> str:
         """Get the storage type identifier (e.g., 'local', 's3', 'minio')."""
         pass

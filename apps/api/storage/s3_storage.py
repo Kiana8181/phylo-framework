@@ -136,6 +136,21 @@ class S3Storage(StorageInterface):
         except ClientError:
             return False
 
+    async def move(self, src_path: str, dst_path: str) -> str:
+        """Move within S3 via copy + delete."""
+        src_key = src_path.lstrip("/")
+        dst_key = dst_path.lstrip("/")
+        try:
+            self.s3_client.copy_object(
+                Bucket=self.bucket_name,
+                CopySource={"Bucket": self.bucket_name, "Key": src_key},
+                Key=dst_key,
+            )
+            self.s3_client.delete_object(Bucket=self.bucket_name, Key=src_key)
+            return dst_key
+        except ClientError as e:
+            raise Exception(f"Failed to move object in S3: {e}")
+
     def get_storage_type(self) -> str:
         """Get storage type."""
         return "s3"
