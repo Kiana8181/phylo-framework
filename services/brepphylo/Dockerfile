@@ -43,6 +43,8 @@ RUN DOWNLOAD_STATIC_LIBV8=1 R -q -e "install.packages( \
 WORKDIR /srv
 COPY validators.R /srv/validators.R
 COPY plumber.R /srv/plumber.R
+COPY job_manager.R /srv/job_manager.R
+COPY job_runner.R /srv/job_runner.R
 
 EXPOSE 8003
 

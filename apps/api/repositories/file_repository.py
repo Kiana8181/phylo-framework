@@ -3,10 +3,10 @@ from __future__ import annotations
 from typing import List, Optional
 from uuid import UUID
 
-from sqlalchemy import select, func
+from sqlalchemy import exists, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apps.api.database.models import File, StorageType
+from apps.api.database.models import File, Run, StorageType
 from apps.api.repositories.base_repository import BaseRepository
 
 
@@ -81,6 +81,21 @@ class FileRepository(BaseRepository[File]):
             select(func.coalesce(func.sum(File.file_size), 0)).where(File.user_id == user_id)
         )
         return int(result.scalar() or 0)
+
+    async def is_referenced_by_run(self, file_id: UUID) -> bool:
+        """Return True if any run uses this file (as input or attached upload)."""
+        input_ref = await self.session.execute(
+            select(exists().where(Run.input_file_id == file_id))
+        )
+        if bool(input_ref.scalar()):
+            return True
+        file_row = await self.get_by_id(file_id)
+        if file_row is not None and file_row.run_id is not None:
+            run_ref = await self.session.execute(
+                select(exists().where(Run.id == file_row.run_id))
+            )
+            return bool(run_ref.scalar())
+        return False
 
     async def delete_file(self, file_id: UUID, user_id: UUID) -> Optional[str]:
         """Delete file by ID if it belongs to the user. Returns storage_path (for storage delete) or None."""

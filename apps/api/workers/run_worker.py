@@ -1,0 +1,333 @@
+"""DB-backed run worker / orchestrator.
+
+A standalone process (separate from the API) that:
+  - claims QUEUED runs atomically (SELECT ... FOR UPDATE SKIP LOCKED + lease),
+  - stages/preprocesses the input,
+  - submits an async job to the method service (/jobs),
+  - polls the method job status (stage-based, no fake timers),
+  - propagates cancellation to the method service,
+  - persists the final result/error using the existing contracts,
+  - resumes orphaned runs after a lease expires.
+
+Run with:  python -m apps.api.workers.run_worker
+"""
+from __future__ import annotations
+
+import asyncio
+import os
+import socket
+import traceback
+from datetime import datetime
+from typing import Any, Optional
+from uuid import UUID
+
+from apps.api.database.base import AsyncSessionLocal
+from apps.api.database.models import RunStatus
+from apps.api.repositories.file_repository import FileRepository
+from apps.api.repositories.run_repository import RunRepository
+from apps.api.repositories.run_tree_repository import RunTreeRepository
+from apps.api.services import method_jobs_client as jobs
+from apps.api.services.run_staging import (
+    StagingError,
+    cleanup_workspace,
+    normalize_failed_result_payload,
+    prepare_method_input,
+)
+from apps.api.services.tree_contract import assemble_unified_tree_result
+from apps.api.storage import get_storage
+
+POLL_INTERVAL = float(os.getenv("WORKER_POLL_INTERVAL", "3"))
+METHOD_POLL_INTERVAL = float(os.getenv("WORKER_METHOD_POLL_INTERVAL", "10"))
+LEASE_SECONDS = int(os.getenv("WORKER_LEASE_SECONDS", "180"))
+MAX_CONCURRENT = int(os.getenv("WORKER_MAX_CONCURRENT_RUNS", "4"))
+
+storage = get_storage()
+
+
+def _log(msg: str, **fields: Any) -> None:
+    suffix = " ".join(f"{k}={v}" for k, v in fields.items() if v is not None)
+    print(f"[run_worker] {msg} {suffix}".rstrip(), flush=True)
+
+
+async def _resolve_input_storage_path(run, file_repo: FileRepository) -> Optional[str]:
+    if run.input_file_id:
+        f = await file_repo.get_by_id(run.input_file_id)
+        if f:
+            return f.storage_path
+    files = await file_repo.get_by_run(run.id)
+    if files:
+        return files[0].storage_path
+    return None
+
+
+async def _persist_done(run_id: UUID, method_id: str, result: dict[str, Any]) -> None:
+    unified_result, tree_rows = await asyncio.to_thread(
+        assemble_unified_tree_result, method_id, result
+    )
+    async with AsyncSessionLocal() as db:
+        run_repo = RunRepository(db)
+        await run_repo.set_result(run_id, unified_result, RunStatus.DONE)
+        tree_repo = RunTreeRepository(db)
+        await tree_repo.replace_for_run(run_id, tree_rows)
+        await db.commit()
+    _log("run completed", run_id=run_id, method_id=method_id)
+
+
+async def _persist_error(
+    run_id: UUID,
+    *,
+    error_message: str,
+    result_payload: dict[str, Any] | None = None,
+) -> None:
+    payload, normalized_error = normalize_failed_result_payload(
+        result_payload, fallback_message=error_message
+    )
+    async with AsyncSessionLocal() as db:
+        run_repo = RunRepository(db)
+        await run_repo.update(
+            run_id,
+            status=RunStatus.ERROR,
+            stage="ERROR",
+            error=normalized_error,
+            message=normalized_error,
+            stage_message=normalized_error,
+            progress=100,
+            result=payload,
+            finished_at=datetime.utcnow(),
+            worker_lease_until=None,
+        )
+    _log("run errored", run_id=run_id)
+
+
+async def _persist_staging_error(run_id: UUID, err: StagingError) -> None:
+    import json
+
+    async with AsyncSessionLocal() as db:
+        run_repo = RunRepository(db)
+        await run_repo.update(
+            run_id,
+            status=RunStatus.ERROR,
+            stage="ERROR",
+            error=json.dumps(err.error_payload, ensure_ascii=True, sort_keys=True),
+            message=err.message,
+            stage_message=err.message,
+            progress=100,
+            result=err.error_payload,
+            finished_at=datetime.utcnow(),
+            worker_lease_until=None,
+        )
+    _log("run staging error", run_id=run_id, code=err.code)
+
+
+async def _mark_cancelled(run_id: UUID, message: str = "Run cancelled") -> None:
+    async with AsyncSessionLocal() as db:
+        run_repo = RunRepository(db)
+        await run_repo.mark_cancelled(run_id, message)
+    _log("run cancelled", run_id=run_id)
+
+
+async def process_run(run_id: UUID, worker_id: str) -> None:
+    """Drive a single claimed run from staging -> method job -> result."""
+    workspace = None
+    method_id = ""
+    try:
+        async with AsyncSessionLocal() as db:
+            run_repo = RunRepository(db)
+            file_repo = FileRepository(db)
+            run = await run_repo.get_by_id(run_id)
+            if run is None:
+                return
+            method_id = run.method_id
+            params = run.params if isinstance(run.params, dict) else {}
+            method_job_id = run.method_job_id
+            cancel_requested = run.cancel_requested_at is not None
+            input_storage_path = await _resolve_input_storage_path(run, file_repo)
+
+        # Resume path: a reclaimed run already submitted a method job.
+        if not method_job_id:
+            if cancel_requested:
+                # Cancelled before we submitted anything to the method service.
+                await _mark_cancelled(run_id, "Cancelled before execution")
+                return
+
+            # Stage + preprocess input.
+            async with AsyncSessionLocal() as db:
+                run_repo = RunRepository(db)
+                await run_repo.update_stage(
+                    run_id, "STAGING_INPUT", message="Staging input", progress=5
+                )
+
+            container_path: Optional[str] = None
+            if input_storage_path:
+                async with AsyncSessionLocal() as db:
+                    run_repo = RunRepository(db)
+                    await run_repo.update_stage(
+                        run_id, "PREPROCESSING", message="Preparing input", progress=10
+                    )
+                try:
+                    staged = await prepare_method_input(
+                        run_id=run_id,
+                        method_id=method_id,
+                        original_storage_path=input_storage_path,
+                        params=params,
+                        storage=storage,
+                    )
+                except StagingError as err:
+                    if staged_workspace := getattr(err, "workspace", None):
+                        workspace = staged_workspace
+                    await _persist_staging_error(run_id, err)
+                    return
+                workspace = staged.workspace
+                container_path = staged.container_path
+
+            # Re-check cancellation just before submitting.
+            async with AsyncSessionLocal() as db:
+                run_repo = RunRepository(db)
+                fresh = await run_repo.get_by_id(run_id)
+                if fresh is not None and fresh.cancel_requested_at is not None:
+                    await run_repo.mark_cancelled(run_id, "Cancelled before submission")
+                    return
+                await run_repo.update_stage(
+                    run_id,
+                    "SUBMITTING_METHOD_JOB",
+                    message=f"Submitting job to {method_id}",
+                    progress=20,
+                )
+
+            method_job_id = await jobs.submit_job(
+                method_id,
+                file_path=container_path,
+                params=params,
+                run_id=str(run_id),
+            )
+            async with AsyncSessionLocal() as db:
+                run_repo = RunRepository(db)
+                await run_repo.set_method_job_id(run_id, method_job_id)
+            _log("submitted method job", run_id=run_id, method_id=method_id, method_job_id=method_job_id)
+
+        await _poll_method_job(run_id, method_id, method_job_id, worker_id)
+
+    except jobs.MethodServiceUnavailable as exc:
+        await _persist_error(run_id, error_message=str(exc))
+    except Exception as exc:  # noqa: BLE001
+        traceback.print_exc()
+        await _persist_error(
+            run_id,
+            error_message=f"Run failed: {exc!s}",
+            result_payload={
+                "ok": False,
+                "error": f"Run failed: {exc!s}",
+                "logs": [{"step": "api.worker.unhandled", "ok": False, "out": str(exc)}],
+            },
+        )
+    finally:
+        if workspace is not None:
+            await asyncio.to_thread(cleanup_workspace, workspace, run_id)
+
+
+async def _poll_method_job(
+    run_id: UUID, method_id: str, method_job_id: str, worker_id: str
+) -> None:
+    cancel_sent = False
+    while True:
+        async with AsyncSessionLocal() as db:
+            run_repo = RunRepository(db)
+            await run_repo.renew_lease(run_id, worker_id, LEASE_SECONDS)
+            run = await run_repo.get_by_id(run_id)
+        if run is None:
+            return
+
+        cancel_requested = run.cancel_requested_at is not None
+        if cancel_requested and not cancel_sent:
+            _log("cancel requested -> cancelling method job", run_id=run_id, method_job_id=method_job_id)
+            try:
+                await jobs.cancel_job(method_id, method_job_id)
+            except Exception:  # noqa: BLE001
+                traceback.print_exc()
+            cancel_sent = True
+            async with AsyncSessionLocal() as db:
+                run_repo = RunRepository(db)
+                await run_repo.update_stage(run_id, "CANCELLING", message="Cancelling...")
+
+        try:
+            status = await jobs.get_job_status(method_id, method_job_id)
+        except Exception as exc:  # noqa: BLE001
+            # Transient method-service hiccup; lease keeps the run ours. Retry.
+            _log("status poll failed; retrying", run_id=run_id, error=str(exc))
+            await asyncio.sleep(METHOD_POLL_INTERVAL)
+            continue
+
+        method_status = status.status
+
+        if method_status == "DONE":
+            async with AsyncSessionLocal() as db:
+                run_repo = RunRepository(db)
+                await run_repo.update_stage(
+                    run_id, "FETCHING_RESULT", message="Fetching result", progress=95
+                )
+            result = await jobs.get_job_result(method_id, method_job_id)
+            await _persist_done(run_id, method_id, result)
+            return
+
+        if method_status == "ERROR":
+            payload, err_msg = normalize_failed_result_payload(
+                status.raw or {},
+                fallback_message=status.message
+                or (status.error if isinstance(status.error, str) else None),
+            )
+            await _persist_error(run_id, error_message=err_msg, result_payload=payload)
+            return
+
+        if method_status == "CANCELLED":
+            await _mark_cancelled(run_id, "Run cancelled")
+            return
+
+        # In-progress: reflect the method's stage/progress/message (no fake timers).
+        if not cancel_requested:
+            async with AsyncSessionLocal() as db:
+                run_repo = RunRepository(db)
+                await run_repo.update_stage(
+                    run_id,
+                    status.stage or "RUNNING_METHOD",
+                    message=status.message,
+                    progress=status.progress,
+                )
+
+        await asyncio.sleep(METHOD_POLL_INTERVAL)
+
+
+async def main() -> None:
+    worker_id = f"{socket.gethostname()}:{os.getpid()}"
+    _log("starting", worker_id=worker_id, max_concurrent=MAX_CONCURRENT, lease=LEASE_SECONDS)
+    active: set[UUID] = set()
+
+    while True:
+        try:
+            claimed_any = False
+            while len(active) < MAX_CONCURRENT:
+                async with AsyncSessionLocal() as db:
+                    run_repo = RunRepository(db)
+                    run = await run_repo.claim_next_run(worker_id, LEASE_SECONDS)
+                if run is None:
+                    break
+                run_id = run.id
+                _log("claimed run", run_id=run_id, method_id=run.method_id)
+                active.add(run_id)
+                task = asyncio.create_task(process_run(run_id, worker_id))
+                task.add_done_callback(lambda t, rid=run_id: active.discard(rid))
+                claimed_any = True
+
+            if not claimed_any:
+                await asyncio.sleep(POLL_INTERVAL)
+        except asyncio.CancelledError:
+            break
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+            await asyncio.sleep(POLL_INTERVAL)
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass

@@ -59,7 +59,7 @@ RUN DOWNLOAD_STATIC_LIBV8=1 R -q -e "install.packages( \
     stopifnot('jsonvalidate' %in% rownames(installed.packages()))"
 
 WORKDIR /srv
-COPY validators.R data_io.R format_clones.R tree_build.R dta.R time_evolution.R internal_seqs.R exports.R handlers.R plumber.R /srv/
+COPY validators.R data_io.R format_clones.R tree_build.R dta.R time_evolution.R internal_seqs.R exports.R handlers.R plumber.R job_manager.R job_runner.R /srv/
 
 EXPOSE 8001
 

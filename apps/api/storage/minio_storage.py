@@ -143,6 +143,23 @@ class MinIOStorage(StorageInterface):
         except S3Error:
             return False
 
+    async def move(self, src_path: str, dst_path: str) -> str:
+        """Move within MinIO via server-side copy + remove."""
+        from minio.commonconfig import CopySource
+
+        src_key = src_path.lstrip("/")
+        dst_key = dst_path.lstrip("/")
+        try:
+            self.client.copy_object(
+                self.bucket_name,
+                dst_key,
+                CopySource(self.bucket_name, src_key),
+            )
+            self.client.remove_object(self.bucket_name, src_key)
+            return dst_key
+        except S3Error as e:
+            raise Exception(f"Failed to move object in MinIO: {e}")
+
     def get_storage_type(self) -> str:
         """Get storage type."""
         return "minio"

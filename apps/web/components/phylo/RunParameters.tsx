@@ -6,6 +6,7 @@ import { Card } from "@/components/ui/card";
 import FormBuilder from "@/components/ui/FormBuilder";
 import { Label } from "@/components/ui/label";
 import { useCreateRun } from "@/features/runs/hooks";
+import { useUploadSession } from "@/features/uploads/hooks";
 import { notify } from "@/lib/notify";
 import type { MethodSpec } from "@phylo/contracts";
 import { useMemo, useState } from "react";
@@ -88,7 +89,8 @@ export default function RunParameters({
   runInProgress?: boolean;
 }) {
   const createRun = useCreateRun();
-  const [uploadPct, setUploadPct] = useState<number | null>(null);
+  const uploadSession = useUploadSession();
+  const [submitting, setSubmitting] = useState(false);
   const [filePickerOpen, setFilePickerOpen] = useState(false);
   const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
   const [selectedFileDisplay, setSelectedFileDisplay] = useState<{ name: string; size: number } | null>(null);
@@ -115,37 +117,39 @@ export default function RunParameters({
   );
 
   async function handleSubmit(values: Record<string, any>) {
-    const fd = new FormData();
-    fd.set("params", JSON.stringify(values ?? {}));
-
-    if (selectedFileId) {
-      fd.set("file_id", selectedFileId);
-    } else {
-      const maxFiles = Number(spec.uiHints?.maxFiles ?? 1);
-      if (files?.length) {
-        if (maxFiles <= 1) {
-          const f = files[0];
-          fd.set("file", f, f.name);
-        } else {
-          files.forEach((f) => fd.append("file", f, f.name));
-        }
-      }
-    }
-
-    setUploadPct(0);
+    setSubmitting(true);
     try {
+      // Decoupled flow: upload the local file first (cancellable), then create
+      // the run referencing the resulting file_id. Previously-selected files
+      // already have a file_id and skip upload.
+      let fileId: string | null = selectedFileId;
+      if (!fileId && files?.length) {
+        const uploaded = await uploadSession.upload(files[0]);
+        fileId = uploaded.file_id;
+      }
+
       const res = await createRun.mutateAsync({
         methodId: spec.id,
-        formData: fd,
-        onProgress: (pct) => setUploadPct(pct),
+        params: values ?? {},
+        fileId,
       });
-      setUploadPct(null);
       onSubmitDone?.(res.run_id);
     } catch (e: any) {
-      setUploadPct(null);
-      notify.error("Run failed", e?.message ?? "Unknown error");
+      if (e?.aborted) {
+        notify.error("Upload cancelled", "The file upload was cancelled.");
+      } else {
+        notify.error("Run failed", e?.message ?? "Unknown error");
+      }
+    } finally {
+      setSubmitting(false);
     }
   }
+
+  async function handleCancelUpload() {
+    await uploadSession.cancel();
+  }
+
+  const busy = submitting || uploadSession.uploading;
 
   return (
     <Card className="p-4 space-y-4">
@@ -165,7 +169,7 @@ export default function RunParameters({
       <FormBuilder
         schema={schemaMemo}
         onSubmit={handleSubmit}
-        disabled={runInProgress || (requiresFile && !hasFile)}
+        disabled={runInProgress || busy || (requiresFile && !hasFile)}
         footer={
           <div className="col-span-full">
             <div className="flex items-center justify-between mb-2">
@@ -258,15 +262,28 @@ export default function RunParameters({
         }
       />
 
-      {uploadPct !== null && (
+      {uploadSession.uploading && (
         <div className="space-y-2">
-          <div className="text-sm">
-            Uploading{Number.isFinite(uploadPct) ? ` (${uploadPct}%)` : ""}
+          <div className="flex items-center justify-between">
+            <div className="text-sm">
+              Uploading
+              {Number.isFinite(uploadSession.progress ?? NaN)
+                ? ` (${uploadSession.progress}%)`
+                : ""}
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleCancelUpload}
+            >
+              Cancel upload
+            </Button>
           </div>
           <div className="h-2 w-full bg-muted rounded overflow-hidden">
             <div
               className="h-full rounded bg-primary transition-[width]"
-              style={{ width: `${uploadPct ?? 0}%` }}
+              style={{ width: `${uploadSession.progress ?? 0}%` }}
             />
           </div>
         </div>

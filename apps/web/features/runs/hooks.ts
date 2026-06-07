@@ -6,8 +6,8 @@ import { useEffect, useRef } from "react";
 
 type CreateRunVars = {
   methodId: string;
-  formData: FormData;
-  onProgress?: (p: number) => void;
+  params?: Record<string, unknown>;
+  fileId?: string | null;
 };
 
 function truncateForToast(msg: string, max = 100): string {
@@ -17,11 +17,19 @@ function truncateForToast(msg: string, max = 100): string {
 
 export function useCreateRun() {
   return useMutation<CreateRunResponse, any, CreateRunVars>({
-    mutationFn: ({ methodId, formData, onProgress }) =>
-      RunsApi.create(methodId, formData, { onProgress }),
+    mutationFn: ({ methodId, params, fileId }) =>
+      RunsApi.create(methodId, { params, file_id: fileId }),
     onSuccess: () => notify.success("Run created"),
     onError: (e: any) =>
       notify.error("Failed to create run", truncateForToast(e?.message ?? "Unknown error")),
+  });
+}
+
+export function useCancelRun() {
+  return useMutation<RunStatus, any, string>({
+    mutationFn: (runId: string) => RunsApi.cancel(runId),
+    onError: (e: any) =>
+      notify.error("Failed to cancel run", truncateForToast(e?.message ?? "Unknown error")),
   });
 }
 
@@ -44,7 +52,8 @@ export function useRunStatus(runId?: string) {
         if (status === 403 || status === 404) return false;
       }
       const s = state.data?.status;
-      return s === "DONE" || s === "ERROR" || s === "CANCELLED" ? false : 1200;
+      // Stage-based status: poll every 10s for active runs (no fake progress).
+      return s === "DONE" || s === "ERROR" || s === "CANCELLED" ? false : 10000;
     },
     retry: (failureCount, error: any) => {
       const status = error?.response?.status;

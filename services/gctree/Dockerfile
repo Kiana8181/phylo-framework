@@ -72,6 +72,8 @@ if not out.exists() or out.stat().st_size <= 0:
 print(f"ETE smoke render OK: {out}")
 PY
 COPY app.py /srv/app.py
+COPY job_manager.py /srv/job_manager.py
+COPY job_runner.py /srv/job_runner.py
 
 EXPOSE 8002
 ENTRYPOINT ["/usr/bin/tini","--"]

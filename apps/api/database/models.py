@@ -58,6 +58,15 @@ class StorageType(str, enum.Enum):
     MINIO = "minio"
 
 
+class UploadSessionStatus(str, enum.Enum):
+    """Upload session lifecycle status."""
+    INITIATED = "INITIATED"
+    UPLOADING = "UPLOADING"
+    COMPLETED = "COMPLETED"
+    CANCELLED = "CANCELLED"
+    ERROR = "ERROR"
+
+
 class User(Base):
     """User model."""
     __tablename__ = "users"
@@ -122,10 +131,22 @@ class Run(Base):
         nullable=False,
     )
     message = Column(Text, nullable=True)
+    # High-level stage identifier (e.g. QUEUED, STAGING_INPUT, BUILDING_TREES).
+    stage = Column(String(50), nullable=True)
+    # User-facing message tied to the current stage.
+    stage_message = Column(Text, nullable=True)
+    # ID returned by the method service async job endpoint.
+    method_job_id = Column(String(255), nullable=True)
     params = Column(JSONB, nullable=False, default={})
     dataset_name = Column(String(255), nullable=True)
     result = Column(JSONB, nullable=True)
     error = Column(Text, nullable=True)
+    # Set by the cancel endpoint; observed by the worker to terminate the job.
+    cancel_requested_at = Column(DateTime(timezone=True), nullable=True)
+    # DB-backed worker locking: a claimed run is leased until this time.
+    worker_lease_until = Column(DateTime(timezone=True), nullable=True, index=True)
+    # Optional, useful for debugging which worker owns the run.
+    worker_id = Column(String(255), nullable=True)
     created_at = Column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -270,4 +291,56 @@ class JobQueue(Base):
         UniqueConstraint("job_id", name="uq_job_queue_job_id"),
         Index("idx_job_queue_run_id", "run_id"),
         Index("idx_job_queue_status", "status"),
+    )
+
+
+class UploadSession(Base):
+    """Upload session - decouples file upload from run creation.
+
+    Allows reliable cancellation and cleanup of partial/temporary uploads
+    independent of run lifecycle.
+    """
+    __tablename__ = "upload_sessions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    status = Column(
+        Enum(UploadSessionStatus, native_enum=False),
+        default=UploadSessionStatus.INITIATED,
+        nullable=False,
+        index=True,
+    )
+    original_filename = Column(String(255), nullable=False)
+    mime_type = Column(String(100), nullable=True)
+    expected_size = Column(BigInteger, nullable=True)
+    bytes_received = Column(BigInteger, default=0, nullable=False)
+    temp_storage_path = Column(Text, nullable=True)
+    final_file_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("files.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    error = Column(Text, nullable=True)
+    created_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+        index=True,
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    cancelled_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index("idx_upload_sessions_user_status", "user_id", "status"),
     )

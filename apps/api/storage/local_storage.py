@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import BinaryIO, Optional
 from urllib.parse import urljoin
@@ -91,6 +92,14 @@ class LocalStorage(StorageInterface):
         safe_path = file_path.lstrip("/")
         full_path = self.base_path / safe_path
         return full_path.exists()
+
+    async def move(self, src_path: str, dst_path: str) -> str:
+        """Rename a file within local storage (atomic on same filesystem)."""
+        src = self.base_path / src_path.lstrip("/")
+        dst = self.base_path / dst_path.lstrip("/")
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(src, dst)
+        return dst_path.lstrip("/")
 
     def get_storage_type(self) -> str:
         """Get storage type."""
