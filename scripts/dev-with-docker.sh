@@ -162,6 +162,7 @@ mkdir -p "$HOST_STORAGE_DIR"
 cleanup(){
   echo
   echo "${YLW}Shutting down...${CLR}"
+  if [[ -n "${WORKER_PID:-}" ]]; then kill "$WORKER_PID" 2>/dev/null || true; fi
   if [[ -n "${API_PID:-}" ]]; then kill "$API_PID" 2>/dev/null || true; fi
   node "$ROOT/scripts/method-services.mjs" stop >/dev/null 2>&1 || true
   docker compose --profile dev stop postgres >/dev/null 2>&1 || true
@@ -205,6 +206,17 @@ echo "${BLU}==> Starting API on :${API_PORT}${CLR}"
 uvicorn apps.api.main:app --host 0.0.0.0 --port "$API_PORT" >/tmp/api.log 2>&1 &
 API_PID=$!
 wait_http "$API_PORT" || { tail -n 200 /tmp/api.log 2>/dev/null || true; die "API failed readiness check"; }
+
+echo "${BLU}==> Starting run worker (processes QUEUED runs)${CLR}"
+python -m apps.api.workers.run_worker >/tmp/run-worker.log 2>&1 &
+WORKER_PID=$!
+sleep 1
+if ! kill -0 "$WORKER_PID" 2>/dev/null; then
+  echo "${YLW}Last 50 run-worker logs:${CLR}"
+  tail -n 50 /tmp/run-worker.log 2>/dev/null || true
+  die "Run worker failed to start"
+fi
+echo "${GRN}Run worker started (pid ${WORKER_PID}).${CLR}"
 
 echo "${BLU}==> Starting Next.js dev on :${WEB_PORT}${CLR}"
 (cd "$ROOT/apps/web" && npm run dev -- -p "$WEB_PORT")

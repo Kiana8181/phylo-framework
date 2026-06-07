@@ -12,6 +12,7 @@
     "build": "npm -w @phylo/contracts run build && npm -w web run build",
     "dev:web": "node --env-file=.env ./scripts/dev-web.mjs",
     "dev:api": "node --env-file=.env ./scripts/dev-api.mjs",
+    "dev:worker": "node --env-file=.env ./scripts/dev-worker.mjs",
     "lint": "npm -w web run lint",
     "test": "npm -w @phylo/contracts run test && npm -w web run test",
     "phylo:run": "node ./scripts/select-mode.mjs",
