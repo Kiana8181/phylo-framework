@@ -4,10 +4,18 @@ A one-page UI to run phylogeny/lineage tree methods behind a simple orchestrator
 
 - **Web**: Next.js (apps/web)
 - **API**: FastAPI (apps/api)
-- **Methods**: pluggable microservices (Dowser, GCtree, BrepPhylo included)
+- **Methods**: pluggable microservices (Dowser, GCtree, BrepPhylo, ClonalTree included)
 - **Contracts**: JSON schemas (packages/contracts) used by both UI & API to drive parameters, validation, and results
+- **Object storage**: self-hosted **MinIO** (S3-compatible) holds uploaded datasets and generated artifacts; the database stores only metadata + references
 
 > **Heads-up**: Running with Docker for the first time is **time-consuming** because large R images and packages need to be downloaded and built.
+
+> **File management (important):** Uploaded datasets and generated run artifacts
+> (images, PDFs, Newick, TSV/CSV, logs, ZIP bundles) live in **MinIO**, never in the
+> repository and never as base64 in the database. Downloads/previews are streamed
+> through the API. See [File Management & Object Storage](#file-management--object-storage)
+> and [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md). The `.env` file is **gitignored** —
+> copy `.env.example` to `.env` before running.
 
 ---
 
@@ -16,14 +24,17 @@ A one-page UI to run phylogeny/lineage tree methods behind a simple orchestrator
 - [Quick Start](#quick-start)
 - [What You Get](#what-you-get)
 - [Architecture](#architecture)
+- [File Management & Object Storage](#file-management--object-storage)
 - [Ports](#ports)
 - [Prerequisites](#prerequisites)
   - [macOS](#macos) · [Linux](#linux) · [Windows](#windows)
 - [Run It](#run-it)
+  - [Dev — Full Docker Compose (simplest)](#dev--full-docker-compose-simplest)
   - [Dev (Docker methods)](#dev-docker-methods)
   - [Dev (Local R methods)](#dev-local-r-methods)
   - [Prod (Docker Compose)](#prod-docker-compose)
 - [Manual Run (Developers)](#manual-run-developers)
+- [Clean Reset (wipe local DB + storage)](#clean-reset-wipe-local-db--storage)
 - [Environment Variables](#environment-variables)
 - [Troubleshooting](#troubleshooting)
 - [Extend: Add a New Method](#extend-add-a-new-method)
@@ -60,13 +71,20 @@ python -m pip install -U pip
 pip install -r apps/api/requirements.txt
 ```
 
-3. **Make helper scripts executable** (they are expected at the repo root):
+3. **Create your `.env`** (it is gitignored — never committed):
 
 ```bash
-chmod +x ./run.sh ./scripts/dev-with-docker.sh ./scripts/dev-with-local-r.sh
+cp .env.example .env
+# then edit secrets (JWT_SECRET_KEY, MinIO credentials, OAuth/email keys, etc.)
 ```
 
-4. **Run the interactive menu** (uses Inquirer under the hood):
+4. **Make helper scripts executable** (they are expected at the repo root):
+
+```bash
+chmod +x ./run.sh ./scripts/dev-with-docker.sh ./scripts/dev-with-local-r.sh ./scripts/reset-local.sh
+```
+
+5. **Run the interactive menu** (uses Inquirer under the hood):
 
 ```bash
 ./run.sh
@@ -78,19 +96,30 @@ Pick:
 - **Dev → Local R** (fast if you already have R 4.3+ with packages)
 - **Prod → docker compose** (recommended for deployments)
 
-> The scripts perform port checks and dependency checks and print **meaningful errors** if something is missing or a port is busy.
+> All modes start **MinIO** automatically and create the `phylo-datasets` /
+> `phylo-artifacts` buckets on first run. The scripts perform port checks and
+> dependency checks and print **meaningful errors** if something is missing or a
+> port is busy.
+
+> Prefer everything in containers? Use the one-command
+> [Dev — Full Docker Compose](#dev--full-docker-compose-simplest) flow instead of `./run.sh`.
 
 ---
 
 ## What You Get
 
-- **UI**: dynamic schema-driven form; upload data (CSV/TSV/RDS/RDA/FASTA for Dowser); display trees/results.
+- **UI**: dynamic schema-driven form; upload data (CSV/TSV/RDS/RDA/FASTA for Dowser); display trees/results; lazy artifact downloads + image previews (no base64 in the browser).
 - **API** (FastAPI):
   - `GET /methods` — list methods
   - `GET /methods/{id}/spec` — method spec + UI hints
-  - `POST /runs?method={id}` — upload file(s) + params; **errors if required files are missing**
-  - `GET /runs/{id}/result` — results envelope (e.g., Newick, images, tables)
-- **Method service (Dowser)**: R/plumber HTTP exposing `/spec` and `/run`.
+  - `POST /uploads/init` + `PUT /uploads/{id}/content` — upload a dataset to object storage
+  - `POST /runs?method={id}` — create a run referencing an uploaded `file_id`
+  - `GET /runs/{id}/result` — **lightweight** scientific summary only (no base64, no embedded binaries) + `dataset` descriptor + `artifact_count`
+  - `GET /runs/{id}/artifacts` — list downloadable artifact descriptors
+  - `GET /artifacts/{id}/download` · `GET /artifacts/{id}/preview` — stream a file / inline preview
+  - `GET /datasets/{id}/download` — download the original uploaded dataset
+  - `DELETE /datasets/{id}` — hard-delete the stored object, soft-delete the metadata row (idempotent; preserves run history)
+- **Method services**: R/plumber (Dowser, BrepPhylo) and FastAPI (GCtree, ClonalTree) exposing `/spec` + the async `/jobs` contract. They write output files + a manifest; the worker uploads those to MinIO. No base64 crosses the service→API boundary.
 
 ---
 
@@ -107,6 +136,33 @@ Pick:
 
 ---
 
+## File Management & Object Storage
+
+The system of record for files is **MinIO** (self-hosted, S3-compatible, free). No
+AWS or paid cloud storage is required. The abstraction stays S3-compatible, so a
+real S3 endpoint can be used later by changing env vars only.
+
+| What | Where | Notes |
+| --- | --- | --- |
+| Uploaded datasets | MinIO bucket `S3_BUCKET_DATASETS` | key `datasets/{user}/{upload}.{ext}` |
+| Generated artifacts | MinIO bucket `S3_BUCKET_ARTIFACTS` | key `artifacts/{run}/{artifact}/{file}` |
+| Run/file/artifact metadata | PostgreSQL | lightweight `result` JSON; **no base64** |
+| Staging scratch (`/runtime/storage`) | host bind / volume | where a dataset is staged for a method to read |
+| Method job outputs (`/runtime/method-jobs`) | host dir / volume | method writes files; the **worker** uploads them to MinIO |
+
+Flow: upload → object in `phylo-datasets`; the worker stages it for the method
+service, the method writes output **files + a manifest**, and the worker uploads
+those to `phylo-artifacts` and records `run_artifacts` rows. The browser fetches
+images/downloads by streaming through the API (`/artifacts/{id}/preview|download`) —
+MinIO is never exposed to the browser.
+
+- Verify storage connectivity + buckets at any time: `npm run storage:check` (host)
+  or `npm run storage:check:docker` (inside the API container).
+- Full clean reset (wipe DB + MinIO + staging): `bash ./scripts/reset-local.sh`.
+- Production/server guidance (volumes, backup/restore, hardening): [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md).
+
+---
+
 ## Ports
 
 |    Service | URL                   | Port |
@@ -117,8 +173,10 @@ Pick:
 |     GCtree | http://localhost:8002 | 8002 |
 |  BrepPhylo | http://localhost:8003 | 8003 |
 | ClonalTree | http://localhost:8004 | 8004 |
+|  MinIO API | http://localhost:9000 | 9000 |
+| MinIO Console | http://localhost:9001 | 9001 |
 
-> Ensure these ports are **free** before running. The helper scripts will check and exit with a clear error if not.
+> Ensure these ports are **free** before running. The helper scripts will check and exit with a clear error if not. MinIO ports are configurable via `MINIO_API_PORT` / `MINIO_CONSOLE_PORT`.
 
 ---
 
@@ -152,9 +210,44 @@ You do **not** need everything for every mode; the helper will tell you what’s
 
 ## Run It
 
+> Every mode below starts MinIO and auto-creates the `phylo-datasets` and
+> `phylo-artifacts` buckets. After startup you can sanity-check storage with
+> `npm run storage:check` (host) / `npm run storage:check:docker` (containers).
+
+### Dev — Full Docker Compose (simplest)
+
+Everything in containers, including the **run worker** (which shares the
+`method_jobs` volume to ingest artifacts). This is the most reliable developer
+path and the closest match to production.
+
+```bash
+cp .env.example .env          # first time only
+docker compose --profile dev up -d --build
+# - postgres migrations run automatically (api runs `alembic upgrade head` on start)
+# - minio-init creates both buckets
+npm run storage:check:docker  # optional: verify storage
+```
+
+- Web → http://localhost:3000 · API → http://localhost:8000 · MinIO console → http://localhost:9001
+
+Tail logs / stop:
+
+```bash
+docker compose --profile dev logs -f api api-worker
+docker compose --profile dev down        # add -v to also wipe volumes (DB + MinIO)
+```
+
+> Use this when you don't need hot-reload of the API/worker. For fast Python
+> iteration on the API/worker, use the `./run.sh` hybrid modes below (host
+> API/worker + Docker or local methods).
+
+---
+
 ### Dev (Docker methods)
 
-No local R needed. Starts **Dowser** in a container on **:8001**, the **API** on **:8000**, and the **Web** dev server on **:3000**.
+Host **API + worker** with hot-reload; method services run in **Docker**.
+MinIO + Postgres start via Compose automatically; method containers and the host
+worker share `runtime/method-jobs` so artifacts can be ingested.
 
 ```bash
 ./run.sh
@@ -187,17 +280,22 @@ The script starts **plumber** on **:8001**, **API** on **:8000**, and **Web** on
 
 ### Prod (Docker Compose)
 
-Everything in containers with internal networking.
+Everything in containers with internal networking (includes Postgres, MinIO,
+API, worker, web, and all method services).
 
 ```bash
 ./run.sh
 # choose: Prod → docker compose
+# or directly:
+docker compose --profile prod up -d --build
 ```
 
 - Web → http://localhost:3000
 - API → http://localhost:8000
 
-> First run can take a **long time** for images to download/build.
+> First run can take a **long time** for images to download/build. For server
+> deployment (persistent volumes, **not** exposing MinIO publicly, backup/restore,
+> credential hardening, post-deploy checks) follow **[docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md)**.
 
 ---
 
@@ -230,15 +328,19 @@ Generated keys include both local and compose-network URLs:
 
 If you want to run without `./run.sh`, use this flow.
 
-### 1) Sync + edit the single env file
+### 1) Create + sync the single env file
 
 From repo root:
 
 ```bash
-npm run services:sync-env
+cp .env.example .env          # .env is gitignored; never commit it
+npm run services:sync-env     # generates METHOD_* vars into .env
 ```
 
-Then edit only root `.env` for project configuration (API, web, DB, storage, method URLs, auth/email keys, etc.).
+Then edit only root `.env` for project configuration (API, web, DB, **object
+storage / MinIO**, method URLs, auth/email keys, etc.). The storage defaults
+(`STORAGE_BACKEND=minio`, `S3_*`, `MINIO_ROOT_*`, bucket names) already work for
+local development — change the credentials/buckets for anything shared.
 
 ### 2) Install dependencies
 
@@ -256,14 +358,32 @@ pip install -r apps/api/requirements.txt
 npm -w @phylo/contracts run build
 ```
 
-### 3) Start PostgreSQL and run migrations
+### 3) Start PostgreSQL + MinIO, run migrations, verify storage
 
 ```bash
 set -a; source .env; set +a
 source .venv/bin/activate
-docker compose --profile dev up -d postgres
-npm run db:migrate
+
+# Database + object storage (minio-init creates both buckets, then exits)
+docker compose --profile dev up -d postgres minio minio-init
+docker wait phylo-minio-init 2>/dev/null || true   # block until buckets are ready (no-op if already done)
+
+npm run db:migrate             # applies migrations incl. 008 (run_artifacts, dataset soft-delete)
+npm run storage:check          # round-trips both buckets via the host (localhost:9000) — the real readiness gate
 ```
+
+> If `set -a; source .env` errors on values containing `<` or spaces (e.g.
+> `EMAIL_FROM`), run the storage check via the Node wrapper instead, which parses
+> `.env` safely: `node --env-file=.env ./scripts/storage-check.mjs`.
+
+> **Method services upload artifacts directly to MinIO** using a scoped
+> PutObject-only user (`MINIO_METHODS_USER`/`MINIO_METHODS_PASSWORD`, created
+> by the `minio-init` container with a policy restricted to
+> `s3:PutObject` on the artifact bucket). The worker never reads files from
+> disk and there is no shared volume between methods and the worker —
+> `METHOD_JOBS_DIR` is purely internal to each method container (for
+> `status.json` / `request.json` / `job.log`). `job.log` is auto-uploaded to
+> MinIO at the end of every job alongside the scientific artifacts.
 
 ### 4) Start method services (pick one approach)
 
@@ -293,6 +413,11 @@ mkdir -p "$STORAGE_ABS"
 export STRICT_CONTRACT_ROUTES="${STRICT_CONTRACT_ROUTES:-true}"
 export METHOD_SERVICE_FILE_PREFIX="$STORAGE_ABS"
 export HOST_RUNTIME_SHARED_ROOT="$STORAGE_ABS"
+# Method services upload artifact files directly to MinIO using a scoped user
+# created by minio-init. No shared METHOD_JOBS_DIR with the worker is needed —
+# methods only use it for internal state (status.json/request.json/job.log).
+export METHOD_JOBS_DIR="$PWD/runtime/method-jobs"
+mkdir -p "$METHOD_JOBS_DIR"
 export IGPHYML_BIN="${IGPHYML_BIN:-/usr/local/share/igphyml/src/igphyml}"
 export IGPHYML_MOTIFS="${IGPHYML_MOTIFS:-/usr/local/share/igphyml/src/motifs}"
 export IGPHYML_PATH="${IGPHYML_PATH:-$IGPHYML_MOTIFS}"
@@ -419,11 +544,22 @@ npm run dev:api
 
 ### 5b) Start run worker
 
-Processes `QUEUED` runs (required for async orchestration). Run in a **separate terminal** from API and web. Requires postgres and method services to be up. Uses the same root `.env` as `dev:api` (DB URL, `METHOD_*_URL`, storage paths).
+Processes `QUEUED` runs and **ingests method outputs into MinIO** (uploads
+artifacts, records `run_artifacts` rows). Run in a **separate terminal** from API
+and web. Requires postgres, MinIO, and method services to be up. Uses the same
+root `.env` as `dev:api` (DB URL, `S3_*`, `METHOD_*_URL`, storage paths).
 
 ```bash
 npm run dev:worker
 ```
+
+> The worker no longer reads files from disk — method services upload artifact
+> files (PNGs, ZIPs, `job.log`, etc.) directly to MinIO using their scoped
+> `MINIO_METHODS_*` credentials. The worker only registers DB rows from the
+> manifest each method emits in `result.json`. If artifacts never appear after
+> a run completes, check that the `minio-init` container created the
+> `phylo-methods` user, and that the method service env carries
+> `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` pointing at it.
 
 ### 6) Start web UI
 
@@ -436,19 +572,61 @@ Open `http://localhost:3000`.
 
 ---
 
+## Clean Reset (wipe local DB + storage)
+
+Project-scoped and safe — it only removes **this** project's containers + named
+volumes (`postgres_data`, `method_jobs`, `minio_data`) and the local
+`./runtime` staging folders. It never runs `docker volume prune` and never
+touches unrelated files.
+
+```bash
+bash ./scripts/reset-local.sh
+```
+
+It stops the stack, drops the project volumes, deletes `./runtime/storage` and
+`./runtime/method-jobs`, rebuilds + starts the clean dev stack (buckets are
+recreated automatically), and runs the storage check.
+
+Manual equivalent:
+
+```bash
+docker compose down -v --remove-orphans
+rm -rf ./runtime/storage ./runtime/method-jobs
+docker compose --profile dev up -d --build
+```
+
+---
+
 ## Environment Variables
 
-All runtime configuration should live in root `.env`.
+All runtime configuration should live in root `.env` (copied from
+`.env.example`). `.env` is **gitignored** — keep secrets out of version control.
 
 - `CONTRACTS_DIR` — contracts path used by API/methods
 - `CORS_ORIGINS` — allowed web origins for API CORS
 - `NEXT_PUBLIC_API_BASE_URL` — web -> API base URL
 - `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` / `POSTGRES_HOST` / `POSTGRES_PORT` — DB connection pieces
 - `DATABASE_URL` — optional explicit DB URL override
-- `STORAGE_LOCAL_PATH` — host-side storage directory
-- `STORAGE_LOCAL_URL` — API URL prefix for local storage
-- `HOST_RUNTIME_SHARED_ROOT` — host absolute storage root that API uses to stage/map method inputs
+**Object storage (MinIO / S3-compatible):**
+
+- `STORAGE_BACKEND` — `minio` (default), `s3`, or `local` (tests only)
+- `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` — MinIO root creds (also used as the S3 key/secret by default)
+- `S3_ENDPOINT_URL` — S3 endpoint for **host-run** processes/scripts (e.g. `http://localhost:9000`)
+- `S3_ENDPOINT_URL_DOCKER` — S3 endpoint **inside** containers (e.g. `http://minio:9000`); Compose injects this as the in-container `S3_ENDPOINT_URL`
+- `S3_REGION` — region label (any value for MinIO)
+- `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` — S3 credentials (keep in sync with the MinIO root creds, or use a scoped MinIO user)
+- `S3_BUCKET_DATASETS` / `S3_BUCKET_ARTIFACTS` — bucket names
+- `S3_FORCE_PATH_STYLE` — `true` for MinIO (path-style addressing)
+- `MINIO_API_PORT` / `MINIO_CONSOLE_PORT` — host ports for the MinIO container
+
+**Staging / method I/O:**
+
+- `STORAGE_LOCAL_PATH` — host-side **staging** directory (scratch; not the dataset/artifact store)
+- `STORAGE_LOCAL_URL` — URL prefix for the local test backend
+- `HOST_RUNTIME_SHARED_ROOT` — host absolute staging root the API uses to stage/map method inputs
 - `METHOD_SERVICE_FILE_PREFIX` — prefix API rewrites file paths to when calling method services (`/runtime/storage` for Docker methods, host absolute path for local methods)
+- `METHOD_JOBS_DIR` — internal per-method-container directory for `status.json` / `request.json` / `job.log`. **Do not set in `.env`** — this is purely internal to each method container. Defaults to `/runtime/method-jobs` inside the container. The worker does NOT read it; artifact files are uploaded directly to MinIO by each method.
+- `MINIO_METHODS_USER` / `MINIO_METHODS_PASSWORD` — scoped MinIO credentials (created by `minio-init`) used by method services to upload artifact files directly to the artifact bucket. Restricted to `s3:PutObject` only.
 - `METHOD_<ID>_URL` — host URL for each method service
 - `METHOD_<ID>_URL_DOCKER` — compose-network URL for each method service
 - `METHOD_<ID>_HOST_PORT` / `METHOD_<ID>_CONTAINER_PORT` — generated service ports
@@ -460,11 +638,15 @@ All runtime configuration should live in root `.env`.
 
 ## Troubleshooting
 
-- **Ports busy** → stop other processes, or change ports in `.env` and compose files.
+- **Ports busy** → stop other processes, or change ports in `.env` and compose files (MinIO: `MINIO_API_PORT` / `MINIO_CONSOLE_PORT`).
 - **Dowser schema errors in Local R** → ensure you started R in `services/dowser` (or set `CONTRACTS_DIR` correctly); Docker option mounts contracts automatically.
 - **`@phylo/contracts` not found** → run `npm i` at repo root; ensure `apps/web/package.json` depends on `"@phylo/contracts"`.
 - **Docker is slow** → first run downloads large R images; subsequent runs are faster.
 - **CORS** → make sure `CORS_ORIGINS` in API includes your web origin.
+- **API/worker fails at startup with a MinIO connection error** → MinIO isn't up or the endpoint is wrong. Start it (`docker compose --profile dev up -d minio minio-init`) and confirm `S3_ENDPOINT_URL` is `http://localhost:9000` for host processes. Verify with `npm run storage:check`.
+- **Run completes but no artifacts / downloads appear** → method service couldn't upload to MinIO. Check that the `minio-init` container completed cleanly (`docker compose logs minio-init` — expect `methods user ready`), and that the method service env carries the scoped `MINIO_METHODS_*` creds plus a working `S3_ENDPOINT_URL`. In host-run dev mode the method container reaches MinIO via `host.docker.internal:9000` (the `--add-host=host.docker.internal:host-gateway` flag in `method-services.mjs` makes this work on Linux).
+- **Buckets missing** → re-run `docker compose --profile dev up -d minio minio-init` and check `docker compose logs minio-init`.
+- **`source .env` parse error** (values with `<` / spaces) → use the Node wrappers (`node --env-file=.env ...`) which the npm scripts already do.
 
 ---
 
@@ -482,15 +664,22 @@ All runtime configuration should live in root `.env`.
 
 ```
 apps/
-  api/        # FastAPI orchestrator
+  api/        # FastAPI orchestrator + DB-backed run worker + storage abstraction
   web/        # Next.js app
 packages/
-  contracts/  # Shared contracts (schemas, UI hints)
+  contracts/  # Shared contracts (schemas, UI hints, TS types/routes)
 services/
-  dowser/     # R/plumber service (Dowser)
+  dowser/     # R/plumber service (Dowser)      + artifact_manifest.R
+  brepphylo/  # R/plumber service (BrepPhylo)    + artifact_manifest.R
+  gctree/     # FastAPI service (GCtree)         + artifact_manifest.py
+  clonaltree/ # FastAPI service (ClonalTree)     + artifact_manifest.py
+docs/
+  DEPLOYMENT.md          # MinIO/server deployment, volumes, backup/restore
 # helper scripts:
 #   run.sh
 #   scripts/dev-with-docker.sh
 #   scripts/dev-with-local-r.sh
 #   scripts/select-mode.mjs
+#   scripts/reset-local.sh     # clean-slate reset (DB + MinIO + staging)
+#   scripts/storage-check.mjs  # storage connectivity / bucket check
 ```

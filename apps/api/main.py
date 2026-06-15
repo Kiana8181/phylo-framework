@@ -18,6 +18,8 @@ from apps.api.routers import methods as methods_router
 from apps.api.routers import runs as runs_router
 from apps.api.routers import files as files_router
 from apps.api.routers import uploads as uploads_router
+from apps.api.routers import datasets as datasets_router
+from apps.api.routers import artifacts as artifacts_router
 from apps.api.auth import auth_router
 from apps.api.database import init_db, close_db
 
@@ -82,3 +84,5 @@ app.include_router(methods_router.router)
 app.include_router(runs_router.router)
 app.include_router(files_router.router)
 app.include_router(uploads_router.router)
+app.include_router(datasets_router.router)
+app.include_router(artifacts_router.router)

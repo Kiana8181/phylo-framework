@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import tempfile
 from pathlib import Path
@@ -19,10 +20,19 @@ from apps.api.database import get_db
 from apps.api.database.models import StorageType, UploadSessionStatus, User
 from apps.api.repositories.file_repository import FileRepository
 from apps.api.repositories.upload_session_repository import UploadSessionRepository
-from apps.api.storage import get_storage
+from apps.api.storage import get_dataset_storage
 
 router = APIRouter(prefix="/uploads", tags=["uploads"])
-storage = get_storage()
+
+_storage_inst = None
+
+
+def storage():
+    """Lazily build the dataset storage client (avoids connecting at import time)."""
+    global _storage_inst
+    if _storage_inst is None:
+        _storage_inst = get_dataset_storage()
+    return _storage_inst
 
 
 class _QuotaExceeded(Exception):
@@ -42,11 +52,11 @@ def _ext_for(filename: str) -> str:
 
 
 def _is_local() -> bool:
-    return storage.get_storage_type() == "local"
+    return storage().get_storage_type() == "local"
 
 
 def _storage_type_enum() -> StorageType:
-    t = storage.get_storage_type()
+    t = storage().get_storage_type()
     if t == "s3":
         return StorageType.S3
     if t == "minio":
@@ -56,7 +66,7 @@ def _storage_type_enum() -> StorageType:
 
 def _temp_local_path(user_id: UUID, upload_id: UUID) -> Path:
     if _is_local():
-        root = Path(storage.base_path) / "uploads" / "tmp" / str(user_id)
+        root = Path(storage().base_path) / "uploads" / "tmp" / str(user_id)
     else:
         root = Path(tempfile.gettempdir()) / "phylo-uploads" / str(user_id)
     return root / f"{upload_id}.part"
@@ -123,6 +133,7 @@ async def upload_content(
     used = await file_repo.get_total_size_by_user(current_user.id)
     quota = STORAGE_QUOTA_PER_USER_BYTES
     bytes_received = 0
+    hasher = hashlib.sha256()
 
     try:
         async with aiofiles.open(tmp_path, "wb") as f:
@@ -132,6 +143,7 @@ async def upload_content(
                 bytes_received += len(chunk)
                 if used + bytes_received > quota:
                     raise _QuotaExceeded()
+                hasher.update(chunk)
                 await f.write(chunk)
     except _QuotaExceeded:
         _safe_unlink(str(tmp_path))
@@ -152,21 +164,25 @@ async def upload_content(
         await repo.mark_error(upload_id, "Empty upload")
         raise HTTPException(400, "No file content received.")
 
-    final_rel = f"{current_user.id}/{upload_id}{ext}"
+    # Store datasets under a dedicated prefix in the configured bucket.
+    final_rel = f"datasets/{current_user.id}/{upload_id}{ext}"
+    checksum_sha256 = hasher.hexdigest()
     try:
         if _is_local():
-            tmp_rel = str(Path(tmp_path).resolve().relative_to(Path(storage.base_path).resolve()))
-            final_storage_path = await storage.move(tmp_rel, final_rel)
+            tmp_rel = str(Path(tmp_path).resolve().relative_to(Path(storage().base_path).resolve()))
+            final_storage_path = await storage().move(tmp_rel, final_rel)
         else:
-            with open(tmp_path, "rb") as fh:
-                final_storage_path = await storage.upload(fh, final_rel, session.mime_type)
+            # Stream from disk into the object store (no full read into memory).
+            final_storage_path = await storage().upload_file(
+                str(tmp_path), final_rel, content_type=session.mime_type
+            )
             _safe_unlink(str(tmp_path))
     except Exception as exc:
         _safe_unlink(str(tmp_path))
         await repo.mark_error(upload_id, f"Failed to store upload: {exc!s}")
         raise HTTPException(500, f"Failed to store upload: {exc!s}")
 
-    storage_url = await storage.get_url(final_storage_path)
+    storage_url = await storage().get_url(final_storage_path)
     file_record = await file_repo.create_file(
         user_id=current_user.id,
         original_filename=session.original_filename,
@@ -175,6 +191,8 @@ async def upload_content(
         storage_url=storage_url,
         file_size=bytes_received,
         mime_type=session.mime_type,
+        storage_bucket=storage().bucket,
+        checksum_sha256=checksum_sha256,
     )
     await repo.mark_completed(
         upload_id, final_file_id=file_record.id, bytes_received=bytes_received
@@ -232,7 +250,7 @@ async def cancel_upload(
             storage_path = await file_repo.delete_file(final_file_id, current_user.id)
             if storage_path:
                 try:
-                    await storage.delete(storage_path)
+                    await storage().delete(storage_path)
                 except Exception:
                     pass
             await repo.detach_final_file(upload_id)

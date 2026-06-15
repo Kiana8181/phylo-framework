@@ -3,7 +3,10 @@ node_modules/
 __pycache__
 dist/
 build/
-# .env
 venv/
+
+# Secrets: never commit the real .env (ship .env.example instead).
+# .env
+!.env.example
 
 runtime/

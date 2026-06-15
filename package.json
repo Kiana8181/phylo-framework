@@ -20,6 +20,8 @@
     "phylo:dev:r": "bash ./scripts/dev-with-local-r.sh",
     "phylo:prod": "docker compose up -d --build",
     "db:migrate": "alembic upgrade head",
+    "storage:check": "node --env-file=.env ./scripts/storage-check.mjs",
+    "storage:check:docker": "node --env-file=.env ./scripts/storage-check.mjs --docker",
     "services:sync-env": "node scripts/method-services.mjs sync-env",
     "services:list": "node scripts/method-services.mjs list",
     "services:start": "node scripts/method-services.mjs start",

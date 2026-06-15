@@ -13,7 +13,8 @@ from apps.api.auth.dependencies import get_current_user, get_current_user_requir
 from apps.api.config import method_service_url
 from apps.api.contracts.loader import get_ui_hints
 from apps.api.database import get_db
-from apps.api.database.models import Run, RunStatus, User
+from apps.api.database.models import Run, RunStatus, StorageState, User
+from apps.api.repositories.artifact_repository import ArtifactRepository
 from apps.api.repositories.file_repository import FileRepository
 from apps.api.repositories.run_repository import RunRepository
 from apps.api.repositories.run_tree_repository import RunTreeRepository
@@ -67,6 +68,32 @@ def _attach_clone_ids_to_result_trees(payload: dict[str, Any]) -> dict[str, Any]
             continue
         tree.setdefault("clone_id", clone_id)
     return payload
+
+
+async def _dataset_descriptor(run: Run, file_repo: FileRepository) -> dict[str, Any] | None:
+    """Lightweight metadata for the dataset a run used (incl. deletion state).
+
+    Never includes the binary or a storage path — only history-safe metadata so
+    the UI can show a deleted dataset's name while preserving the run.
+    """
+    file_id = getattr(run, "input_file_id", None)
+    if not file_id:
+        return None
+    f = await file_repo.get_by_id(file_id)
+    if f is None:
+        return None
+    state = f.storage_state.value if hasattr(f.storage_state, "value") else str(f.storage_state)
+    return {
+        "id": str(f.id),
+        "original_filename": f.original_filename,
+        "file_size": f.file_size,
+        "checksum_sha256": f.checksum_sha256,
+        "mime_type": f.mime_type,
+        "uploaded_at": f.uploaded_at.isoformat() if f.uploaded_at else None,
+        "storage_state": state,
+        "is_deleted": state == StorageState.DELETED.value,
+        "deleted_at": f.deleted_at.isoformat() if f.deleted_at else None,
+    }
 
 
 async def _resolve_dataset_meta(run: Run, file_repo: FileRepository) -> tuple[str | None, list[str]]:
@@ -267,6 +294,16 @@ async def create_run(
         existing_file = await file_repo.get_by_id_and_user(existing_file_id, user_id)
         if not existing_file:
             raise HTTPException(404, "File not found or you do not have access to it.")
+        # A deleted dataset's object no longer exists; block rerun until re-upload.
+        if existing_file.storage_state == StorageState.DELETED:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "DATASET_DELETED",
+                    "message": "This dataset has been deleted. Re-upload the file to run again.",
+                    "dataset_id": str(existing_file.id),
+                },
+            )
 
     run = await run_repo.create_run(
         method_id=method,
@@ -444,6 +481,13 @@ async def run_result(
     payload.setdefault("dataset_files", dataset_files)
     payload.setdefault("started_at", run.started_at.isoformat() if run.started_at else None)
     payload.setdefault("finished_at", run.finished_at.isoformat() if run.finished_at else None)
+
+    # Lightweight, base64-free additions: a dataset descriptor (incl. deletion
+    # state for history) and an artifact count. Binaries are fetched lazily via
+    # the /artifacts endpoints — never embedded here.
+    payload["dataset"] = await _dataset_descriptor(run, file_repo)
+    artifact_repo = ArtifactRepository(db)
+    payload["artifact_count"] = await artifact_repo.count_for_run(run.id)
     return _attach_clone_ids_to_result_trees(payload)
 
 
