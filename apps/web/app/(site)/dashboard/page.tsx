@@ -1,14 +1,13 @@
 "use client";
 
-import MethodsGrid from "@/components/phylo/MethodsGrid";
 import ResultsSummary from "@/components/phylo/ResultsSummary";
-import RunParameters from "@/components/phylo/RunParameters";
 import RunProgress from "@/components/phylo/RunProgress";
 import TreesCarousel from "@/components/phylo/TreesCarousel";
+import RunWizard from "@/components/phylo/wizard/RunWizard";
 import RunParamsDropdown from "@/components/runs/RunParamsDropdown";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { useContractSpec, useMethods, useMethodSpec } from "@/features/methods/hooks";
+import { useContractSpec, useMethods } from "@/features/methods/hooks";
 import { RunsApi } from "@/features/runs/api";
 import { useRunResult, useRunStatus } from "@/features/runs/hooks";
 import { cleanNewick } from "@/lib/newick";
@@ -33,10 +32,6 @@ function DashboardPageContent() {
   const router = useRouter();
   const { data: methods } = useMethods();
 
-  const [selected, setSelected] = useState<MethodInfo | null>(null);
-  const { data: createSpec } = useMethodSpec(selected?.id);
-
-  const [files, setFiles] = useState<File[]>([]);
   const [runId, setRunIdState] = useState<string | null>(null);
   const [dashboardMode, setDashboardMode] = useState<DashboardMode>("create");
   const previousStatusRef = useRef<string | null>(null);
@@ -62,8 +57,6 @@ function DashboardPageContent() {
   const resetToCreateMode = () => {
     previousStatusRef.current = null;
     setRunId(null);
-    setFiles([]);
-    setSelected(null);
     setDashboardMode("create");
   };
 
@@ -157,7 +150,7 @@ function DashboardPageContent() {
     enabled: !!runId && dashboardMode === "results",
   });
 
-  const runMethodKey = status?.method_id ?? result?.method_id ?? selected?.id ?? null;
+  const runMethodKey = status?.method_id ?? result?.method_id ?? null;
   const { contractSpec: runContractSpec } = useContractSpec(runMethodKey ?? undefined);
 
   const methodsById = useMemo(() => {
@@ -166,7 +159,6 @@ function DashboardPageContent() {
     return map;
   }, [methods]);
 
-  const selectedMethodId = dashboardMode === "create" ? (selected?.id ?? null) : runMethodKey;
   const modelLabel = runMethodKey
     ? (methodsById.get(runMethodKey)?.name ?? runContractSpec?.methodLabel ?? runMethodKey)
     : "—";
@@ -212,31 +204,13 @@ function DashboardPageContent() {
         </div>
       </header>
 
-      <section className="space-y-3">
-        <h2 className="text-lg font-medium">Methods</h2>
-        <MethodsGrid
+      {dashboardMode === "create" && (
+        <RunWizard
           methods={methods ?? []}
-          selectedId={selectedMethodId}
-          onSelect={(m) => {
-            setSelected(m);
-            setRunId(null);
-            setFiles([]);
-            setDashboardMode("create");
-          }}
-          disabled={dashboardMode !== "create"}
-        />
-      </section>
-
-      {dashboardMode === "create" && createSpec && (
-        <RunParameters
-          spec={createSpec}
-          files={files}
-          onFiles={setFiles}
           onSubmitDone={(id) => {
             setRunId(id);
             setDashboardMode("running");
           }}
-          runInProgress={false}
         />
       )}
 
