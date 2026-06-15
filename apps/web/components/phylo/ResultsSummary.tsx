@@ -3,17 +3,15 @@
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import ArtifactsDownloadButton from "../ArtifactsDownloadButton";
+import RunArtifactsSection from "./RunArtifactsSection";
 import type {
   BrepPhyloAnalysis,
   BrepPhyloDiagnostics,
   BrepPhyloStats,
-  DowserArtifact,
   DowserChainQc,
   DowserDtaResult,
   DowserInputQc,
   DowserTimeEvolution,
-  DowserTreeDetail,
 } from "@phylo/contracts";
 import { useEffect, useMemo, useState } from "react";
 
@@ -29,52 +27,33 @@ type RepertoireTable = {
 
 type CloneRow = { id: string; seqs: number | string };
 
-function resolveArtifactBase64(
-  artifact: string | { clone_bundle_zip?: string | null } | null | undefined,
-): string | null {
-  if (!artifact) return null;
-  if (typeof artifact === "string") return artifact;
-  if (typeof artifact === "object" && typeof artifact.clone_bundle_zip === "string") {
-    return artifact.clone_bundle_zip;
-  }
-  return null;
-}
-
 export default function ResultsSummary({
+  runId,
   stats,
   cloneRows,
-  artifact_zip_b64,
-  artifact_name,
   repertoireTable,
   analysis,
   diagnostics,
   dowserDta,
   dowserTimeEvolution,
   dowserInputQc,
-  dowserArtifacts,
   dowserChainQc,
-  dowserTreesDetail,
 }: {
+  runId?: string | null;
   stats: BrepPhyloStats | Record<string, unknown> | null | undefined;
   cloneRows: CloneRow[];
-  artifact_zip_b64: string | { clone_bundle_zip?: string | null } | null | undefined;
-  artifact_name: string;
   repertoireTable?: RepertoireTable;
   analysis?: BrepPhyloAnalysis;
   diagnostics?: BrepPhyloDiagnostics;
   dowserDta?: DowserDtaResult;
   dowserTimeEvolution?: DowserTimeEvolution;
   dowserInputQc?: DowserInputQc;
-  dowserArtifacts?: DowserArtifact[];
   dowserChainQc?: DowserChainQc;
-  dowserTreesDetail?: DowserTreeDetail[];
 }) {
   const [currentPage, setCurrentPage] = useState(1);
   const [repertoirePage, setRepertoirePage] = useState(1);
   const [tableQuery, setTableQuery] = useState("");
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
-
-  const artifactB64 = resolveArtifactBase64(artifact_zip_b64);
 
   const statsRecord = (stats ?? {}) as BrepPhyloStats;
   const csrEvents = analysis?.csr_events ?? [];
@@ -167,9 +146,6 @@ export default function ResultsSummary({
   };
 
   const hasDowserDta = Boolean(dowserDta && (dowserDta.switches?.length || dowserDta.ps?.summary?.length));
-  const internalNodes = (dowserTreesDetail ?? []).flatMap((t) =>
-    (t.nodes ?? []).filter((n: { is_internal?: boolean }) => n.is_internal),
-  );
   const dtaSwitches = dowserDta?.switches ?? [];
 
   const hasAnalysis =
@@ -270,42 +246,6 @@ export default function ResultsSummary({
         </Card>
       )}
 
-      {internalNodes.length > 0 && (
-        <Card className="p-0 overflow-hidden">
-          <div className="px-4 py-3 border-b">
-            <h4 className="font-medium">Internal node sequences</h4>
-            <p className="text-xs text-muted-foreground mt-1">
-              Showing first {Math.min(10, internalNodes.length)} reconstructed internal nodes.
-            </p>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead className="bg-muted/40">
-                <tr>
-                  <th className="px-3 py-2 text-left">Clone</th>
-                  <th className="px-3 py-2 text-left">Node</th>
-                  <th className="px-3 py-2 text-left">Locus</th>
-                  <th className="px-3 py-2 text-left">Sequence (prefix)</th>
-                </tr>
-              </thead>
-              <tbody>
-                {internalNodes.slice(0, 10).map((n, idx) => (
-                  <tr key={`int-${idx}`} className="border-t">
-                    <td className="px-3 py-2">{n.clone_id ?? "—"}</td>
-                    <td className="px-3 py-2">{n.node_id ?? n.node ?? "—"}</td>
-                    <td className="px-3 py-2">{n.locus ?? "—"}</td>
-                    <td className="px-3 py-2 font-mono">
-                      {String(n.sequence ?? n.sequence_alignment ?? "").slice(0, 40)}
-                      {String(n.sequence ?? n.sequence_alignment ?? "").length > 40 ? "…" : ""}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-      )}
-
       {(dowserInputQc || dowserChainQc) && (
         <Card className="p-0 overflow-hidden">
           <div className="px-4 py-3 border-b">
@@ -340,24 +280,6 @@ export default function ResultsSummary({
               </div>
             )}
           </div>
-        </Card>
-      )}
-
-      {dowserArtifacts && dowserArtifacts.length > 0 && (
-        <Card className="p-0 overflow-hidden">
-          <div className="px-4 py-3 border-b">
-            <h4 className="font-medium">Export artifacts</h4>
-            <p className="text-xs text-muted-foreground mt-1">
-              Machine-readable outputs produced during the run.
-            </p>
-          </div>
-          <ul className="px-4 py-3 text-sm space-y-1">
-            {dowserArtifacts.map((a, idx) => (
-              <li key={`art-${idx}`} className="font-mono text-xs">
-                {a.name ?? a.path ?? "artifact"} ({a.kind ?? "file"})
-              </li>
-            ))}
-          </ul>
         </Card>
       )}
 
@@ -600,7 +522,7 @@ export default function ResultsSummary({
         </Card>
       )}
 
-      {artifactB64 && <ArtifactsDownloadButton base64={artifactB64} filename={artifact_name} />}
+      <RunArtifactsSection runId={runId} />
     </section>
   );
 }

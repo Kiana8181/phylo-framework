@@ -13,28 +13,14 @@ import { RunsApi } from "@/features/runs/api";
 import { useRunResult, useRunStatus } from "@/features/runs/hooks";
 import { cleanNewick } from "@/lib/newick";
 import { formatRunDuration } from "@/lib/runDuration";
-import { readDowserResult, readTreeTipColorStats, readTreeTipSizeBy, type MethodInfo, type RunTree, type RunWarning } from "@phylo/contracts";
+import { readDowserResult, readTreeTipColorStats, readTreeTipSizeBy, type MethodInfo, type RunWarning } from "@phylo/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { GitCompare } from "lucide-react";
-import Image from "next/image";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 
 type DashboardMode = "create" | "running" | "results" | "failed";
-
-function _figureToDataUrl(raw: unknown): string | null {
-  const txt = String(raw ?? "").trim();
-  if (!txt) return null;
-  if (/^data:/i.test(txt)) return txt;
-  return `data:image/png;base64,${txt}`;
-}
-
-function _labelFromFigureKey(key: string): string {
-  const x = key.replace(/[_\-]+/g, " ").trim();
-  if (!x) return "Other Outputs";
-  return x.replace(/\b\w/g, (c) => c.toUpperCase());
-}
 
 function _datasetLabel(datasetName?: string | null, datasetFiles?: string[] | null): string {
   if (datasetName && datasetName.trim()) return datasetName;
@@ -209,21 +195,6 @@ function DashboardPageContent() {
     const mode = (result?.stats as Record<string, unknown> | undefined)?.analysis_mode;
     return mode === "tree_with_internal_sequences";
   }, [result?.stats]);
-
-  const methodFigureSections = useMemo(() => {
-    const figs = result?.figures;
-    if (!figs || typeof figs !== "object") return [] as Array<{ key: string; items: string[] }>;
-
-    const out: Array<{ key: string; items: string[] }> = [];
-    for (const [key, value] of Object.entries(figs)) {
-      if (key === "phylogeny") continue;
-      if (!Array.isArray(value)) continue;
-      const items = value.map(_figureToDataUrl).filter((src): src is string => Boolean(src));
-      if (!items.length) continue;
-      out.push({ key, items });
-    }
-    return out;
-  }, [result]);
 
   const warnings = useMemo<RunWarning[]>(() => {
     const runWarnings = result?.warnings;
@@ -424,20 +395,26 @@ function DashboardPageContent() {
             )}
           </Card>
 
+          {result?.dataset?.is_deleted && (
+            <div className="rounded border p-3 bg-amber-50 text-amber-900 dark:bg-amber-950/30 dark:text-amber-200 text-sm">
+              The input dataset{" "}
+              <span className="font-medium">{result.dataset.original_filename}</span> has been
+              deleted. This run&apos;s results are preserved, but to run it again you must
+              re-upload the file.
+            </div>
+          )}
+
           <ResultsSummary
+            runId={runId}
             stats={result?.stats}
             cloneRows={cloneRows}
-            artifact_zip_b64={result?.artifact_zip_b64}
-            artifact_name={result?.artifact_name || ""}
             repertoireTable={result?.tables?.repertoire_two_levels_info}
             analysis={result?.analysis}
             diagnostics={result?.diagnostics}
             dowserDta={dowserResult.dta}
             dowserTimeEvolution={dowserResult.timeEvolution}
             dowserInputQc={dowserResult.inputQc}
-            dowserArtifacts={dowserResult.artifacts}
             dowserChainQc={dowserResult.chainQc}
-            dowserTreesDetail={dowserResult.treesDetail}
           />
 
           {warnings.length > 0 && (
@@ -465,66 +442,12 @@ function DashboardPageContent() {
           <TreesCarousel
             runId={runId}
             trees={result.trees ?? []}
-            treesDetail={dowserResult.treesDetail}
-            figures={result.figures}
-            annotations={result.annotations}
             cleanNewick={cleanNewick}
             colorBy={svgColorBy}
             unknownValue={svgUnknown}
             tipSizeBy={svgTipSizeBy}
             showInternalNodesDefault={showInternalNodesDefault}
           />
-
-          {methodFigureSections.length > 0 && (
-            <section className="space-y-3">
-              <h3 className="text-lg font-medium">Method Charts</h3>
-              {methodFigureSections.map((section) => (
-                <details key={section.key} className="rounded border p-3 bg-card/50">
-                  <summary className="cursor-pointer text-sm font-medium">
-                    {_labelFromFigureKey(section.key)}
-                  </summary>
-                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                    {section.items.map((src, index) =>
-                      src.startsWith("data:application/pdf") ? (
-                        <object
-                          key={`${section.key}-${index}`}
-                          data={src}
-                          type="application/pdf"
-                          className="w-full h-80 rounded border bg-white"
-                        />
-                      ) : (
-                        <Image
-                          key={`${section.key}-${index}`}
-                          src={src}
-                          alt={`${section.key}-${index + 1}`}
-                          width={1200}
-                          height={800}
-                          unoptimized
-                          className="w-full rounded border bg-white"
-                        />
-                      ),
-                    )}
-                  </div>
-                </details>
-              ))}
-            </section>
-          )}
-
-          <details className="rounded border p-3 bg-card/50 overflow-x-scroll">
-            <summary className="cursor-pointer text-sm font-medium">Show Newick text</summary>
-            <div className="mt-2 space-y-2">
-              {(result.trees ?? []).map((tree, index) => {
-                const treeObj: RunTree | null = typeof tree === "string" ? null : tree;
-                const newickText =
-                  typeof tree === "string" ? tree : treeObj?.original_newick || treeObj?.newick || "";
-                return (
-                  <pre key={`newick-${index}`} className="whitespace-pre-wrap text-xs">
-                    {newickText}
-                  </pre>
-                );
-              })}
-            </div>
-          </details>
 
           {Array.isArray(result.logs) && result.logs.length > 0 && (
             <details className="rounded border p-3 bg-card/50">
