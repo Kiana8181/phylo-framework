@@ -428,12 +428,16 @@ export default function FormBuilder({
   defaults,
   footer,
   disabled: formDisabled = false,
+  context,
 }: {
   schema: JSONSchema;
   defaults?: FormValues;
-  onSubmit: (values: FormValues) => void;
+  onSubmit: (values: FormValues) => void | Promise<void>;
   footer?: ReactNode;
   disabled?: boolean;
+  /** Extra read-only values (e.g. `$inputFormat`) merged in for visibility
+   *  evaluation only. Never submitted. Use `$`-prefixed reserved keys. */
+  context?: Record<string, unknown>;
 }) {
   const zodSchema = useMemo(() => buildZodSchema(schema), [schema]);
   const formDefaults = useMemo(() => defaultsFromSchema(schema, defaults), [schema, defaults]);
@@ -456,6 +460,9 @@ export default function FormBuilder({
   const disabled = formState.isSubmitting || formDisabled;
 
   const values = useWatch({ control });
+  // Values used to evaluate visibility rules: live form values plus any
+  // read-only context (e.g. `$inputFormat`). Context is never submitted.
+  const evalValues = useMemo(() => ({ ...context, ...values }), [context, values]);
   const placeholders = useMemo(() => schema.uiHints?.placeholders ?? {}, [schema.uiHints?.placeholders]);
   const widgets = useMemo(() => schema.uiHints?.widgets ?? {}, [schema.uiHints?.widgets]);
   const visibility = useMemo(() => schema.uiHints?.visibility ?? {}, [schema.uiHints?.visibility]);
@@ -475,7 +482,7 @@ export default function FormBuilder({
   function isFieldVisible(name: string): boolean {
     const vis = visibility[name];
     if (!vis) return true;
-    return matchesRule(values, vis);
+    return matchesRule(evalValues, vis);
   }
 
   function filterVisibleValues(data: FormValues): FormValues {
@@ -703,8 +710,8 @@ export default function FormBuilder({
     <form
       ref={formRef}
       onSubmit={handleSubmit(
-        (data) => {
-          onSubmit(filterVisibleValues(data));
+        async (data) => {
+          await onSubmit(filterVisibleValues(data));
         },
         (errors) => scrollToFirstError(errors),
       )}

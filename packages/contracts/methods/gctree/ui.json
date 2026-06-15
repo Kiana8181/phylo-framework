@@ -76,8 +76,13 @@
     "column_map.sequence_alignment": "e.g. sequence_alignment"
   },
   "visibility": {
-    "column_map.sequence_id": { "when": { "doMapping": true } },
-    "column_map.sequence_alignment": { "when": { "doMapping": true } },
+    "doMapping": { "when": { "$inputFormat": ["csv", "tsv"] } },
+    "column_map.sequence_id": {
+      "whenAll": [{ "doMapping": true }, { "$inputFormat": ["csv", "tsv"] }]
+    },
+    "column_map.sequence_alignment": {
+      "whenAll": [{ "doMapping": true }, { "$inputFormat": ["csv", "tsv"] }]
+    },
 
     "root": {
       "whenAny": [
