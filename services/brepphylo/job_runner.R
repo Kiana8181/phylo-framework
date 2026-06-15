@@ -39,6 +39,49 @@ write_result <- function(x) {
   file.rename(tmp, result_path)
 }
 
+# Upload state_dir/job.log to MinIO and append the descriptor to
+# result$artifacts so the worker registers it like any other artifact. Called
+# both from the success path (after materialize_artifacts) and the error path
+# (before quit). Robust to NULL result / missing log / failed upload.
+log_path <- file.path(state_dir, "job.log")
+finalize_with_log <- function(result) {
+  if (!is.list(result)) return(result)
+  if (is.null(result$manifest_version)) result$manifest_version <- 1L
+  if (is.null(result$artifacts)) result$artifacts <- list()
+  if (!file.exists(log_path)) return(result)
+  tryCatch({ flush(stdout()); flush(stderr()) }, error = function(e) NULL)
+  src_loaded <- tryCatch({
+    if (!exists("upload_artifact", mode = "function")) {
+      source("/srv/object_storage.R", local = FALSE)
+    }
+    TRUE
+  }, error = function(e) FALSE)
+  if (!isTRUE(src_loaded) || !exists("upload_artifact", mode = "function")) return(result)
+  uploaded <- tryCatch(
+    upload_artifact(
+      local_path = log_path,
+      run_id = run_id, job_id = job_id,
+      filename = "job.log", content_type = "text/plain"
+    ),
+    error = function(e) {
+      message(sprintf("job.log upload failed: %s", conditionMessage(e)))
+      NULL
+    }
+  )
+  if (is.null(uploaded)) return(result)
+  result$artifacts[[length(result$artifacts) + 1L]] <- list(
+    object_key = uploaded$object_key,
+    size_bytes = uploaded$size_bytes,
+    checksum_sha256 = uploaded$checksum_sha256,
+    filename = "job.log",
+    kind = "log",
+    role = "log",
+    content_type = "text/plain",
+    previewable = TRUE
+  )
+  result
+}
+
 req_json <- read_json_file(request_path, simplify = FALSE)
 file_path <- req_json$file_path %||% NULL
 params <- req_json$params %||% list()
@@ -57,6 +100,7 @@ write_json_atomic(status_path, st)
 
 finish_error <- function(msg, payload = NULL) {
   body <- if (!is.null(payload)) payload else list(ok = FALSE, error = as.character(msg), logs = list())
+  body <- finalize_with_log(body)
   write_result(body)
   st$status <- "ERROR"; st$stage <- "ERROR"; st$message <- as.character(msg)
   st$error <- body; st$progress <- 100; st$finished_at <- now_iso(); st$ok <- FALSE
@@ -86,6 +130,25 @@ result <- tryCatch(run_handler_impl(req, res), error = function(e) list(ok = FAL
 status_code <- tryCatch(as.integer(res$status %||% 200L), error = function(e) 200L)
 ok_flag <- isTRUE(result$ok) && !is.na(status_code) && status_code < 400
 
+# Upload artifact files directly to MinIO and replace the source-side
+# artifact_files list with a {object_key, size_bytes, checksum_sha256, ...}
+# manifest. Nothing crosses the service -> API boundary as base64 or via a
+# shared volume.
+for (base in c("/srv", getwd())) {
+  am <- file.path(base, "artifact_manifest.R")
+  if (file.exists(am)) { source(am, local = FALSE); break }
+}
+if (exists("materialize_artifacts", mode = "function")) {
+  result <- tryCatch(
+    materialize_artifacts(result, run_id = run_id, job_id = job_id),
+    error = function(e) {
+      message(sprintf("materialize_artifacts failed: %s", conditionMessage(e)))
+      result
+    }
+  )
+}
+
+result <- finalize_with_log(result)
 write_result(result)
 
 if (ok_flag) {

@@ -313,7 +313,11 @@ run_handler_impl <- function(req, res) {
 
     tmpdir <- tempfile("dowser_run_")
     dir.create(tmpdir, showWarnings = FALSE)
-    on.exit(unlink(tmpdir, recursive = TRUE), add = TRUE)
+    # Note: do NOT unlink(tmpdir) on exit — artifact_files in the result point
+    # at files under tmpdir, and materialize_artifacts (running in job_runner
+    # *after* this handler returns) needs to copy them into the run's
+    # artifact dir. The R session's normal tempdir cleanup handles eventual
+    # removal when the worker process exits.
 
     modelfile_info <- NULL
     if (identical(p$analysis_mode, "discrete_trait_analysis")) {
@@ -347,7 +351,13 @@ run_handler_impl <- function(req, res) {
 
     annos <- build_annotations(trees_tbl, db_working, p, tip_col, plot_tip_col)
 
-    fig <- render_tree_figures(trees_tbl, p, plot_tip_col, state_overflow, tip_col, db = db_working, clones = clones)
+    figures_dir <- file.path(tmpdir, "figures")
+    dir.create(figures_dir, recursive = TRUE, showWarnings = FALSE)
+    fig <- render_tree_figures(
+      trees_tbl, p, plot_tip_col, state_overflow, tip_col,
+      db = db_working, clones = clones,
+      figures_out_dir = figures_dir
+    )
     if (!is.null(fig$warnings)) warnings <- c(warnings, fig$warnings)
 
     discrete_trait_analysis <- NULL
@@ -409,11 +419,41 @@ run_handler_impl <- function(req, res) {
       data_provenance = data_provenance,
       discrete_trait_analysis = discrete_trait_analysis,
       igphyml = igphyml_out,
-      figures_b64 = fig$figures_b64,
+      figure_paths = fig$figure_paths,
       trees_tbl = trees_tbl
     ), p)
 
     artifact_zip <- zip_export_bundle(export_dir)
+
+    # Build the artifact_files descriptor list — file paths only, no base64.
+    # materialize_artifacts (job_runner.R) copies these into the run's
+    # artifact staging dir and the API worker uploads them to object storage.
+    artifact_files <- list()
+    if (!is.null(fig$figure_paths) && length(fig$figure_paths)) {
+      for (i in seq_along(fig$figure_paths)) {
+        fp <- fig$figure_paths[[i]]
+        if (is.null(fp) || !nzchar(fp) || !file.exists(fp)) next
+        artifact_files[[length(artifact_files) + 1L]] <- list(
+          path = fp,
+          filename = sprintf("phylogeny_%d.png", i),
+          kind = "image",
+          role = "phylogeny",
+          content_type = "image/png",
+          previewable = TRUE,
+          tree_index = i - 1L
+        )
+      }
+    }
+    if (!is.null(artifact_zip$path) && file.exists(artifact_zip$path)) {
+      artifact_files[[length(artifact_files) + 1L]] <- list(
+        path = artifact_zip$path,
+        filename = artifact_zip$name %||% "dowser_artifacts.zip",
+        kind = "zip",
+        role = "clone_bundle_zip",
+        content_type = "application/zip",
+        previewable = FALSE
+      )
+    }
 
     if (!is.null(tip_col) && tc$unknown_replaced > 0) {
       warnings <- c(warnings, sprintf(
@@ -436,7 +476,7 @@ run_handler_impl <- function(req, res) {
       trees_detail = trees_detail,
       clones = clones_meta,
       annotations = annos,
-      figures = if (is.null(fig$figures_b64)) NULL else list(phylogeny = unname(fig$figures_b64)),
+      figures = NULL,
       stats = stats,
       input_qc = input_qc,
       data_provenance = data_provenance,
@@ -445,7 +485,7 @@ run_handler_impl <- function(req, res) {
       igphyml = igphyml_out,
       chain_qc = chain_qc,
       artifacts = artifacts,
-      artifact_zip_b64 = list(clone_bundle_zip = artifact_zip$b64),
+      artifact_files = artifact_files,
       artifact_name = artifact_zip$name %||% "dowser_artifacts.zip",
       warnings = as.list(as.character(unique(warnings))),
       logs = logs,

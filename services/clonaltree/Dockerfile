@@ -66,6 +66,8 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 COPY app.py /srv/clonaltree/app.py
 COPY job_manager.py /srv/clonaltree/job_manager.py
 COPY job_runner.py /srv/clonaltree/job_runner.py
+COPY artifact_manifest.py /srv/clonaltree/artifact_manifest.py
+COPY object_storage.py /srv/clonaltree/object_storage.py
 COPY base-codes /srv/clonaltree/base-codes
 RUN test -f /srv/clonaltree/base-codes/main_pipeline.py || \
     (echo "Missing clonaltree submodule content. Run: git submodule update --init --recursive" >&2 && exit 1)

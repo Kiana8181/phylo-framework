@@ -1,10 +1,11 @@
 # Export bundle and visualization helpers.
 
-encode_png <- function(plot, width = 900, height = 520, dpi = 100) {
-  tf <- tempfile(fileext = ".png")
-  on.exit(if (file.exists(tf)) unlink(tf), add = TRUE)
-  ggplot2::ggsave(tf, plot = plot, width = width / 100, height = height / 100, dpi = dpi, bg = "white")
-  jsonlite::base64_enc(readBin(tf, "raw", n = file.info(tf)$size))
+save_png_file <- function(plot, path, width = 900, height = 520, dpi = 100) {
+  ggplot2::ggsave(
+    path, plot = plot,
+    width = width / 100, height = height / 100, dpi = dpi, bg = "white"
+  )
+  path
 }
 
 write_json_file <- function(obj, path) {
@@ -54,6 +55,9 @@ prepare_dowser_result <- function(result) {
   }
   if (!is.null(result$artifacts)) {
     result$artifacts <- preserve_json_array(result$artifacts)
+  }
+  if (!is.null(result$artifact_files)) {
+    result$artifact_files <- preserve_json_array(unname(result$artifact_files))
   }
   if (!is.null(result$logs)) {
     result$logs <- preserve_json_array(result$logs)
@@ -200,6 +204,27 @@ trees_support_node_coloring <- function(trees_tbl) {
     }
     FALSE
   }, logical(1)))
+}
+
+# Returns TRUE only when, for every tree in the staging table, the metadata
+# data.frame has at least one row per node (tips + internals). plotTrees(nodes=TRUE)
+# joins ggtree's combined (tip + internal) node table to the colour-aesthetic
+# column; if the column only covers tips, ggtree raises
+# "Aesthetics must be either length 1 or the same as the data (<ntips>)".
+tree_supports_node_color_aesthetic <- function(trees_tbl) {
+  if (is.null(trees_tbl$trees) || !length(trees_tbl$trees)) return(FALSE)
+  if (is.null(trees_tbl$data) || !length(trees_tbl$data)) return(FALSE)
+  n <- length(trees_tbl$trees)
+  if (length(trees_tbl$data) != n) return(FALSE)
+  for (i in seq_len(n)) {
+    phy <- trees_tbl$trees[[i]]
+    if (is.null(phy) || is.null(phy$tip.label)) return(FALSE)
+    meta_df <- meta_data_frame(trees_tbl$data[[i]])
+    if (is.null(meta_df)) return(FALSE)
+    needed <- length(phy$tip.label) + (phy$Nnode %||% 0L)
+    if (nrow(meta_df) < needed) return(FALSE)
+  }
+  TRUE
 }
 
 resolve_plot_tipsize <- function(p, staging_tbl) {
@@ -374,9 +399,9 @@ prepare_trees_tbl_for_plot <- function(trees_tbl, tip_col = NULL, plot_tip_col =
   list(tbl = staging, tips_field = tips_field, rehydrated = rehydrated)
 }
 
-render_tree_figures <- function(trees_tbl, p, plot_tip_col, state_overflow, tip_col = NULL, db = NULL, clones = NULL) {
+render_tree_figures <- function(trees_tbl, p, plot_tip_col, state_overflow, tip_col = NULL, db = NULL, clones = NULL, figures_out_dir = NULL) {
   if (!requireNamespace("ggtree", quietly = TRUE) || !requireNamespace("ggplot2", quietly = TRUE)) {
-    return(list(figures_b64 = NULL, render = NULL, warnings = "ggtree/ggplot2 not available; no PNG previews."))
+    return(list(figure_paths = character(0), render = NULL, warnings = "ggtree/ggplot2 not available; no PNG previews."))
   }
 
   render_warnings <- character(0)
@@ -405,13 +430,26 @@ render_tree_figures <- function(trees_tbl, p, plot_tip_col, state_overflow, tip_
   show_node_nums <- isTRUE(p$show_node_numbers %||% FALSE)
   internal_seqs_requested <- isTRUE(p$return_internal_sequences %||% FALSE) ||
     identical(p$analysis_mode, "tree_with_internal_sequences")
-  show_node_coloring <- internal_seqs_requested && trees_support_node_coloring(staging_tbl)
+  node_color_reconstruction_ok <- trees_support_node_coloring(staging_tbl)
+  # Even when Dowser produced a node-state reconstruction, the staging
+  # metadata data.frame may only cover tips (e.g. PML + discrete_trait_analysis).
+  # In that case ggtree's colour aesthetic length wouldn't match the joined
+  # tip+internal node table, so skip the colored_nodes plotTrees attempt.
+  node_color_data_ok <- tree_supports_node_color_aesthetic(staging_tbl)
+  show_node_coloring <- internal_seqs_requested &&
+    node_color_reconstruction_ok && node_color_data_ok
 
   if (internal_seqs_requested && !show_node_coloring) {
-    render_warnings <- c(
-      render_warnings,
+    msg <- if (!node_color_reconstruction_ok) {
       "Internal node trait coloring skipped in Method Output PNG (requires discrete trait reconstruction). Tip colors are still applied; use the Lineage tab for internal node sequences."
-    )
+    } else {
+      # Reconstruction succeeded but the per-node metadata isn't shaped for
+      # ggtree's colour aesthetic — typical for tree_build='pml' with
+      # discrete_trait_analysis where Dowser does not expose per-internal-node
+      # trait values to plotTrees.
+      "Internal node trait coloring is not available for this tree configuration (Dowser does not expose per-internal-node trait reconstructions compatible with plotTrees). Tip colors are still applied; use the Lineage tab for internal node sequences."
+    }
+    render_warnings <- c(render_warnings, msg)
   }
 
   if (internal_seqs_requested && exists("safe_get_all_seqs", mode = "function")) {
@@ -492,13 +530,26 @@ render_tree_figures <- function(trees_tbl, p, plot_tip_col, state_overflow, tip_
 
   if (is.null(plots)) {
     return(list(
-      figures_b64 = NULL,
+      figure_paths = character(0),
       render = paste0("plotTrees_uncolored_tipsize", plot_tipsize),
       warnings = if (length(render_warnings)) render_warnings else NULL
     ))
   }
 
-  figures_b64 <- lapply(plots, encode_png)
+  # Write PNGs straight to disk — no base64 round-trip in RAM. If no out dir
+  # was provided, fall back to a tempdir so the caller can still find files
+  # (legacy behavior). The caller is responsible for the dir's lifetime.
+  if (is.null(figures_out_dir) || !nzchar(figures_out_dir)) {
+    figures_out_dir <- tempfile("dowser_figs_")
+  }
+  dir.create(figures_out_dir, recursive = TRUE, showWarnings = FALSE)
+  figure_paths <- character(0)
+  for (i in seq_along(plots)) {
+    p_path <- file.path(figures_out_dir, sprintf("phylogeny_%d.png", i))
+    saved <- tryCatch(save_png_file(plots[[i]], p_path), error = function(e) NULL)
+    if (!is.null(saved) && file.exists(p_path)) figure_paths <- c(figure_paths, p_path)
+  }
+
   render <- switch(
     render_mode,
     colored_nodes = paste0("plotTrees_", plot_tips, "_nodes_tipsize", plot_tipsize),
@@ -507,7 +558,7 @@ render_tree_figures <- function(trees_tbl, p, plot_tip_col, state_overflow, tip_
   )
 
   list(
-    figures_b64 = figures_b64,
+    figure_paths = figure_paths,
     render = render,
     warnings = if (length(render_warnings)) render_warnings else NULL
   )
@@ -517,7 +568,7 @@ zip_export_bundle <- function(export_dir, zip_name = "dowser_artifacts.zip") {
   all_files <- list.files(export_dir, recursive = TRUE, full.names = TRUE)
   all_files <- all_files[basename(all_files) != zip_name]
   if (!length(all_files)) {
-    return(list(b64 = NULL, name = NULL))
+    return(list(path = NULL, name = NULL))
   }
 
   zip_path <- file.path(export_dir, zip_name)
@@ -530,17 +581,18 @@ zip_export_bundle <- function(export_dir, zip_name = "dowser_artifacts.zip") {
   rel_paths <- unique(sub(paste0("^", export_dir, "/?"), "", all_files, fixed = FALSE))
   rel_paths <- rel_paths[nzchar(rel_paths)]
   if (!length(rel_paths)) {
-    return(list(b64 = NULL, name = NULL))
+    return(list(path = NULL, name = NULL))
   }
 
   utils::zip(zipfile = zip_path, files = rel_paths)
   sz <- file.info(zip_path)$size
   if (is.na(sz) || sz <= 0) {
-    return(list(b64 = NULL, name = NULL))
+    return(list(path = NULL, name = NULL))
   }
 
-  zip_raw <- readBin(zip_path, what = "raw", n = sz)
-  list(b64 = jsonlite::base64_enc(zip_raw), name = zip_name)
+  # Return the on-disk path. The caller (handlers.R / materialize_artifacts)
+  # moves it into the artifact staging directory — no base64 in RAM.
+  list(path = zip_path, name = zip_name)
 }
 
 build_export_bundle <- function(out_dir, result_parts, p) {
@@ -613,11 +665,15 @@ build_export_bundle <- function(out_dir, result_parts, p) {
     artifacts <- add_artifact_if_exists(artifacts, out_dir, "igphyml_parameters.json", "igphyml_parameters.json", "json")
   }
 
-  if (!is.null(result_parts$figures_b64) && length(result_parts$figures_b64)) {
-    for (i in seq_along(result_parts$figures_b64)) {
-      png_path <- file.path(out_dir, sprintf("tree_plot_%02d.png", i))
-      raw <- jsonlite::base64_dec(result_parts$figures_b64[[i]])
-      writeBin(raw, png_path)
+  # Copy the rendered PNG files (already on disk) into the export bundle so
+  # they ship inside the zip. No base64 round-trip — file → file.
+  fig_paths <- result_parts$figure_paths
+  if (!is.null(fig_paths) && length(fig_paths)) {
+    for (i in seq_along(fig_paths)) {
+      src <- fig_paths[[i]]
+      if (is.null(src) || !nzchar(src) || !file.exists(src)) next
+      dst <- file.path(out_dir, sprintf("tree_plot_%02d.png", i))
+      tryCatch(file.copy(src, dst, overwrite = TRUE), error = function(e) NULL)
     }
     artifacts <- add_artifact_if_exists(artifacts, out_dir, "tree_plot.png", "tree_plot_01.png", "png")
   }
