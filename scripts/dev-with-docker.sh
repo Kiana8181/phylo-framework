@@ -165,7 +165,7 @@ cleanup(){
   if [[ -n "${WORKER_PID:-}" ]]; then kill "$WORKER_PID" 2>/dev/null || true; fi
   if [[ -n "${API_PID:-}" ]]; then kill "$API_PID" 2>/dev/null || true; fi
   node "$ROOT/scripts/method-services.mjs" stop >/dev/null 2>&1 || true
-  docker compose --profile dev stop postgres >/dev/null 2>&1 || true
+  docker compose --profile dev stop postgres minio minio-init >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -173,6 +173,11 @@ echo "${BLU}==> Starting PostgreSQL (Docker Compose, profile=dev)${CLR}"
 docker compose --profile dev up -d postgres
 wait_postgres || die "PostgreSQL did not become healthy"
 echo "${GRN}PostgreSQL is healthy.${CLR}"
+
+echo "${BLU}==> Starting MinIO object storage + creating buckets${CLR}"
+docker compose --profile dev up -d minio minio-init
+docker wait phylo-minio-init >/dev/null 2>&1 || true
+echo "${GRN}MinIO is up; dataset/artifact buckets ready.${CLR}"
 
 echo "${BLU}==> Starting method services from config via Docker${CLR}"
 node "$ROOT/scripts/method-services.mjs" start

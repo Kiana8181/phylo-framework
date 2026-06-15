@@ -245,7 +245,7 @@ cleanup(){
   echo
   echo "${YLW}Shutting down...${CLR}"
   kill ${R_PID:-} ${WORKER_PID:-} ${API_PID:-} ${GCTREE_PID:-} ${CLONAL_PID:-} ${BREP_PID:-} 2>/dev/null || true
-  docker compose --profile dev stop postgres >/dev/null 2>&1 || true
+  docker compose --profile dev stop postgres minio minio-init >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -253,6 +253,16 @@ echo "${BLU}==> Starting PostgreSQL (Docker Compose, profile=dev)${CLR}"
 docker compose --profile dev up -d postgres
 wait_postgres || die "PostgreSQL did not become healthy"
 echo "${GRN}PostgreSQL is healthy.${CLR}"
+
+echo "${BLU}==> Starting MinIO object storage + creating buckets${CLR}"
+docker compose --profile dev up -d minio minio-init
+docker wait phylo-minio-init >/dev/null 2>&1 || true
+echo "${GRN}MinIO is up; dataset/artifact buckets ready.${CLR}"
+
+# Local method services + the host worker share this host dir for job outputs
+# (artifact files). Exported so every child process agrees on the location.
+export METHOD_JOBS_DIR="$ROOT/runtime/method-jobs"
+mkdir -p "$METHOD_JOBS_DIR"
 
 echo "${BLU}==> Checking required R packages${CLR}"
 set +e
