@@ -6,13 +6,12 @@ import TreeSVG from "@/components/TreeSVG";
 import LineageSVG from "@/components/LineageSVG";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { RunsApi } from "@/features/runs/api";
-import type {
-  DowserTreeDetail,
-  FigurePayload,
-  LineagePlot,
-  RunTree,
-  RunTreePayload,
-  TreeServiceImage,
+import ArtifactImage from "@/components/phylo/ArtifactImage";
+import {
+  API_ROUTES,
+  type LineagePlot,
+  type RunTree,
+  type RunTreePayload,
 } from "@phylo/contracts";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
@@ -20,19 +19,11 @@ import { Switch } from "@/components/ui/switch";
 type TreesCarouselProps = {
   runId?: string | null;
   trees: Array<RunTree | string>;
-  treesDetail?: DowserTreeDetail[];
-  figures?: FigurePayload;
-  annotations?: Array<Array<Record<string, any>> | null>;
   cleanNewick: (s: string) => string;
   colorBy?: string;
   unknownValue?: string;
   tipSizeBy?: string;
   showInternalNodesDefault?: boolean;
-};
-
-type TreeImage = {
-  mime: string;
-  base64: string;
 };
 
 type TreeVM = {
@@ -43,56 +34,21 @@ type TreeVM = {
   hasLineagePlot: boolean;
   loadError?: string;
   isLoading?: boolean;
-  serviceImage?: TreeImage;
+  /** Artifact id of the method-rendered image, served via the preview endpoint. */
+  imageArtifactId?: string | null;
   nodeAttributes?: Record<string, Record<string, any>>;
   lineagePlot?: LineagePlot;
-  detailNodes?: Array<Record<string, unknown>>;
 };
-
-function toImagePayload(raw?: string | null): TreeImage | undefined {
-  if (!raw) return undefined;
-  const txt = String(raw).trim();
-  if (!txt) return undefined;
-  const m = txt.match(/^data:([^;]+);base64,(.+)$/i);
-  if (m) return { mime: m[1], base64: m[2] };
-  return { mime: "image/png", base64: txt };
-}
-
-function fromServiceImage(raw?: TreeServiceImage | null): TreeImage | undefined {
-  if (!raw?.base64) return undefined;
-  return { mime: raw.mime || "image/png", base64: raw.base64 };
-}
-
-function buildAnnoMapFromRows(rows?: Array<Record<string, any>> | null): Record<string, Record<string, any>> {
-  const out: Record<string, Record<string, any>> = {};
-  if (!Array.isArray(rows)) return out;
-  for (const row of rows) {
-    const item = { ...row };
-    delete item.label;
-    const keys = [row?.final_tip_label, row?.sequence_id, row?.label]
-      .map((k) => String(k ?? "").trim())
-      .filter(Boolean);
-    if (!keys.length) continue;
-    for (const key of keys) {
-      out[key] = { ...item, ...(out[key] ?? {}) };
-    }
-  }
-  return out;
-}
 
 function treeIdFor(tree: RunTree | string, index: number): string {
   if (typeof tree === "string") return `tree-${index + 1}`;
   return tree.id || `tree-${index + 1}`;
 }
 
-function hasEmbeddedPayload(tree: RunTree): boolean {
-  return Boolean(
-    tree.lineage_plot ||
-      tree.node_attributes ||
-      tree.label_to_sequence_id ||
-      tree.visualizations?.service_image
-  );
-}
+// Per-tree heavyweight payloads (newick, node_attributes, lineage_plot,
+// image_artifact_id) live in run_trees and are fetched on demand via
+// RunsApi.tree. The slim result.trees entries don't carry them, so we no
+// longer short-circuit the per-tree fetch on "embedded" hints.
 
 function treeLabel(treeIdx: number, cloneId?: string): string {
   const cloneText = String(cloneId ?? "").trim();
@@ -103,9 +59,6 @@ function treeLabel(treeIdx: number, cloneId?: string): string {
 export default function TreesCarousel({
   runId,
   trees,
-  treesDetail,
-  figures,
-  annotations,
   cleanNewick,
   colorBy,
   unknownValue,
@@ -145,8 +98,11 @@ export default function TreesCarousel({
     if (!runId || !currentRawTree || typeof currentRawTree === "string") return;
     const treeId = treeIdFor(currentRawTree, idx);
     if (!treeId) return;
-    if (treeCache[treeId]) return;
-    if (hasEmbeddedPayload(currentRawTree)) return;
+    // Use `in` rather than a truthiness check: a falsy-but-cached payload
+    // (e.g. null) must still short-circuit, otherwise the effect would
+    // refetch forever (each refetch creates a new treeCache reference,
+    // re-triggering this effect via its dependency array).
+    if (treeId in treeCache) return;
 
     let cancelled = false;
     setLoadingTreeId(treeId);
@@ -160,6 +116,10 @@ export default function TreesCarousel({
     RunsApi.tree(runId, treeId)
       .then((payload) => {
         if (cancelled) return;
+        if (!payload) {
+          setTreeLoadErrors((prev) => ({ ...prev, [treeId]: "Failed to load tree data." }));
+          return;
+        }
         setTreeCache((prev) => ({ ...prev, [treeId]: payload }));
       })
       .catch((err: any) => {
@@ -188,57 +148,35 @@ export default function TreesCarousel({
   }, [runId, showInternalNodesDefault]);
 
   const viewTrees = useMemo<TreeVM[]>(() => {
+    // Per-tree heavyweight data (newick, node_attributes, lineage_plot,
+    // image_artifact_id) is sourced exclusively from RunsApi.tree, cached in
+    // treeCache. The slim result.trees array only provides the tree id and
+    // clone id; the only fallback is when the active tree's payload hasn't
+    // arrived yet, in which case the view shows a loading state.
     return (trees ?? []).map((t, i) => {
-      const detail = treesDetail?.[i];
-      const detailNewick = detail?.lineage_newick || detail?.canonical_newick;
-      if (typeof t === "string") {
-        const figureImage = toImagePayload(figures?.phylogeny?.[i]);
-        const treeId = treeIdFor(t, i);
-        const payload = treeCache[treeId];
-        const lineagePlot = payload?.lineage_plot as LineagePlot | undefined;
-        return {
-          id: treeId,
-          cloneId: detail?.clone_id,
-          phylogenyNewick: cleanNewick(detailNewick || t),
-          hasServiceImage: Boolean(figureImage?.base64),
-          hasLineagePlot: Boolean(lineagePlot),
-          isLoading: loadingTreeId === treeId,
-          loadError: treeLoadErrors[treeId],
-          serviceImage: figureImage,
-          nodeAttributes: buildAnnoMapFromRows(annotations?.[i]),
-          lineagePlot,
-          detailNodes: detail?.nodes as Array<Record<string, unknown>> | undefined,
-        };
-      }
-
       const treeId = treeIdFor(t, i);
       const payload = treeCache[treeId];
-      const svcImage =
-        fromServiceImage(payload?.service_image) ??
-        fromServiceImage(t.visualizations?.service_image) ??
-        toImagePayload(figures?.phylogeny?.[i]);
-      const lineagePlot = (payload?.lineage_plot ?? t.lineage_plot) as LineagePlot | undefined;
-      const rawAttrs =
-        payload?.node_attributes ??
-        t.node_attributes ??
-        buildAnnoMapFromRows(annotations?.[i]);
-      const annoFallback = buildAnnoMapFromRows(annotations?.[i]);
-      const mergedAttrs = { ...annoFallback, ...rawAttrs };
+      const lineagePlot = payload?.lineage_plot as LineagePlot | undefined;
+      const imageArtifactId = payload?.image_artifact_id ?? null;
+      const cloneId =
+        typeof t !== "string" && typeof t.clone_id === "string" ? t.clone_id : undefined;
+      const phylogenyNewick = payload?.newick
+        ? cleanNewick(payload.original_newick || payload.newick || "")
+        : "";
       return {
         id: treeId,
-        cloneId: typeof t.clone_id === "string" ? t.clone_id : undefined,
-        phylogenyNewick: cleanNewick(detailNewick || t.original_newick || t.newick || ""),
-        hasServiceImage: Boolean(t.has_service_image || svcImage?.base64),
+        cloneId,
+        phylogenyNewick,
+        hasServiceImage: Boolean(imageArtifactId),
         hasLineagePlot: Boolean(lineagePlot),
         isLoading: loadingTreeId === treeId,
         loadError: treeLoadErrors[treeId],
-        serviceImage: svcImage,
-        nodeAttributes: mergedAttrs,
+        imageArtifactId,
+        nodeAttributes: payload?.node_attributes ?? {},
         lineagePlot,
-        detailNodes: detail?.nodes as Array<Record<string, unknown>> | undefined,
       };
     });
-  }, [annotations, cleanNewick, figures?.phylogeny, loadingTreeId, treeCache, treeLoadErrors, trees, treesDetail]);
+  }, [cleanNewick, loadingTreeId, treeCache, treeLoadErrors, trees]);
 
   const current = viewTrees[idx];
   const isRenderableTreeTab = activeTab === "phylogeny" || activeTab === "lineage";
@@ -260,19 +198,12 @@ export default function TreesCarousel({
   }, [activeTab, tabs]);
 
   const phyloAnnotations = useMemo((): Array<{ label: string } & Record<string, any>> => {
-    const rawRows = annotations?.[idx];
-    if (Array.isArray(rawRows) && rawRows.length) {
-      return rawRows.map((row) => ({
-        label: String(row?.label ?? row?.final_tip_label ?? row?.sequence_id ?? ""),
-        ...row,
-      }));
-    }
     if (!current?.nodeAttributes) return [];
     return Object.entries(current.nodeAttributes).map(([label, attrs]) => ({
       label,
       ...(attrs ?? {}),
     }));
-  }, [annotations, current?.nodeAttributes, idx]);
+  }, [current?.nodeAttributes]);
 
   const displayFields = useMemo(() => {
     const attrs = current?.nodeAttributes ?? {};
@@ -396,7 +327,7 @@ export default function TreesCarousel({
                     <span>Show labels</span>
                     <Switch checked={showLabels} onCheckedChange={setShowLabels} aria-label="Show labels" />
                   </label>
-                  {(treesDetail?.length || showInternalNodesDefault) && (
+                  {(current?.hasLineagePlot || showInternalNodesDefault) && (
                     <>
                       <label
                         className="flex items-center gap-2 text-xs text-muted-foreground"
@@ -467,22 +398,22 @@ export default function TreesCarousel({
             </div>
           )}
 
-          {activeTab === "method" && current?.serviceImage?.base64 && (
+          {activeTab === "method" && current?.imageArtifactId && (
             <div className="overflow-hidden rounded border bg-white">
-              <img
-                src={`data:${current.serviceImage.mime};base64,${current.serviceImage.base64}`}
+              <ArtifactImage
+                previewUrl={API_ROUTES.artifactPreview(current.imageArtifactId)}
                 alt={`Method output tree ${idx + 1}`}
                 className="w-full h-auto mx-auto"
               />
             </div>
           )}
-          {activeTab === "method" && !current?.serviceImage?.base64 && current?.isLoading && (
+          {activeTab === "method" && !current?.imageArtifactId && current?.isLoading && (
             <div className="rounded border p-4 text-sm text-muted-foreground">Loading tree image...</div>
           )}
-          {activeTab === "method" && !current?.serviceImage?.base64 && !current?.isLoading && current?.loadError && (
+          {activeTab === "method" && !current?.imageArtifactId && !current?.isLoading && current?.loadError && (
             <div className="rounded border p-4 text-sm text-red-600">{current.loadError}</div>
           )}
-          {activeTab === "method" && !current?.serviceImage?.base64 && !current?.isLoading && !current?.loadError && (
+          {activeTab === "method" && !current?.imageArtifactId && !current?.isLoading && !current?.loadError && (
             <div className="rounded border p-4 text-sm text-muted-foreground">No method output available.</div>
           )}
 
