@@ -11,7 +11,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { ExternalLink, Loader2, ChevronLeft, ChevronRight, Copy, GitCompare } from "lucide-react";
+import { ExternalLink, ChevronLeft, ChevronRight, Copy, GitCompare } from "lucide-react";
+import { Loading } from "@/components/ui/loading";
 import { useState } from "react";
 import { notify } from "@/lib/notify";
 
@@ -76,11 +77,7 @@ export default function RunHistoryPage() {
           <CardDescription>Your runs, newest first.</CardDescription>
         </CardHeader>
         <CardContent>
-          {isLoading && (
-            <div className="flex items-center justify-center py-12">
-              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-            </div>
-          )}
+          {isLoading && <Loading label="Loading runs…" />}
           {error && (
             <p className="text-destructive text-sm py-4">
               Failed to load runs. Please try again.

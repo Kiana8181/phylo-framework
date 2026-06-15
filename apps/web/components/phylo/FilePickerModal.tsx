@@ -3,6 +3,7 @@
 import FileInput from "@/components/common/FileInput";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Loading } from "@/components/ui/loading";
 import { useDeleteFile, useFilesList } from "@/features/files/hooks";
 import { notify } from "@/lib/notify";
 import type { FileSummary } from "@phylo/contracts";
@@ -106,7 +107,7 @@ export default function FilePickerModal({
           {/* Your uploaded files */}
           <div>
             <h4 className="text-sm font-medium mb-2">Your uploaded files</h4>
-            {isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
+            {isLoading && <Loading size="md" label="Loading…" className="py-6" />}
             {error && (
               <p className="text-sm text-destructive">Failed to load files.</p>
             )}

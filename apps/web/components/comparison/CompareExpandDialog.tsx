@@ -2,7 +2,8 @@
 
 import { memo, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Loader2, X } from "lucide-react";
+import { X } from "lucide-react";
+import { Spinner } from "@/components/ui/loading";
 import type { LineagePlot, RunTreeListItem, TreeNodeAttrs } from "@phylo/contracts";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -129,7 +130,7 @@ const ExpandTreeTile = memo(function ExpandTreeTile({
       <CardContent className="flex flex-1 min-h-0 flex-col gap-3 pt-4">
         {(statusLoading || treesLoading || payloadLoading) && (
           <div className="flex items-center gap-2 rounded border p-4 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin shrink-0" />
+            <Spinner className="shrink-0" />
             Loading tree…
           </div>
         )}
