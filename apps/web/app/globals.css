@@ -125,3 +125,28 @@
     cursor: pointer;
   }
 }
+
+/* Run-progress animations: marching-ants ring on the active stage and a
+   shimmer sweep on the progress bar while a run is active. */
+@keyframes phylo-march {
+  to {
+    stroke-dashoffset: -18;
+  }
+}
+@keyframes phylo-shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+.phylo-marching {
+  animation: phylo-march 0.7s linear infinite;
+}
+.phylo-shimmer {
+  animation: phylo-shimmer 1.4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .phylo-marching,
+  .phylo-shimmer {
+    animation: none;
+  }
+}

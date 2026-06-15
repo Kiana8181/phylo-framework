@@ -1,6 +1,7 @@
 "use client";
 
 import ResultsSummary from "@/components/phylo/ResultsSummary";
+import RunErrorState from "@/components/phylo/RunErrorState";
 import RunProgress from "@/components/phylo/RunProgress";
 import TreesCarousel from "@/components/phylo/TreesCarousel";
 import RunWizard from "@/components/phylo/wizard/RunWizard";
@@ -214,7 +215,7 @@ function DashboardPageContent() {
         />
       )}
 
-      {runId && (dashboardMode === "running" || dashboardMode === "failed") && (
+      {runId && dashboardMode === "running" && (
         <RunProgress
           runId={runId}
           status={status?.status}
@@ -227,42 +228,22 @@ function DashboardPageContent() {
           startedAt={status?.started_at}
           finishedAt={status?.finished_at}
           statusError={statusError ? statusErr : undefined}
-          onDismiss={
-            status?.status === "ERROR" || status?.status === "CANCELLED" || statusError
-              ? () => resetToCreateMode()
-              : undefined
-          }
+          onDismiss={statusError ? () => resetToCreateMode() : undefined}
         />
       )}
 
       {dashboardMode === "failed" && runId && (
-        <Card className="p-4 space-y-4">
-          <div className="space-y-1">
-            <h2 className="text-xl font-semibold">Run failed</h2>
-            <p className="text-sm text-muted-foreground">
-              This run ended with a failure. Start another run to return to the editable form.
-            </p>
-          </div>
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <div>
-              <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Run ID</p>
-              <p className="text-xs font-mono break-all">{runId}</p>
-            </div>
-            <div>
-              <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Method</p>
-              <p className="text-sm">{modelLabel}</p>
-            </div>
-            <div>
-              <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Dataset</p>
-              <p className="text-sm break-words">{runDatasetLabel}</p>
-            </div>
-            <div>
-              <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Status</p>
-              <p className="text-sm">{status?.status ?? "ERROR"}</p>
-            </div>
-          </div>
-          <div className="flex items-center justify-between gap-2 flex-wrap">
-            {runMethodKey && (
+        <RunErrorState
+          runId={runId}
+          status={status?.status}
+          methodLabel={modelLabel}
+          datasetLabel={runDatasetLabel}
+          errorCode={status?.error?.code}
+          errorMessage={status?.error?.message ?? status?.message ?? result?.error}
+          logs={result?.logs}
+          onDismiss={resetToCreateMode}
+          paramsSlot={
+            runMethodKey ? (
               <RunParamsDropdown
                 methodKey={runMethodKey}
                 runId={runId}
@@ -271,36 +252,9 @@ function DashboardPageContent() {
                 datasetName={runDatasetName}
                 datasetFiles={runDatasetFiles}
               />
-            )}
-            <Button onClick={resetToCreateMode}>Start another run</Button>
-          </div>
-          {result && Array.isArray(result.logs) && result.logs.length > 0 && (
-            <details className="rounded border p-3 bg-card/50">
-              <summary className="cursor-pointer text-sm font-medium">Show model logs</summary>
-              <div className="mt-2 max-h-64 overflow-y-auto space-y-3 text-xs font-mono">
-                {result.logs.map((log, index) => (
-                  <div key={`failed-log-${index}`} className="border-b last:border-0 pb-2 last:pb-0">
-                    <div className="flex justify-between gap-2 text-[11px]">
-                      <span className="font-semibold">{log.step || `Step ${index + 1}`}</span>
-                      {typeof log.ok === "boolean" && (
-                        <span className={log.ok ? "text-emerald-500" : "text-red-500"}>
-                          {log.ok ? "OK" : "FAIL"}
-                        </span>
-                      )}
-                    </div>
-                    {log.cmd && (
-                      <div className="mt-1 text-[11px] text-muted-foreground">
-                        <span className="font-semibold">cmd: </span>
-                        <code className="break-all">{log.cmd}</code>
-                      </div>
-                    )}
-                    {log.out && <pre className="mt-1 whitespace-pre-wrap">{log.out}</pre>}
-                  </div>
-                ))}
-              </div>
-            </details>
-          )}
-        </Card>
+            ) : undefined
+          }
+        />
       )}
 
       {result && runId && dashboardMode === "results" && (

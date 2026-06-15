@@ -1,43 +1,53 @@
 "use client";
 
-import { useEffect, useId, useMemo, useState } from "react";
-import { computeNodes, sanitizeLabel, type RenderNode } from "./runStageNodes";
+import { useMemo } from "react";
+import { Check, X } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { computeNodes, type RenderNode } from "./runStageNodes";
 
-function buildMermaidSource(nodes: RenderNode[], dark: boolean): string {
-  const lines: string[] = ["flowchart TB"];
-  nodes.forEach((node, i) => {
-    const id = `n${i}`;
-    lines.push(`  ${id}["${sanitizeLabel(node.label)}"]:::${node.state}`);
-    if (i > 0) lines.push(`  n${i - 1} --> ${id}`);
-  });
+const DOT_BY_STATE: Record<RenderNode["state"], string> = {
+  done: "border-primary bg-primary text-primary-foreground",
+  active: "border-primary/50 bg-primary/10 text-primary",
+  pending: "border-border bg-muted text-muted-foreground",
+  error: "border-destructive bg-destructive/10 text-destructive",
+  cancelled: "border-dashed border-destructive/60 bg-destructive/5 text-destructive",
+};
 
-  // Theme-aware class definitions.
-  const muted = dark ? "#1f2937" : "#f3f4f6";
-  const mutedText = dark ? "#9ca3af" : "#6b7280";
-  const border = dark ? "#374151" : "#d1d5db";
-  const doneBg = dark ? "#064e3b" : "#dcfce7";
-  const doneText = dark ? "#a7f3d0" : "#166534";
-  const activeBg = dark ? "#1e3a8a" : "#dbeafe";
-  const activeText = dark ? "#bfdbfe" : "#1e40af";
-  const errBg = dark ? "#7f1d1d" : "#fee2e2";
-  const errText = dark ? "#fecaca" : "#991b1b";
+const LABEL_BY_STATE: Record<RenderNode["state"], string> = {
+  done: "text-foreground",
+  active: "font-medium text-foreground",
+  pending: "text-muted-foreground",
+  error: "font-medium text-destructive",
+  cancelled: "text-destructive",
+};
 
-  lines.push(
-    `  classDef pending fill:${muted},stroke:${border},color:${mutedText};`,
-    `  classDef done fill:${doneBg},stroke:${doneText},color:${doneText};`,
-    `  classDef active fill:${activeBg},stroke:${activeText},color:${activeText},stroke-width:3px,font-weight:bold;`,
-    `  classDef error fill:${errBg},stroke:${errText},color:${errText},stroke-width:3px,font-weight:bold;`,
-    `  classDef cancelled fill:${errBg},stroke:${errText},color:${errText},stroke-width:2px,stroke-dasharray:4 3;`,
+/** Animated dashed ring around the currently-running stage. */
+function MarchingRing() {
+  return (
+    <svg
+      className="pointer-events-none absolute inset-[-4px] h-[calc(100%+8px)] w-[calc(100%+8px)] text-primary"
+      viewBox="0 0 36 36"
+      fill="none"
+      aria-hidden="true"
+    >
+      <circle
+        cx="18"
+        cy="18"
+        r="16"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeDasharray="5 4"
+        className="phylo-marching"
+      />
+    </svg>
   );
-
-  return lines.join("\n");
 }
 
 export default function RunStageFlowchart({
   methodId,
   status,
   stage,
-  stageMessage,
 }: {
   methodId?: string | null;
   status?: string;
@@ -45,112 +55,50 @@ export default function RunStageFlowchart({
   progress?: number;
   stageMessage?: string | null;
 }) {
-  const reactId = useId();
-  const diagramId = useMemo(
-    () => `runflow-${reactId.replace(/[^a-zA-Z0-9]/g, "")}`,
-    [reactId],
-  );
-
-  const [dark, setDark] = useState(false);
-  useEffect(() => {
-    if (typeof document === "undefined") return;
-    setDark(document.documentElement.classList.contains("dark"));
-  }, [status, stage]);
-
-  const nodes = useMemo(
-    () => computeNodes(methodId, status, stage),
-    [methodId, status, stage],
-  );
-
-  const source = useMemo(() => buildMermaidSource(nodes, dark), [nodes, dark]);
-
-  const [svg, setSvg] = useState<string | null>(null);
-  const [renderFailed, setRenderFailed] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    setRenderFailed(false);
-    (async () => {
-      try {
-        const mermaid = (await import("mermaid")).default;
-        mermaid.initialize({
-          startOnLoad: false,
-          securityLevel: "strict",
-          theme: dark ? "dark" : "default",
-          flowchart: { htmlLabels: false, curve: "basis" },
-        });
-        const { svg: rendered } = await mermaid.render(diagramId, source);
-        if (!cancelled) setSvg(rendered);
-      } catch {
-        if (!cancelled) {
-          setSvg(null);
-          setRenderFailed(true);
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [source, dark, diagramId]);
-
-  const activeNode = nodes.find(
-    (n) => n.state === "active" || n.state === "error" || n.state === "cancelled",
-  );
+  const nodes = useMemo(() => computeNodes(methodId, status, stage), [methodId, status, stage]);
 
   return (
     <div className="space-y-2">
-      <div className="flex items-baseline justify-between gap-2 flex-wrap">
-        <span className="text-xs font-medium text-muted-foreground">
-          Pipeline
-        </span>
-        {activeNode && (
-          <span className="text-xs text-muted-foreground truncate">
-            {activeNode.label}
-            {stageMessage ? ` — ${stageMessage}` : ""}
-          </span>
-        )}
-      </div>
-
-      {svg && !renderFailed ? (
-        <div
-          className="overflow-x-auto rounded-md border bg-muted/20 p-2 [&_svg]:max-w-full [&_svg]:h-auto"
-          // Mermaid output is generated from sanitized labels with
-          // securityLevel:"strict"; safe to inject.
-          dangerouslySetInnerHTML={{ __html: svg }}
-          aria-hidden
-        />
-      ) : null}
-
-      {/* Accessible / fallback list of stages (also shown if render fails). */}
-      <ol
-        className={
-          svg && !renderFailed
-            ? "sr-only"
-            : "flex flex-wrap gap-1.5 text-xs"
-        }
-      >
-        {nodes.map((node, i) => (
-          <li
-            key={`${node.id}-${i}`}
-            className={
-              svg && !renderFailed
-                ? undefined
-                : `rounded border px-2 py-0.5 ${
-                    node.state === "active"
-                      ? "border-blue-400 bg-blue-50 font-medium text-blue-700 dark:bg-blue-950/40 dark:text-blue-300"
-                      : node.state === "done"
-                      ? "border-green-300 bg-green-50 text-green-700 dark:bg-green-950/40 dark:text-green-300"
-                      : node.state === "error" || node.state === "cancelled"
-                      ? "border-red-300 bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300"
-                      : "border-border bg-muted text-muted-foreground"
-                  }`
-            }
-          >
-            {node.label}
-            {node.state === "active" ? " (current)" : ""}
-            {node.state === "done" ? " ✓" : ""}
-          </li>
-        ))}
+      <span className="text-xs font-medium text-muted-foreground">Pipeline</span>
+      <ol className="flex flex-wrap items-start gap-y-3">
+        {nodes.map((node, i) => {
+          const isLast = i === nodes.length - 1;
+          return (
+            <li key={`${node.id}-${i}`} className="flex items-start">
+              <div className="flex w-[84px] flex-col items-center gap-1 text-center">
+                <span className="relative flex size-7 items-center justify-center">
+                  {node.state === "active" && <MarchingRing />}
+                  <span
+                    className={cn(
+                      "flex size-7 items-center justify-center rounded-full border text-[11px] font-semibold",
+                      DOT_BY_STATE[node.state],
+                    )}
+                  >
+                    {node.state === "done" ? (
+                      <Check className="size-4" />
+                    ) : node.state === "error" || node.state === "cancelled" ? (
+                      <X className="size-4" />
+                    ) : (
+                      i + 1
+                    )}
+                  </span>
+                </span>
+                <span className={cn("text-[11px] leading-tight", LABEL_BY_STATE[node.state])}>
+                  {node.label}
+                </span>
+              </div>
+              {!isLast && (
+                <span
+                  className={cn(
+                    "mt-[13px] h-px w-5 sm:w-7",
+                    node.state === "done" ? "bg-primary" : "bg-border",
+                  )}
+                  aria-hidden="true"
+                />
+              )}
+            </li>
+          );
+        })}
       </ol>
     </div>
   );
