@@ -18,6 +18,7 @@ from uuid import UUID
 from apps.api.config import ROOT_DIR
 from apps.api.preprocess.method_capabilities import extension_from_path, is_native_accept
 from apps.api.preprocess.prepare_input import (
+    TABULAR_EXTENSIONS,
     PreprocessError,
     prepare_input_for_method,
     should_apply_column_mapping,
@@ -242,6 +243,20 @@ async def prepare_method_input(
         native_ok = False
 
     force_preprocess = should_apply_column_mapping(method_id, input_ext, params)
+
+    # Always route tabular uploads through the preprocess pipeline, even when
+    # the method natively accepts the extension. The pipeline strips a UTF-8
+    # BOM, drops fully-blank padding rows (Excel-style trailing
+    # `;;;;;;...` lines), and rewrites with the canonical separator —
+    # cleanups that downstream R / Python readers cannot all do on their own
+    # and that the native-accept fast path would otherwise skip.
+    if (
+        not force_preprocess
+        and native_ok
+        and isinstance(input_ext, str)
+        and input_ext in TABULAR_EXTENSIONS
+    ):
+        force_preprocess = True
 
     workspace: Path | None = None
     method_input_host_path: Path | None = None

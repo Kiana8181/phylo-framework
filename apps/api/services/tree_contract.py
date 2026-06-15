@@ -5,7 +5,119 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
-DATA_URL_RE = re.compile(r"^data:(?P<mime>[^;]+);base64,(?P<data>.+)$", re.IGNORECASE | re.DOTALL)
+# Keys that are NOT persisted in runs.result. Two groups:
+#   1. base64 / data-URL payloads → moved to RunArtifact object storage and
+#      streamed lazily via the /artifacts API.
+#   2. per-tree heavyweight fields → mirrored into run_trees rows and served
+#      lazily via /runs/{id}/trees and /runs/{id}/trees/{tree_id}. Keeping a
+#      duplicate in runs.result bloats the JSON for runs with many trees.
+_STRIPPED_RESULT_KEYS = (
+    # base64 / binary
+    "figures",
+    "artifact_zip_b64",
+    "artifact_name",
+    "visualizations",
+    "render",
+    # The artifact manifest is represented by run_artifacts rows + the
+    # /runs/{id}/artifacts endpoint; keep it out of the stored result JSON.
+    "manifest_version",
+    "artifacts",
+    # per-tree heavyweight payloads (now sourced via /runs/{id}/trees/{tree_id})
+    "node_attributes",
+    "node_abundances",
+    "annotations",
+    "trees_detail",
+    "label_to_sequence_id",
+    # Raw method `trees` array (Newick + per-tree dicts). We re-emit a slim
+    # `unified["trees"]` with just {id, has_lineage_plot}; full newick lives in
+    # run_trees and is fetched on demand by the carousel.
+    "trees",
+)
+
+
+def _aggregate_dta_switches(switches: Any) -> list[dict[str, Any]]:
+    """Collapse the per-clone × per-permutation `switches` rows into a small
+    summary table.
+
+    Dowser's discrete_trait_analysis emits one row per (CLONE, FROM, TO, REP)
+    tuple. For a moderate run this is ~1M rows / ~110 MB of mostly-zero counts
+    that the UI never displays raw — it only shows totals per (FROM, TO).
+    We aggregate the observed reconstruction (TYPE == 'RECON', REP == 1)
+    summing SWITCHES across clones; the permuted draws (REP > 1) are used
+    for the null distribution and don't need to live in the run result JSON.
+    """
+    if not isinstance(switches, list):
+        return []
+    totals: dict[tuple[str, str], int] = {}
+    for row in switches:
+        if not isinstance(row, dict):
+            continue
+        rep = row.get("REP")
+        if rep is not None and rep != 1:
+            continue
+        row_type = row.get("TYPE")
+        if row_type is not None and str(row_type).upper() != "RECON":
+            continue
+        frm = str(row.get("FROM") or row.get("from") or "").strip()
+        to = str(row.get("TO") or row.get("to") or "").strip()
+        if not frm or not to:
+            continue
+        n_raw = row.get("SWITCHES")
+        if n_raw is None:
+            n_raw = row.get("N") or row.get("count")
+        try:
+            n_val = int(float(n_raw)) if n_raw is not None else 0
+        except (TypeError, ValueError):
+            n_val = 0
+        key = (frm, to)
+        totals[key] = totals.get(key, 0) + n_val
+    return [
+        {"FROM": frm, "TO": to, "SWITCHES": cnt}
+        for (frm, to), cnt in sorted(totals.items(), key=lambda x: (-x[1], x[0]))
+    ]
+
+
+def _slim_dowser_dta(dta: Any) -> Any:
+    """Slim the discrete_trait_analysis block before persisting it.
+
+    Drops the unused `raw` arrays under ps/sp/sc (only `summary` is rendered),
+    and aggregates the per-permutation `switches` table (typically the
+    overwhelming majority of the result JSON for Dowser DTA runs).
+    """
+    if not isinstance(dta, dict):
+        return dta
+    slim = dict(dta)
+    if "switches" in slim:
+        slim["switches"] = _aggregate_dta_switches(slim["switches"])
+    for key in ("ps", "sp", "sc"):
+        block = slim.get(key)
+        if isinstance(block, dict) and "raw" in block:
+            block_slim = {k: v for k, v in block.items() if k != "raw"}
+            slim[key] = block_slim
+    return slim
+
+
+def _lightweight_result(raw_result: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of the method result with binary + per-tree payloads removed.
+
+    Keeps the structured scientific summary (clones, stats, QC, analysis, etc.).
+    Defensively drops any remaining ``*_b64`` keys and inline ``data:...;base64``
+    string values so no base64 can leak into the stored result JSON. Also slims
+    the Dowser DTA block whose raw per-permutation rows can run into the
+    hundreds of MB but aren't surfaced as raw in the UI.
+    """
+    out: dict[str, Any] = {}
+    for key, value in raw_result.items():
+        if key in _STRIPPED_RESULT_KEYS:
+            continue
+        if isinstance(key, str) and key.endswith("_b64"):
+            continue
+        if isinstance(value, str) and value.startswith("data:") and ";base64," in value[:64]:
+            continue
+        if key == "discrete_trait_analysis":
+            value = _slim_dowser_dta(value)
+        out[key] = value
+    return out
 
 
 @dataclass
@@ -223,43 +335,6 @@ def _index_nodes(root: ParsedNode) -> tuple[dict[str, ParsedNode], list[ParsedNo
     nodes = _preorder(root)
     by_label = {n.norm_label: n for n in nodes}
     return by_label, nodes
-
-
-def _extract_service_image(method_id: str, raw_result: dict[str, Any], idx: int) -> dict[str, str] | None:
-    viz = raw_result.get("visualizations")
-    if isinstance(viz, dict):
-        service_image = viz.get("service_image")
-        if isinstance(service_image, dict):
-            mime = str(service_image.get("mime") or "").strip()
-            base64 = str(service_image.get("base64") or "").strip()
-            if mime and base64:
-                return {"mime": mime, "base64": base64}
-
-    figures = raw_result.get("figures")
-    if not isinstance(figures, dict):
-        return None
-
-    method = (method_id or "").strip().lower()
-    if method == "gctree":
-        # GCtree can emit non-tree charts; never treat those as per-tree service images.
-        candidate_keys = ["phylogeny"]
-    else:
-        candidate_keys = ["phylogeny"] + [k for k in figures.keys() if k != "phylogeny"]
-    for key in candidate_keys:
-        arr = figures.get(key)
-        if not isinstance(arr, list) or idx >= len(arr):
-            continue
-        raw = arr[idx]
-        if raw is None:
-            continue
-        txt = str(raw).strip()
-        if not txt:
-            continue
-        m = DATA_URL_RE.match(txt)
-        if m:
-            return {"mime": m.group("mime"), "base64": m.group("data")}
-        return {"mime": "image/png", "base64": txt}
-    return None
 
 
 def _extract_tree_specific_map(raw_result: dict[str, Any], key: str, idx: int) -> dict[str, Any]:
@@ -574,15 +649,12 @@ def assemble_unified_tree_result(
                 }
             )
             normalized_newick = _ensure_terminal_semicolon(source_newick)
+            # Slim per-tree summary only; newick stays in run_trees and is
+            # served by /runs/{id}/trees/{tree_id}.
             tree_obj = {
                 "id": tree_id,
-                "newick": normalized_newick,
-                "original_newick": source_newick,
                 "has_lineage_plot": False,
-                "has_service_image": False,
             }
-            service_image = _extract_service_image(method_id, raw_result, idx)
-            tree_obj["has_service_image"] = bool(service_image)
             trees_out.append(tree_obj)
             rows_for_db.append(
                 {
@@ -590,7 +662,6 @@ def assemble_unified_tree_result(
                     "tree_id": tree_id,
                     "newick": normalized_newick,
                     "original_newick": source_newick,
-                    "service_image": service_image,
                     "node_attributes": None,
                     "lineage_plot": None,
                     "label_to_sequence_id": None,
@@ -598,7 +669,6 @@ def assemble_unified_tree_result(
             )
             continue
 
-        service_image = _extract_service_image(method_id, raw_result, idx)
         node_attributes, label_to_sequence_id = _build_node_attributes(
             method_id=method_id,
             root=parsed,
@@ -632,10 +702,7 @@ def assemble_unified_tree_result(
 
         tree_obj: dict[str, Any] = {
             "id": tree_id,
-            "newick": normalized_newick,
-            "original_newick": source_newick,
             "has_lineage_plot": lineage_plot is not None,
-            "has_service_image": bool(service_image),
         }
 
         trees_out.append(tree_obj)
@@ -645,14 +712,13 @@ def assemble_unified_tree_result(
                 "tree_id": tree_id,
                 "newick": normalized_newick,
                 "original_newick": source_newick,
-                "service_image": service_image,
                 "node_attributes": node_attributes if node_attributes else None,
                 "lineage_plot": lineage_plot,
                 "label_to_sequence_id": label_to_sequence_id if label_to_sequence_id else None,
             }
         )
 
-    unified = dict(raw_result)
+    unified = _lightweight_result(raw_result)
     unified["trees"] = trees_out
     unified["warnings"] = warnings_out
     return unified, rows_for_db
