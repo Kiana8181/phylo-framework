@@ -74,6 +74,8 @@ PY
 COPY app.py /srv/app.py
 COPY job_manager.py /srv/job_manager.py
 COPY job_runner.py /srv/job_runner.py
+COPY artifact_manifest.py /srv/artifact_manifest.py
+COPY object_storage.py /srv/object_storage.py
 
 EXPOSE 8002
 ENTRYPOINT ["/usr/bin/tini","--"]
