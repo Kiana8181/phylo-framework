@@ -8,7 +8,7 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Loader2 } from "lucide-react";
+import { Spinner } from "@/components/ui/loading";
 import { ReactNode, useEffect, useMemo, useState } from "react";
 import { Controller, useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
@@ -646,7 +646,7 @@ export default function FormBuilder({
         <Button type="submit" disabled={disabled}>
           {formState.isSubmitting ? (
             <>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              <Spinner className="mr-2" />
               Running…
             </>
           ) : (

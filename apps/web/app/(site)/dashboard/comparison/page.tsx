@@ -22,7 +22,8 @@ import { RunsApi } from "@/features/runs/api";
 import { useRunStatus } from "@/features/runs/hooks";
 import { useContractSpec, useMethods } from "@/features/methods/hooks";
 import type { RunSummary, LineagePlot, RunTreeListItem } from "@phylo/contracts";
-import { Loader2, Maximize2, Search, Plus, X } from "lucide-react";
+import { Maximize2, Search, Plus, X } from "lucide-react";
+import { Spinner } from "@/components/ui/loading";
 import CompareExpandDialog, { type CompareExpandTreeRef } from "@/components/comparison/CompareExpandDialog";
 import RunAutocomplete from "@/components/comparison/RunAutocomplete";
 import RunParamsDropdown from "@/components/runs/RunParamsDropdown";
@@ -270,7 +271,7 @@ function ComparisonColumn({
         )}
         {payloadLoading && !lineagePlot && !newickText && (
           <div className="flex items-center gap-2 rounded border p-4 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin shrink-0" />
+            <Spinner className="shrink-0" />
             Loading tree…
           </div>
         )}
@@ -557,7 +558,7 @@ export default function ComparisonPage() {
             />
           </div>
           <Button onClick={loadBaseRun} disabled={!baseRunIdInput.trim() || baseStatusLoading}>
-            {baseStatusLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Load"}
+            {baseStatusLoading ? <Spinner /> : "Load"}
           </Button>
           {baseDone && (
             <Button
@@ -747,7 +748,7 @@ function RunLineageBlock({
       )}
       {payloadLoading && !lineagePlot && !newickText && (
         <div className="flex items-center gap-2 rounded border p-4 text-sm text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin shrink-0" />
+          <Spinner className="shrink-0" />
           Loading tree…
         </div>
       )}

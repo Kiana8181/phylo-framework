@@ -15,6 +15,7 @@ import {
 } from "@phylo/contracts";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Loading } from "@/components/ui/loading";
 
 type TreesCarouselProps = {
   runId?: string | null;
@@ -408,7 +409,11 @@ export default function TreesCarousel({
             </div>
           )}
           {activeTab === "method" && !current?.imageArtifactId && current?.isLoading && (
-            <div className="rounded border p-4 text-sm text-muted-foreground">Loading tree image...</div>
+            <Loading
+              illustration="dna"
+              label="Loading tree image..."
+              className="rounded border p-4 py-8"
+            />
           )}
           {activeTab === "method" && !current?.imageArtifactId && !current?.isLoading && current?.loadError && (
             <div className="rounded border p-4 text-sm text-red-600">{current.loadError}</div>

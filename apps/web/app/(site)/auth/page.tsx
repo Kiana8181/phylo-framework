@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Loading } from "@/components/ui/loading";
 import { useAuth } from "@/features/auth/context";
 import { authApi } from "@/features/auth/api";
 import { notify } from "@/lib/notify";
@@ -78,11 +79,7 @@ function AuthPageContent() {
   }
 
   if (isLoading) {
-    return (
-      <main className="flex min-h-[calc(100vh-3.5rem)] items-center justify-center p-4">
-        <p className="text-muted-foreground">Loading...</p>
-      </main>
-    );
+    return <Loading fullScreen label="Loading…" />;
   }
 
   return (

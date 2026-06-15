@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Loading } from "@/components/ui/loading";
 import { fetchArtifactObjectUrl } from "@/features/runs/api";
 
 type Props = {
@@ -46,7 +47,13 @@ export default function ArtifactImage({ previewUrl, alt, className }: Props) {
     return <div className="rounded border p-4 text-sm text-red-600">Failed to load image.</div>;
   }
   if (!url) {
-    return <div className="rounded border p-4 text-sm text-muted-foreground">Loading image…</div>;
+    return (
+      <Loading
+        illustration="dna"
+        label="Loading image…"
+        className="rounded border p-4 py-8"
+      />
+    );
   }
   // eslint-disable-next-line @next/next/no-img-element
   return <img src={url} alt={alt} className={className} />;
