@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { ArrowLeft, FolderCog } from "lucide-react";
 import FileInput from "@/components/common/FileInput";
 import { Button } from "@/components/ui/button";
@@ -19,10 +19,12 @@ function formatSize(bytes: number): string {
 
 export default function DataStep({
   spec,
+  autoSelectFileId,
   onChoose,
   onBack,
 }: {
   spec: MethodSpec;
+  autoSelectFileId?: string | null;
   onChoose: (input: ChosenInput) => void;
   onBack: () => void;
 }) {
@@ -31,21 +33,34 @@ export default function DataStep({
   const uploadGuidance = Array.isArray(spec.uiHints?.uploadGuidance)
     ? (spec.uiHints?.uploadGuidance as string[])
     : [];
-  const fileLabel =
-    typeof spec.uiHints?.fileLabel === "string" ? spec.uiHints.fileLabel : "Input dataset";
+  const fileLabel = typeof spec.uiHints?.fileLabel === "string" ? spec.uiHints.fileLabel : "Input dataset";
 
   const compatibleFiles = useMemo(
     () => (data?.files ?? []).filter((file) => isFileCompatible(file, spec.accepts)),
     [data?.files, spec.accepts],
   );
 
+  // Pre-fill: auto-select the carried-over dataset by id (once) so the user
+  // lands directly on the parameter form. Falls back to manual pick otherwise.
+  const autoSelectedRef = useRef(false);
+  useEffect(() => {
+    if (autoSelectedRef.current || !autoSelectFileId) return;
+    const match = compatibleFiles.find((file) => file.id === autoSelectFileId);
+    if (!match) return;
+    autoSelectedRef.current = true;
+    onChoose({
+      kind: "existing",
+      fileId: match.id,
+      display: { name: match.original_filename, size: match.file_size },
+      mimeType: match.mime_type,
+    });
+  }, [autoSelectFileId, compatibleFiles, onChoose]);
+
   return (
     <div className="space-y-6">
       <div className="space-y-1">
         <h3 className="text-lg font-medium">{fileLabel}</h3>
-        <p className="text-xs text-muted-foreground">
-          Accepted: {(spec.accepts ?? []).join(", ") || "—"}
-        </p>
+        <p className="text-xs text-muted-foreground">Accepted: {(spec.accepts ?? []).join(", ") || "—"}</p>
         {uploadGuidance.length > 0 && (
           <div className="mt-2 space-y-1 text-xs text-muted-foreground">
             {uploadGuidance.map((line, idx) => (
@@ -64,9 +79,7 @@ export default function DataStep({
             if (files.length > 0) onChoose({ kind: "upload", file: files[0] });
           }}
         />
-        <p className="mt-2 text-xs text-muted-foreground">
-          The file is uploaded when you start the run.
-        </p>
+        <p className="mt-2 text-xs text-muted-foreground">The file is uploaded when you start the run.</p>
       </div>
 
       <div className="space-y-3">
@@ -81,9 +94,7 @@ export default function DataStep({
         </div>
 
         {isLoading && <Loading size="md" label="Loading datasets…" className="py-6" />}
-        {error && (
-          <p className="text-sm text-destructive">Failed to load your datasets.</p>
-        )}
+        {error && <p className="text-sm text-destructive">Failed to load your datasets.</p>}
         {!isLoading && !error && compatibleFiles.length === 0 && (
           <p className="text-sm text-muted-foreground">
             No compatible datasets yet. Upload one above to get started.

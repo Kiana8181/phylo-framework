@@ -5,7 +5,7 @@ import RunErrorState from "@/components/phylo/RunErrorState";
 import RunProgress from "@/components/phylo/RunProgress";
 import TreesCarousel from "@/components/phylo/TreesCarousel";
 import RunWizard from "@/components/phylo/wizard/RunWizard";
-import RunParamsDropdown from "@/components/runs/RunParamsDropdown";
+import RunParamsPanel from "@/components/runs/RunParamsPanel";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useContractSpec, useMethods } from "@/features/methods/hooks";
@@ -22,6 +22,13 @@ import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 
 type DashboardMode = "create" | "running" | "results" | "failed";
 
+/** Prior-run config carried into the wizard via "use as defaults for next run". */
+type WizardDefaults = {
+  methodId: string;
+  params: Record<string, unknown>;
+  fileId?: string | null;
+};
+
 function _datasetLabel(datasetName?: string | null, datasetFiles?: string[] | null): string {
   if (datasetName && datasetName.trim()) return datasetName;
   if (datasetFiles && datasetFiles.length > 0) return datasetFiles.join(", ");
@@ -35,6 +42,7 @@ function DashboardPageContent() {
 
   const [runId, setRunIdState] = useState<string | null>(null);
   const [dashboardMode, setDashboardMode] = useState<DashboardMode>("create");
+  const [wizardDefaults, setWizardDefaults] = useState<WizardDefaults | null>(null);
   const previousStatusRef = useRef<string | null>(null);
 
   const RUN_STORAGE_KEY = "phylo_current_run_id";
@@ -57,6 +65,7 @@ function DashboardPageContent() {
 
   const resetToCreateMode = () => {
     previousStatusRef.current = null;
+    setWizardDefaults(null);
     setRunId(null);
     setDashboardMode("create");
   };
@@ -168,6 +177,19 @@ function DashboardPageContent() {
   const runDatasetFiles = result?.dataset_files ?? status?.dataset_files ?? [];
   const runDatasetLabel = _datasetLabel(runDatasetName, runDatasetFiles);
   const runParams = (result?.params ?? status?.params ?? {}) as Record<string, unknown>;
+
+  const handleUseAsDefaults = () => {
+    if (!runMethodKey) return;
+    previousStatusRef.current = null;
+    setWizardDefaults({
+      methodId: runMethodKey,
+      params: runParams,
+      fileId: status?.input_file_id ?? result?.input_file_id ?? null,
+    });
+    setRunId(null);
+    setDashboardMode("create");
+  };
+
   const runStartedAt = status?.started_at ?? result?.started_at ?? null;
   const runFinishedAt = status?.finished_at ?? result?.finished_at ?? null;
   const runDurationLabel = formatRunDuration(runStartedAt, runFinishedAt);
@@ -208,6 +230,10 @@ function DashboardPageContent() {
       {dashboardMode === "create" && (
         <RunWizard
           methods={methods ?? []}
+          initialMethodId={wizardDefaults?.methodId}
+          initialParams={wizardDefaults?.params}
+          initialFileId={wizardDefaults?.fileId}
+          onStartOver={resetToCreateMode}
           onSubmitDone={(id) => {
             setRunId(id);
             setDashboardMode("running");
@@ -244,13 +270,14 @@ function DashboardPageContent() {
           onDismiss={resetToCreateMode}
           paramsSlot={
             runMethodKey ? (
-              <RunParamsDropdown
+              <RunParamsPanel
                 methodKey={runMethodKey}
                 runId={runId}
                 runParams={runParams}
                 contractSpec={runContractSpec}
                 datasetName={runDatasetName}
                 datasetFiles={runDatasetFiles}
+                onUseAsDefaults={handleUseAsDefaults}
               />
             ) : undefined
           }
@@ -307,18 +334,14 @@ function DashboardPageContent() {
             </div>
 
             {runMethodKey && (
-              <RunParamsDropdown
+              <RunParamsPanel
                 methodKey={runMethodKey}
                 runId={runId}
                 runParams={runParams}
                 contractSpec={runContractSpec}
                 datasetName={runDatasetName}
                 datasetFiles={runDatasetFiles}
-                sameDatasetRuns={(sameDatasetRuns ?? []).map((candidate) => ({
-                  id: candidate.id,
-                  methodId: candidate.method_id,
-                  datasetName: candidate.dataset_name,
-                }))}
+                onUseAsDefaults={handleUseAsDefaults}
               />
             )}
           </Card>

@@ -139,6 +139,8 @@ def _public_status(
     if not resolved_dataset_files and resolved_dataset_name:
         resolved_dataset_files = [resolved_dataset_name]
 
+    input_file_id = getattr(run, "input_file_id", None)
+
     out = {
         "status": run.status.value if hasattr(run.status, "value") else str(run.status),
         "progress": run.progress,
@@ -149,6 +151,7 @@ def _public_status(
         "params": _normalized_run_params(run),
         "dataset_name": resolved_dataset_name,
         "dataset_files": resolved_dataset_files,
+        "input_file_id": str(input_file_id) if input_file_id else None,
         "cancel_requested": getattr(run, "cancel_requested_at", None) is not None,
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "finished_at": run.finished_at.isoformat() if run.finished_at else None,
@@ -479,6 +482,10 @@ async def run_result(
     payload.setdefault("params", _normalized_run_params(run))
     payload.setdefault("dataset_name", dataset_name)
     payload.setdefault("dataset_files", dataset_files)
+    _result_input_file_id = getattr(run, "input_file_id", None)
+    payload.setdefault(
+        "input_file_id", str(_result_input_file_id) if _result_input_file_id else None
+    )
     payload.setdefault("started_at", run.started_at.isoformat() if run.started_at else None)
     payload.setdefault("finished_at", run.finished_at.isoformat() if run.finished_at else None)
 

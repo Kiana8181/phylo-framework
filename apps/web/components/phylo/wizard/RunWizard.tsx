@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Loading } from "@/components/ui/loading";
@@ -20,13 +21,27 @@ type Step = 1 | 2 | 3;
 export default function RunWizard({
   methods,
   onSubmitDone,
+  onStartOver,
+  initialMethodId,
+  initialParams,
+  initialFileId,
 }: {
   methods: MethodInfo[];
   onSubmitDone: (runId: string) => void;
+  onStartOver?: () => void;
+  initialMethodId?: string | null;
+  initialParams?: Record<string, unknown> | null;
+  initialFileId?: string | null;
 }) {
-  const [step, setStep] = useState<Step>(1);
-  const [selectedMethod, setSelectedMethod] = useState<MethodInfo | null>(null);
+  const initialMethod = useMemo(
+    () => (initialMethodId ? (methods.find((m) => m.id === initialMethodId) ?? null) : null),
+    [methods, initialMethodId],
+  );
+  const [step, setStep] = useState<Step>(initialMethod ? 2 : 1);
+  const [selectedMethod, setSelectedMethod] = useState<MethodInfo | null>(initialMethod);
   const [chosen, setChosen] = useState<ChosenInput | null>(null);
+  const [autoSelectConsumed, setAutoSelectConsumed] = useState(false);
+  const [prefilled, setPrefilled] = useState(!!initialMethod);
 
   const { data: spec, isLoading: specLoading } = useMethodSpec(selectedMethod?.id);
   const createRun = useCreateRun();
@@ -37,6 +52,23 @@ export default function RunWizard({
     setSelectedMethod(m);
     setStep(2);
   };
+
+  const chooseInput = (input: ChosenInput) => {
+    setAutoSelectConsumed(true);
+    setChosen(input);
+    setStep(3);
+  };
+
+  const startOver = () => {
+    setStep(1);
+    setSelectedMethod(null);
+    setChosen(null);
+    setAutoSelectConsumed(true);
+    setPrefilled(false);
+    onStartOver?.();
+  };
+
+  const usingDefaults = prefilled && selectedMethod?.id === initialMethodId;
 
   async function handleRun(values: Record<string, unknown>) {
     if (!selectedMethod || !chosen) return;
@@ -63,6 +95,18 @@ export default function RunWizard({
 
   return (
     <Card className="space-y-6 p-4 sm:p-6">
+      {prefilled && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-primary/30 bg-primary/5 px-4 py-2.5">
+          <p className="text-sm text-muted-foreground">
+            Settings carried over from a previous run — tweak anything, or start from scratch.
+          </p>
+          <Button type="button" variant="outline" size="sm" className="gap-1.5" onClick={startOver}>
+            <RotateCcw className="size-4" />
+            Start fresh
+          </Button>
+        </div>
+      )}
+
       <WizardStepper
         current={step}
         onStepClick={(target: WizardStepIndex) => {
@@ -80,10 +124,10 @@ export default function RunWizard({
         ) : (
           <DataStep
             spec={spec}
-            onChoose={(input) => {
-              setChosen(input);
-              setStep(3);
-            }}
+            autoSelectFileId={
+              !autoSelectConsumed && selectedMethod?.id === initialMethodId ? (initialFileId ?? null) : null
+            }
+            onChoose={chooseInput}
             onBack={() => setStep(1)}
           />
         ))}
@@ -92,7 +136,13 @@ export default function RunWizard({
         (specLoading || !spec || !chosen ? (
           <Loading label="Loading method…" />
         ) : (
-          <ParametersStep spec={spec} chosen={chosen} onRun={handleRun} onBack={() => setStep(2)} />
+          <ParametersStep
+            spec={spec}
+            chosen={chosen}
+            defaults={usingDefaults ? (initialParams ?? undefined) : undefined}
+            onRun={handleRun}
+            onBack={() => setStep(2)}
+          />
         ))}
 
       {uploadSession.uploading && (
