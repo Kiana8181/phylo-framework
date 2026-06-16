@@ -1,7 +1,9 @@
 "use client";
 
-import { useMemo, useRef } from "react";
+import { useMemo, useRef, useState } from "react";
 import { parseNewick, NewickNode } from "@/lib/newick";
+import DownloadMenu from "@/components/phylo/tree/DownloadMenu";
+import NodeDetailModal, { type NodeDetail } from "@/components/phylo/tree/NodeDetailModal";
 
 type Anno = { label: string } & Record<string, any>;
 
@@ -24,6 +26,8 @@ type Props = {
   showNodeNumbers?: boolean;
   /** Numeric annotation field used to scale tip circle radius. */
   sizeBy?: string | null;
+  /** Override for the scrollable viewport height (e.g. fullscreen expand). */
+  viewportHeight?: number | string;
 };
 
 type LNode = NewickNode & { parent?: LNode; x?: number; y?: number };
@@ -131,6 +135,26 @@ function buildTipTitle(
   return lines.join("\n");
 }
 
+/** Structured field rows for the node-detail modal (clicking a tip). */
+function buildTipRows(
+  label: string,
+  anno: Anno | undefined,
+  displayField: string | null,
+): NodeDetail {
+  const title = (displayField && String(anno?.[displayField] ?? "").trim()) || label;
+  const rows: NodeDetail["rows"] = [{ key: "label", value: label }];
+  if (anno) {
+    const seq = String(anno.sequence_id ?? "").trim();
+    if (seq) rows.push({ key: "sequence_id", value: seq });
+    const skip = new Set<string>(["label", "sequence_id", "tooltip"]);
+    for (const k of Object.keys(anno).filter((k) => !skip.has(k)).sort((a, b) => a.localeCompare(b, "en"))) {
+      const v = String(anno[k] ?? "").trim();
+      if (v) rows.push({ key: k, value: v });
+    }
+  }
+  return { title, rows };
+}
+
 function splitByHighlight(
   text: string,
   highlight: string
@@ -227,8 +251,10 @@ export default function TreeSVG({
   showInternalNodes = false,
   showNodeNumbers = false,
   sizeBy = null,
+  viewportHeight,
 }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
+  const [selectedNode, setSelectedNode] = useState<NodeDetail | null>(null);
 
   const coloringEnabled = !!colorBy;
   const colorField = colorBy || null;
@@ -419,7 +445,10 @@ export default function TreeSVG({
     <div className="space-y-3">
       <div
         className="w-full overflow-auto rounded border"
-        style={{ height: TREE_VIEWPORT_HEIGHT, maxHeight: TREE_VIEWPORT_HEIGHT }}
+        style={{
+          height: viewportHeight ?? TREE_VIEWPORT_HEIGHT,
+          maxHeight: viewportHeight ?? TREE_VIEWPORT_HEIGHT,
+        }}
       >
         <svg
           ref={svgRef}
@@ -477,6 +506,7 @@ export default function TreeSVG({
                 stroke={tipStroke}
                 strokeWidth={tipStrokeWidth}
                 style={{ cursor: "pointer" }}
+                onClick={() => setSelectedNode(buildTipRows(label, anno, displayIdField || null))}
               >
                 <title>{title}</title>
               </circle>
@@ -551,17 +581,16 @@ export default function TreeSVG({
         </svg>
       </div>
 
-      <div className="mt-3 flex flex-wrap gap-2">
-        <button onClick={downloadPNG} className="rounded border px-3 py-1 text-sm">
-          Download PNG
-        </button>
-        <button onClick={downloadSVG} className="rounded border px-3 py-1 text-sm">
-          Download SVG
-        </button>
-        <button onClick={downloadNewick} className="rounded border px-3 py-1 text-sm">
-          Download Newick
-        </button>
-      </div>
+      <DownloadMenu
+        className="mt-3"
+        formats={[
+          { label: "PNG image", description: "Raster image of the current view", onSelect: downloadPNG },
+          { label: "SVG image", description: "Scalable vector graphic", onSelect: downloadSVG },
+          { label: "Newick", description: "Tree topology (.nwk)", onSelect: downloadNewick },
+        ]}
+      />
+
+      <NodeDetailModal detail={selectedNode} onClose={() => setSelectedNode(null)} />
     </div>
   );
 }
