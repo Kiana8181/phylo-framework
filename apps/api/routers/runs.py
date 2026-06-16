@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import traceback
+from datetime import date
 from typing import Any, Optional
 from uuid import UUID
 
@@ -220,11 +221,36 @@ async def list_runs(
     current_user: User = Depends(get_current_user_required),
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
+    run_id: Optional[str] = Query(None),
+    dataset: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    method_id: Optional[str] = Query(None),
+    created_on: Optional[date] = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
-    """List current user's runs (auth required)."""
+    """List current user's runs with optional DB-level filters (auth required).
+
+    `status` is coerced to a RunStatus and ignored when unrecognized, so an
+    unexpected value never 422s — it simply applies no status filter.
+    """
+    status_filter: Optional[RunStatus] = None
+    if status:
+        try:
+            status_filter = RunStatus(status.strip().upper())
+        except ValueError:
+            status_filter = None
+
     run_repo = RunRepository(db)
-    runs = await run_repo.get_by_user(current_user.id, skip=skip, limit=limit)
+    runs = await run_repo.get_by_user(
+        current_user.id,
+        skip=skip,
+        limit=limit,
+        run_id=run_id,
+        dataset=dataset,
+        status=status_filter,
+        method_id=(method_id.strip() or None) if method_id else None,
+        created_on=created_on,
+    )
     return [_run_summary(r) for r in runs]
 
 

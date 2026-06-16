@@ -21,6 +21,14 @@ export async function fetchArtifactObjectUrl(apiPath: string): Promise<string> {
   return URL.createObjectURL(res.data as Blob);
 }
 
+export type RunListFilters = {
+  runId?: string;
+  dataset?: string;
+  status?: string;
+  methodId?: string;
+  createdOn?: string;
+};
+
 export type CurrentRunResponse = {
   run_id: string | null;
   status?: string | null;
@@ -42,20 +50,29 @@ export const RunsApi = {
     });
   },
 
-  async list(opts?: { skip?: number; limit?: number }): Promise<RunSummary[]> {
+  async list(opts?: { skip?: number; limit?: number; filters?: RunListFilters }): Promise<RunSummary[]> {
+    const f = opts?.filters ?? {};
+    const params: Record<string, string | number> = {
+      skip: opts?.skip ?? 0,
+      limit: opts?.limit ?? 100,
+    };
+    if (f.runId?.trim()) params.run_id = f.runId.trim();
+    if (f.dataset?.trim()) params.dataset = f.dataset.trim();
+    if (f.status) params.status = f.status;
+    if (f.methodId) params.method_id = f.methodId;
+    if (f.createdOn) params.created_on = f.createdOn;
+
     return serviceHandler<RunSummary[]>({
       method: Method.Get,
       url: API_ROUTES.runsList(),
-      params: { skip: opts?.skip ?? 0, limit: opts?.limit ?? 100 },
+      params,
     });
   },
 
   async create(
     methodId: string,
-    body: { params?: Record<string, unknown>; file_id?: string | null }
+    body: { params?: Record<string, unknown>; file_id?: string | null },
   ): Promise<CreateRunResponse> {
-    // Uploads are decoupled: run creation only references an already-uploaded
-    // file_id and returns quickly with a run_id.
     return serviceHandler<CreateRunResponse>({
       method: Method.Post,
       url: API_ROUTES.createRun(methodId),
