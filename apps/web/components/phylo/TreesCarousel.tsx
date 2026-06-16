@@ -2,20 +2,24 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Card } from "@/components/ui/card";
-import TreeSVG from "@/components/TreeSVG";
-import LineageSVG from "@/components/LineageSVG";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, Maximize2, Settings2 } from "lucide-react";
 import { RunsApi } from "@/features/runs/api";
-import ArtifactImage from "@/components/phylo/ArtifactImage";
 import {
-  API_ROUTES,
   type LineagePlot,
   type RunTree,
   type RunTreePayload,
 } from "@phylo/contracts";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
-import { Loading } from "@/components/ui/loading";
+import { Button } from "@/components/ui/button";
+import TreeSettingsPanel from "@/components/phylo/tree/TreeSettingsPanel";
+import TreeViewport from "@/components/phylo/tree/TreeViewport";
+import TreeOverlay from "@/components/phylo/tree/TreeOverlay";
+
+const VIEW_LABELS: Record<"method" | "phylogeny" | "lineage", string> = {
+  method: "Method output",
+  phylogeny: "Phylogenetic tree",
+  lineage: "Lineage tree",
+};
 
 type TreesCarouselProps = {
   runId?: string | null;
@@ -27,7 +31,7 @@ type TreesCarouselProps = {
   showInternalNodesDefault?: boolean;
 };
 
-type TreeVM = {
+export type TreeVM = {
   id: string;
   cloneId?: string;
   phylogenyNewick: string;
@@ -77,6 +81,8 @@ export default function TreesCarousel({
   const [treeCache, setTreeCache] = useState<Record<string, RunTreePayload>>({});
   const [loadingTreeId, setLoadingTreeId] = useState<string | null>(null);
   const [treeLoadErrors, setTreeLoadErrors] = useState<Record<string, string>>({});
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [expandOpen, setExpandOpen] = useState(false);
 
   const canPrev = idx > 0;
   const canNext = idx < Math.max(0, total - 1);
@@ -260,6 +266,22 @@ export default function TreesCarousel({
     if (!displayFields.includes(displayIdField)) setDisplayIdField(displayFields[0]);
   }, [displayFields, displayIdField]);
 
+  const viewportProps = {
+    activeTab,
+    current,
+    idx,
+    phyloAnnotations,
+    colorBy,
+    unknownValue,
+    displayIdField,
+    showLabels,
+    showInternalNodes,
+    showNodeNumbers,
+    sizeByField,
+    lineageDownloadName,
+    lineageNewick,
+  };
+
   if (!total) {
     return (
       <Card className="p-4">
@@ -269,27 +291,65 @@ export default function TreesCarousel({
   }
 
   return (
-    <Card className="p-4 space-y-3">
-      <div className="flex items-center justify-between">
-        <h4 className="font-medium">Trees</h4>
-        <div className="text-xs text-muted-foreground">
-          {idx + 1} / {total}
-        </div>
-      </div>
+    <Card className="relative overflow-hidden p-4 space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b pb-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {total > 1 && (
+            <Select value={String(idx)} onValueChange={(v) => setIdx(Number(v))}>
+              <SelectTrigger className="w-[200px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {viewTrees.map((tree, treeIdx) => (
+                  <SelectItem key={tree.id} value={String(treeIdx)}>
+                    {treeLabel(treeIdx, tree.cloneId)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
 
-      <div className="overflow-x-auto">
-        <div className="flex min-w-max items-center gap-2">
-          {viewTrees.map((tree, treeIdx) => (
-            <button
-              key={tree.id}
-              className={`rounded border px-3 py-1 text-xs ${
-                treeIdx === idx ? "bg-muted font-medium" : "bg-transparent"
-              }`}
-              onClick={() => setIdx(treeIdx)}
+          {tabs.length > 0 && (
+            <Select value={activeTab} onValueChange={(v) => setActiveTab(v as typeof activeTab)}>
+              <SelectTrigger className="w-[190px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {tabs.map((tab) => (
+                  <SelectItem key={tab} value={tab}>
+                    {VIEW_LABELS[tab]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2">
+          {tabs.length > 0 && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              onClick={() => setExpandOpen(true)}
             >
-              {treeLabel(treeIdx, tree.cloneId)}
-            </button>
-          ))}
+              <Maximize2 className="size-4" />
+              Expand
+            </Button>
+          )}
+          {isRenderableTreeTab && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              onClick={() => setSettingsOpen(true)}
+            >
+              <Settings2 className="size-4" />
+              Settings
+            </Button>
+          )}
         </div>
       </div>
 
@@ -303,160 +363,7 @@ export default function TreesCarousel({
         </button>
 
         <div className="flex-1 overflow-auto space-y-3">
-          {tabs.length > 0 && (
-            <div className="flex items-center gap-2 border-b pb-2">
-              {tabs.map((tab) => (
-                <button
-                  key={tab}
-                  className={`rounded px-3 py-1.5 text-sm border ${
-                    activeTab === tab ? "bg-muted font-medium" : "bg-transparent"
-                  }`}
-                  onClick={() => setActiveTab(tab)}
-                >
-                  {tab === "method" && "Method Output"}
-                  {tab === "phylogeny" && "Phylogeny"}
-                  {tab === "lineage" && "Lineage"}
-                </button>
-              ))}
-
-              {isRenderableTreeTab && (
-                <div className="ml-auto flex items-center gap-4">
-                  <label
-                    className="flex items-center gap-2 text-xs text-muted-foreground"
-                    title="Show tip or display labels on tree views"
-                  >
-                    <span>Show labels</span>
-                    <Switch checked={showLabels} onCheckedChange={setShowLabels} aria-label="Show labels" />
-                  </label>
-                  {(current?.hasLineagePlot || showInternalNodesDefault) && (
-                    <>
-                      <label
-                        className="flex items-center gap-2 text-xs text-muted-foreground"
-                        title="Show reconstructed internal node labels on the lineage view"
-                      >
-                        <span>Internal nodes</span>
-                        <Switch
-                          checked={showInternalNodes}
-                          onCheckedChange={setShowInternalNodes}
-                          aria-label="Show internal nodes"
-                        />
-                      </label>
-                      <label
-                        className="flex items-center gap-2 text-xs text-muted-foreground"
-                        title="Show Dowser/ape node index numbers on internal nodes"
-                      >
-                        <span>Node numbers</span>
-                        <Switch
-                          checked={showNodeNumbers}
-                          onCheckedChange={setShowNodeNumbers}
-                          aria-label="Show node numbers"
-                        />
-                      </label>
-                    </>
-                  )}
-
-                  {displayFields.length > 0 && (
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-muted-foreground">Display ID</span>
-                      <Select value={displayIdField} onValueChange={setDisplayIdField}>
-                        <SelectTrigger className="w-[180px]">
-                          <SelectValue placeholder="Display field" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {displayFields.map((f) => (
-                            <SelectItem key={f} value={f}>
-                              {f}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  )}
-
-                  {sizeFields.length > 0 && (
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-muted-foreground">Tip size by</span>
-                      <Select
-                        value={sizeByField || "__none__"}
-                        onValueChange={(v) => setSizeByField(v === "__none__" ? "" : v)}
-                      >
-                        <SelectTrigger className="w-[180px]">
-                          <SelectValue placeholder="Constant size" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="__none__">Constant size</SelectItem>
-                          {sizeFields.map((f) => (
-                            <SelectItem key={f} value={f}>
-                              {f}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-
-          {activeTab === "method" && current?.imageArtifactId && (
-            <div className="overflow-hidden rounded border bg-white">
-              <ArtifactImage
-                previewUrl={API_ROUTES.artifactPreview(current.imageArtifactId)}
-                alt={`Method output tree ${idx + 1}`}
-                className="w-full h-auto mx-auto"
-              />
-            </div>
-          )}
-          {activeTab === "method" && !current?.imageArtifactId && current?.isLoading && (
-            <Loading
-              illustration="dna"
-              label="Loading tree image..."
-              className="rounded border p-4 py-8"
-            />
-          )}
-          {activeTab === "method" && !current?.imageArtifactId && !current?.isLoading && current?.loadError && (
-            <div className="rounded border p-4 text-sm text-red-600">{current.loadError}</div>
-          )}
-          {activeTab === "method" && !current?.imageArtifactId && !current?.isLoading && !current?.loadError && (
-            <div className="rounded border p-4 text-sm text-muted-foreground">No method output available.</div>
-          )}
-
-          {activeTab === "phylogeny" && current?.phylogenyNewick && (
-            <TreeSVG
-              newick={current.phylogenyNewick}
-              annotations={phyloAnnotations}
-              showLabels={showLabels}
-              showInternalNodes={showInternalNodes}
-              showNodeNumbers={showNodeNumbers}
-              colorBy={colorBy}
-              unknownValue={unknownValue}
-              displayIdField={displayIdField || undefined}
-              sizeBy={sizeByField || undefined}
-            />
-          )}
-
-          {activeTab === "lineage" && current?.lineagePlot && (
-            <LineageSVG
-              lineagePlot={current.lineagePlot}
-              nodeAttributes={current.nodeAttributes}
-              displayIdField={displayIdField || undefined}
-              showLabels={showLabels}
-              showInternalNodes={showInternalNodes}
-              showNodeNumbers={showNodeNumbers}
-              filename={lineageDownloadName}
-              newickText={lineageNewick}
-            />
-          )}
-          {activeTab === "lineage" && !current?.lineagePlot && current?.isLoading && (
-            <div className="rounded border p-4 text-sm text-muted-foreground">Loading lineage plot...</div>
-          )}
-          {activeTab === "lineage" && !current?.lineagePlot && !current?.isLoading && current?.loadError && (
-            <div className="rounded border p-4 text-sm text-red-600">{current.loadError}</div>
-          )}
-          {activeTab === "lineage" && !current?.lineagePlot && !current?.isLoading && !current?.loadError && (
-            <div className="rounded border p-4 text-sm text-muted-foreground">No lineage plot available.</div>
-          )}
+          <TreeViewport {...viewportProps} />
         </div>
 
         <button
@@ -467,6 +374,33 @@ export default function TreesCarousel({
           Next <ChevronRight className="w-4 h-4" />
         </button>
       </div>
+
+      <TreeSettingsPanel
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        showLabels={showLabels}
+        setShowLabels={setShowLabels}
+        showInternalControls={Boolean(current?.hasLineagePlot || showInternalNodesDefault)}
+        showInternalNodes={showInternalNodes}
+        setShowInternalNodes={setShowInternalNodes}
+        showNodeNumbers={showNodeNumbers}
+        setShowNodeNumbers={setShowNodeNumbers}
+        displayFields={displayFields}
+        displayIdField={displayIdField}
+        setDisplayIdField={setDisplayIdField}
+        sizeFields={sizeFields}
+        sizeByField={sizeByField}
+        setSizeByField={setSizeByField}
+      />
+
+      <TreeOverlay
+        open={expandOpen}
+        onClose={() => setExpandOpen(false)}
+        size="full"
+        title={`${VIEW_LABELS[activeTab]} — ${treeLabel(idx, current?.cloneId)}`}
+      >
+        <TreeViewport {...viewportProps} viewportHeight="78vh" />
+      </TreeOverlay>
     </Card>
   );
 }

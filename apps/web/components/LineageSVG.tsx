@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { LineagePlot, LineagePlotNode, TreeNodeAttrs } from "@phylo/contracts";
+import DownloadMenu from "@/components/phylo/tree/DownloadMenu";
+import NodeDetailModal, { type NodeDetail } from "@/components/phylo/tree/NodeDetailModal";
 
 type NodeAttrs = TreeNodeAttrs;
 
@@ -15,6 +17,7 @@ type RenderNode = {
   color: string;
   title: string;
   displayLabel: string;
+  rows: NodeDetail["rows"];
 };
 
 type RenderEdge = {
@@ -157,6 +160,24 @@ function buildTitle(
   }
 
   return lines.join("\n");
+}
+
+/** Structured field rows for the node-detail modal (clicking a node). */
+function buildRows(node: LineagePlotNode, attrs: NodeAttrs | undefined): NodeDetail["rows"] {
+  const rows: NodeDetail["rows"] = [{ key: "label", value: String(node.label ?? node.id) }];
+  const seq = String(attrs?.sequence_id ?? "").trim();
+  if (seq) rows.push({ key: "sequence_id", value: seq });
+  rows.push({ key: "abundance", value: String(toAbundance(node.abundance ?? attrs?.abundance, 1)) });
+  if (node.parentId) rows.push({ key: "parentId", value: String(node.parentId) });
+  rows.push({ key: "type", value: node.isLeaf ? "leaf" : "internal" });
+  if (attrs && typeof attrs === "object") {
+    const ignored = new Set<string>(["tooltip", "sequence_id", "abundance"]);
+    for (const key of Object.keys(attrs).filter((k) => !ignored.has(k)).sort((a, b) => a.localeCompare(b, "en"))) {
+      const value = String(attrs[key] ?? "").trim();
+      if (value) rows.push({ key, value });
+    }
+  }
+  return rows;
 }
 
 function truncateLabel(label: string, maxChars: number): string {
@@ -328,6 +349,7 @@ function buildLayout(
       color: colorForAbundance(abundance, minAbundance, maxAbundance),
       title: buildTitle(node, attrs, displayIdField),
       displayLabel,
+      rows: buildRows(node, attrs),
     };
   });
 
@@ -409,6 +431,7 @@ export default function LineageSVG({
   filename = "tree",
   newickText,
   highlightText,
+  viewportHeight,
 }: {
   lineagePlot: LineagePlot;
   nodeAttributes?: Record<string, NodeAttrs>;
@@ -419,9 +442,12 @@ export default function LineageSVG({
   filename?: string;
   newickText?: string | null;
   highlightText?: string | null;
+  /** Override for the scrollable viewport height (e.g. fullscreen expand). */
+  viewportHeight?: number | string;
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
+  const [selectedNode, setSelectedNode] = useState<NodeDetail | null>(null);
 
   const layout = useMemo(
     () =>
@@ -526,7 +552,10 @@ export default function LineageSVG({
         </div>
       )}
 
-      <div className="w-full overflow-auto rounded border" style={{ maxHeight: VIEWPORT_MAX_HEIGHT }}>
+      <div
+        className="w-full overflow-auto rounded border"
+        style={{ maxHeight: viewportHeight ?? VIEWPORT_MAX_HEIGHT }}
+      >
         <svg
           ref={svgRef}
           width={layout.svgWidth}
@@ -569,6 +598,7 @@ export default function LineageSVG({
                   key={node.id}
                   onMouseEnter={() => setHoveredNodeId(node.id)}
                   onMouseLeave={() => setHoveredNodeId(null)}
+                  onClick={() => setSelectedNode({ title: node.displayLabel || node.label || node.id, rows: node.rows })}
                 >
                   <circle
                     cx={node.x}
@@ -624,21 +654,20 @@ export default function LineageSVG({
         </svg>
       </div>
 
-      <div className="flex flex-wrap gap-2">
-        <button onClick={downloadPNG} className="rounded border px-3 py-1 text-sm">
-          Download PNG
-        </button>
-        <button onClick={downloadSVG} className="rounded border px-3 py-1 text-sm">
-          Download SVG
-        </button>
-        <button
-          onClick={downloadNewick}
-          disabled={!String(newickText ?? lineagePlot.meta?.normalizedNewick ?? "").trim()}
-          className="rounded border px-3 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          Download Newick
-        </button>
-      </div>
+      <DownloadMenu
+        formats={[
+          { label: "PNG image", description: "Raster image of the current view", onSelect: downloadPNG },
+          { label: "SVG image", description: "Scalable vector graphic", onSelect: downloadSVG },
+          {
+            label: "Newick",
+            description: "Tree topology (.nwk)",
+            onSelect: downloadNewick,
+            disabled: !String(newickText ?? lineagePlot.meta?.normalizedNewick ?? "").trim(),
+          },
+        ]}
+      />
+
+      <NodeDetailModal detail={selectedNode} onClose={() => setSelectedNode(null)} />
     </div>
   );
 }
