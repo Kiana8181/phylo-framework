@@ -163,3 +163,70 @@
     animation: none;
   }
 }
+
+/* Landing-page hero: a phylogenetic-tree motif that draws its branches in,
+   pops its nodes, and gently floats. All token-coloured and reduced-motion safe. */
+@keyframes phylo-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes phylo-node-in {
+  0% {
+    opacity: 0;
+    transform: scale(0);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes phylo-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+@keyframes phylo-glow {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+.phylo-draw {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: phylo-draw 1.2s ease forwards;
+}
+.phylo-node-in {
+  transform-box: fill-box;
+  transform-origin: center;
+  opacity: 0;
+  animation: phylo-node-in 0.5s ease forwards;
+}
+.phylo-float {
+  animation: phylo-float 7s ease-in-out infinite;
+}
+.phylo-glow {
+  animation: phylo-glow 5s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .phylo-draw,
+  .phylo-node-in,
+  .phylo-float,
+  .phylo-glow {
+    animation: none;
+  }
+  .phylo-draw {
+    stroke-dashoffset: 0;
+  }
+  .phylo-node-in {
+    opacity: 1;
+  }
+}

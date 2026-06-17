@@ -28,18 +28,18 @@ export default function Navbar() {
           >
             Phylo Runner
           </Link>
-          <nav className="flex items-center gap-2 sm:gap-4 shrink-0">
-            <Link
-              href="/"
-              className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors whitespace-nowrap"
-            >
-              Home
-            </Link>
+          <nav className="hidden sm:flex items-center gap-2 sm:gap-4 shrink-0">
             <Link
               href="/dashboard"
               className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors whitespace-nowrap"
             >
               Dashboard
+            </Link>
+            <Link
+              href="/documents"
+              className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors whitespace-nowrap"
+            >
+              Documentation
             </Link>
           </nav>
         </div>
@@ -65,16 +65,9 @@ export default function Navbar() {
             <>
               <span className="flex items-center gap-2 text-sm text-muted-foreground px-2 select-none">
                 <User className="h-4 w-4 shrink-0" />
-                <span className="truncate max-w-[8rem] sm:max-w-[12rem]">
-                  {user.username || user.email}
-                </span>
+                <span className="truncate max-w-[8rem] sm:max-w-[12rem]">{user.username || user.email}</span>
               </span>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-sm gap-1"
-                onClick={() => logout()}
-              >
+              <Button variant="ghost" size="sm" className="text-sm gap-1" onClick={() => logout()}>
                 <LogOut className="h-4 w-4" />
                 Log out
               </Button>
