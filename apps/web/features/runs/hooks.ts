@@ -1,5 +1,5 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { RunsApi } from "./api";
+import { RunsApi, type RunListFilters } from "./api";
 import type { RunStatus, RunResult, CreateRunResponse, RunSummary } from "@phylo/contracts";
 import { notify } from "@/lib/notify";
 import { useEffect, useRef } from "react";
@@ -96,9 +96,18 @@ export function useRunResult(runId?: string, enabled = false) {
   });
 }
 
-export function useRunsList(opts?: { skip?: number; limit?: number }) {
+export function useRunsList(opts?: {
+  skip?: number;
+  limit?: number;
+  filters?: RunListFilters;
+}) {
   return useQuery<RunSummary[]>({
-    queryKey: ["runsList", opts?.skip ?? 0, opts?.limit ?? 100],
+    queryKey: [
+      "runsList",
+      opts?.skip ?? 0,
+      opts?.limit ?? 100,
+      JSON.stringify(opts?.filters ?? {}),
+    ],
     queryFn: () => RunsApi.list(opts),
   });
 }

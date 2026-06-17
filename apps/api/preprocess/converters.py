@@ -13,6 +13,10 @@ logger = logging.getLogger(__name__)
 ID_COLUMN_SYNONYMS = ("sequence_id", "seq_id", "id", "name")
 ALLOWED_ALIGNMENT_CHARS = set("ACGTNacgtn-.*?")
 
+# Delimiters we attempt to detect when an input file's actual separator is unknown.
+# Order matters only for the tie-break behavior below.
+CANDIDATE_TABLE_DELIMITERS = ("\t", ",", ";")
+
 
 @dataclass
 class ConversionError(Exception):
@@ -37,20 +41,12 @@ def normalize_header(value: str) -> str:
     return normalized
 
 
-def _table_delimiter(
-    input_path: Path, delimiter: Literal["csv", "tsv"] | None = None
-) -> str:
-    if delimiter == "csv":
-        return ","
-    if delimiter == "tsv":
-        return "\t"
+def canonical_delimiter_for_extension(ext: str) -> str:
+    normalized = ext.lower().lstrip(".")
+    return "\t" if normalized in {"tsv", "tab"} else ","
 
-    suffix = input_path.suffix.lower()
-    if suffix == ".csv":
-        return ","
-    if suffix in {".tsv", ".tab"}:
-        return "\t"
 
+def _sniff_delimiter_from_header(input_path: Path, fallback: str) -> str:
     try:
         with input_path.open("r", encoding="utf-8", newline="") as handle:
             header = handle.readline()
@@ -61,14 +57,43 @@ def _table_delimiter(
             details={"input_path": str(input_path), "error": str(exc)},
         ) from exc
 
-    if "\t" in header and header.count("\t") >= header.count(","):
+    counts = {char: header.count(char) for char in CANDIDATE_TABLE_DELIMITERS}
+    best_char = max(CANDIDATE_TABLE_DELIMITERS, key=lambda char: counts[char])
+    if counts[best_char] > 0:
+        return best_char
+    return fallback
+
+
+def _table_delimiter(
+    input_path: Path, delimiter: Literal["csv", "tsv"] | None = None
+) -> str:
+    # TSV is unambiguous — trust the hint or the extension and skip sniffing.
+    if delimiter == "tsv":
         return "\t"
-    return ","
+    suffix = input_path.suffix.lower()
+    if delimiter is None and suffix in {".tsv", ".tab"}:
+        return "\t"
+
+    # For CSV-family inputs always sniff the header so we catch semicolon-
+    # separated exports (common from Excel / European locales) instead of
+    # silently treating them as a single-column comma file.
+    fallback = "\t" if suffix in {".tsv", ".tab"} else ","
+    return _sniff_delimiter_from_header(input_path, fallback=fallback)
 
 
-def _read_table(input_path: Path, delimiter_char: str) -> tuple[list[str], list[list[str]]]:
+def _row_is_blank(row: list[str]) -> bool:
+    """True when every cell in the row is empty or whitespace-only."""
+    return all(not cell or not cell.strip() for cell in row)
+
+
+def _read_table(
+    input_path: Path, delimiter_char: str
+) -> tuple[list[str], list[list[str]], int]:
     try:
-        with input_path.open("r", encoding="utf-8", newline="") as handle:
+        # utf-8-sig transparently strips a leading UTF-8 BOM from the first
+        # cell of the first row, so headers like '﻿sequence_id' do not
+        # leak through and break downstream column matching.
+        with input_path.open("r", encoding="utf-8-sig", newline="") as handle:
             reader = csv.reader(handle, delimiter=delimiter_char)
             rows = list(reader)
     except OSError as exc:
@@ -92,10 +117,14 @@ def _read_table(input_path: Path, delimiter_char: str) -> tuple[list[str], list[
         )
 
     header = rows[0]
-    body = rows[1:]
+    # Drop fully-blank rows (e.g. `;;;;;;...`). Excel commonly pads exports
+    # with trailing empty rows extending the "used range"; passing them
+    # through would later be rejected by validators as empty sequence_id /
+    # clone_id rows.
+    body: list[list[str]] = []
+    blank_rows_dropped = 0
     expected_cols = len(header)
-
-    for row_number, row in enumerate(body, start=2):
+    for row_number, row in enumerate(rows[1:], start=2):
         if len(row) != expected_cols:
             raise ConversionError(
                 code="ROW_WIDTH_MISMATCH",
@@ -107,8 +136,12 @@ def _read_table(input_path: Path, delimiter_char: str) -> tuple[list[str], list[
                     "actual_columns": len(row),
                 },
             )
+        if _row_is_blank(row):
+            blank_rows_dropped += 1
+            continue
+        body.append(row)
 
-    return header, body
+    return header, body, blank_rows_dropped
 
 
 def _write_table(
@@ -199,7 +232,7 @@ def _pick_id_column(
 
 
 def convert_tsv_to_csv(input_path: Path, output_path: Path) -> None:
-    header, body = _read_table(input_path, delimiter_char="\t")
+    header, body, _ = _read_table(input_path, delimiter_char="\t")
     _write_table(output_path, delimiter_char=",", header=header, body=body)
     logger.info(
         "Converted TSV to CSV",
@@ -208,12 +241,44 @@ def convert_tsv_to_csv(input_path: Path, output_path: Path) -> None:
 
 
 def convert_csv_to_tsv(input_path: Path, output_path: Path) -> None:
-    header, body = _read_table(input_path, delimiter_char=",")
+    delimiter_char = _table_delimiter(input_path, delimiter="csv")
+    header, body, _ = _read_table(input_path, delimiter_char=delimiter_char)
     _write_table(output_path, delimiter_char="\t", header=header, body=body)
     logger.info(
         "Converted CSV to TSV",
         extra={"rows": len(body), "columns": len(header), "input_path": str(input_path)},
     )
+
+
+def normalize_table_delimiter(
+    input_path: Path,
+    output_path: Path,
+    *,
+    delimiter: Literal["csv", "tsv"] | None = None,
+) -> dict[str, Any]:
+    """Rewrite a tabular file using the canonical delimiter for its extension.
+
+    Auto-detects the actual delimiter (handles semicolon-CSV exports) so that
+    downstream consumers can rely on plain comma/tab separators regardless of
+    the original locale-specific formatting of the upload. Also strips any
+    UTF-8 BOM and drops fully-blank padding rows that Excel often emits.
+    """
+    detected_char = _table_delimiter(input_path, delimiter=delimiter)
+    header, body, blank_rows_dropped = _read_table(
+        input_path, delimiter_char=detected_char
+    )
+    output_ext = output_path.suffix.lower().lstrip(".") or (
+        "tsv" if detected_char == "\t" else "csv"
+    )
+    output_char = canonical_delimiter_for_extension(output_ext)
+    _write_table(output_path, delimiter_char=output_char, header=header, body=body)
+    return {
+        "rows": len(body),
+        "cols": len(header),
+        "input_delimiter": detected_char,
+        "output_delimiter": output_char,
+        "blank_rows_dropped": blank_rows_dropped,
+    }
 
 
 def rename_table_columns(
@@ -230,7 +295,9 @@ def rename_table_columns(
     _ = allow_missing_optional
 
     delimiter_char = _table_delimiter(input_path, delimiter=delimiter)
-    header, body = _read_table(input_path, delimiter_char=delimiter_char)
+    header, body, blank_rows_dropped = _read_table(
+        input_path, delimiter_char=delimiter_char
+    )
     if not header:
         raise ConversionError(
             code="EMPTY_HEADER",
@@ -312,9 +379,13 @@ def rename_table_columns(
             },
         )
 
+    output_ext = output_path.suffix.lower().lstrip(".") or (
+        "tsv" if delimiter_char == "\t" else "csv"
+    )
+    output_delimiter_char = canonical_delimiter_for_extension(output_ext)
     _write_table(
         output_path=output_path,
-        delimiter_char=delimiter_char,
+        delimiter_char=output_delimiter_char,
         header=renamed_header,
         body=body,
     )
@@ -323,6 +394,9 @@ def rename_table_columns(
         "resolved_map": resolved_map,
         "rows": len(body),
         "cols": len(renamed_header),
+        "input_delimiter": delimiter_char,
+        "output_delimiter": output_delimiter_char,
+        "blank_rows_dropped": blank_rows_dropped,
         "warnings": [],
     }
 
@@ -344,7 +418,7 @@ def convert_table_to_aligned_fasta(
         )
 
     delimiter_char = _table_delimiter(input_path, delimiter=delimiter)
-    header, body = _read_table(input_path, delimiter_char=delimiter_char)
+    header, body, _ = _read_table(input_path, delimiter_char=delimiter_char)
     if not header:
         raise ConversionError(
             code="EMPTY_HEADER",

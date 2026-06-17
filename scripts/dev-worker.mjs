@@ -20,11 +20,15 @@ if (!fs.existsSync(pythonBin)) {
 
 const python = pythonBin;
 const rawStorage = process.env.STORAGE_LOCAL_PATH || "runtime/storage";
-const hostStorage = path.isAbsolute(rawStorage) || /^[A-Za-z]:[\\/]/.test(rawStorage)
-  ? rawStorage
-  : path.join(ROOT, rawStorage);
+const hostStorage =
+  path.isAbsolute(rawStorage) || /^[A-Za-z]:[\\/]/.test(rawStorage)
+    ? rawStorage
+    : path.join(ROOT, rawStorage);
 
-if (!process.env.HOST_RUNTIME_SHARED_ROOT || process.env.HOST_RUNTIME_SHARED_ROOT.startsWith("/runtime/storage")) {
+if (
+  !process.env.HOST_RUNTIME_SHARED_ROOT ||
+  process.env.HOST_RUNTIME_SHARED_ROOT.startsWith("/runtime/storage")
+) {
   process.env.HOST_RUNTIME_SHARED_ROOT = hostStorage;
 }
 

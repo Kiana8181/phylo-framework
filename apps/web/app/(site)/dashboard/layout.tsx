@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/features/auth/context";
 import Sidebar from "@/components/dashboard/Sidebar";
+import { Loading } from "@/components/ui/loading";
 
 export default function DashboardLayout({
   children,
@@ -21,11 +22,7 @@ export default function DashboardLayout({
   }, [isAuthenticated, isLoading, router]);
 
   if (isLoading) {
-    return (
-      <div className="flex min-h-[calc(100vh-3.5rem)] items-center justify-center">
-        <p className="text-muted-foreground">Loading...</p>
-      </div>
-    );
+    return <Loading fullScreen illustration="dna" label="Loading..." />;
   }
 
   if (!isAuthenticated) {

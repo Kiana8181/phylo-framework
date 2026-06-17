@@ -506,24 +506,27 @@ validate_igphyml_sequences <- function(
   id_col = "sequence_id",
   clone_col = "clone_id",
   seq_col = "sequence_alignment",
-  germ_col = "germline_alignment_d_mask"
+  germ_col = "germline_alignment_d_mask",
+  check_structural = TRUE
 ) {
   n <- nrow(db)
   if (n == 0) return(list(ok = TRUE))
 
-  structural <- validate_igphyml_structural(db, seq_col, germ_col, id_col, clone_col)
-  if (isFALSE(structural$ok)) {
-    return(list(
-      ok = FALSE,
-      error = structural$error,
-      step = "dowser.preflight.igphyml.sequence_validity",
-      details = list(
-        records = structural$records,
-        summary = list(n_structural = structural$bad_count),
-        truncated = structural$truncated %||% FALSE,
-        used_authoritative_airr_fields = FALSE
-      )
-    ))
+  if (isTRUE(check_structural)) {
+    structural <- validate_igphyml_structural(db, seq_col, germ_col, id_col, clone_col)
+    if (isFALSE(structural$ok)) {
+      return(list(
+        ok = FALSE,
+        error = structural$error,
+        step = "dowser.preflight.igphyml.sequence_validity",
+        details = list(
+          records = structural$records,
+          summary = list(n_structural = structural$bad_count),
+          truncated = structural$truncated %||% FALSE,
+          used_authoritative_airr_fields = FALSE
+        )
+      ))
+    }
   }
 
   has_airr <- has_airr_validity_fields(db)
@@ -664,7 +667,16 @@ validate_igphyml_sequences_after_format_clones <- function(clones) {
       warnings = "IgPhyML sequence validity could not inspect formatted clone records; relying on Dowser/IgPhyML runtime checks."
     ))
   }
-  validate_igphyml_sequences(db)
+  # Post-formatClones, dowser renames the alignment column from
+  # `sequence_alignment` to `sequence` (inside each airrClone @data slot)
+  # and moves the germline out of @data entirely into the @germline slot.
+  # Structural presence/length validity on the original AIRR columns is
+  # already enforced before formatClones runs (validate_alignment_presence
+  # + validate_clone_consistency in the handler), so we skip the
+  # column-presence structural sub-check here and only run the
+  # AIRR-field / heuristic checks, which short-circuit cleanly when the
+  # original column names are absent.
+  validate_igphyml_sequences(db, check_structural = FALSE)
 }
 
 validate_clone_consistency <- function(db, clone_col, seq_col, germ_col, junc_col, v_col, j_col, id_col = "sequence_id") {

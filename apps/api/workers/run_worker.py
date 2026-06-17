@@ -24,10 +24,16 @@ from sqlalchemy.sql import func
 
 from apps.api.database.base import AsyncSessionLocal
 from apps.api.database.models import RunStatus
+from apps.api.repositories.artifact_repository import ArtifactRepository
 from apps.api.repositories.file_repository import FileRepository
 from apps.api.repositories.run_repository import RunRepository
 from apps.api.repositories.run_tree_repository import RunTreeRepository
 from apps.api.services import method_jobs_client as jobs
+from apps.api.services.artifact_service import (
+    ArtifactService,
+    ManifestError,
+    parse_manifest,
+)
 from apps.api.services.run_staging import (
     StagingError,
     cleanup_workspace,
@@ -43,7 +49,15 @@ METHOD_POLL_INTERVAL = float(os.getenv("WORKER_METHOD_POLL_INTERVAL", "10"))
 LEASE_SECONDS = int(os.getenv("WORKER_LEASE_SECONDS", "180"))
 MAX_CONCURRENT = int(os.getenv("WORKER_MAX_CONCURRENT_RUNS", "4"))
 
-storage = get_storage()
+_storage = None
+
+
+def _storage_backend():
+    """Lazily build the dataset storage client (avoids connecting at import time)."""
+    global _storage
+    if _storage is None:
+        _storage = get_storage()
+    return _storage
 
 
 def _log(msg: str, **fields: Any) -> None:
@@ -79,17 +93,53 @@ async def _resolve_input_storage_path(run, file_repo: FileRepository) -> Optiona
     return None
 
 
-async def _persist_done(run_id: UUID, method_id: str, result: dict[str, Any]) -> None:
+async def _persist_done(
+    run_id: UUID, method_id: str, method_job_id: str, result: dict[str, Any]
+) -> None:
+    # 1) Validate the artifact manifest (no base64 fallback; fail loudly).
+    try:
+        manifest = parse_manifest(result)
+    except ManifestError as exc:
+        await _persist_error(
+            run_id,
+            error_message=f"Method result manifest invalid: {exc}",
+            result_payload={
+                "ok": False,
+                "error": f"Method result manifest invalid: {exc}",
+                "logs": [{"step": "api.worker.manifest", "ok": False, "out": str(exc)}],
+            },
+        )
+        return
+
+    # 2) Build the lightweight scientific summary + per-tree rows (no base64).
     unified_result, tree_rows = await asyncio.to_thread(
         assemble_unified_tree_result, method_id, result
     )
+
+    # 3) Build DB rows from the manifest. Files are already in MinIO — the
+    #    method service uploaded them directly using its scoped credentials.
+    artifact_service = ArtifactService()
+    artifact_rows = artifact_service.ingest(
+        run_id=run_id,
+        method_id=method_id,
+        manifest_artifacts=manifest,
+    )
+
+    # 4) Persist run summary + trees + artifact references.
     async with AsyncSessionLocal() as db:
         run_repo = RunRepository(db)
         await run_repo.set_result(run_id, unified_result, RunStatus.DONE)
         tree_repo = RunTreeRepository(db)
         await tree_repo.replace_for_run(run_id, tree_rows)
+        artifact_repo = ArtifactRepository(db)
+        await artifact_repo.replace_for_run(run_id, artifact_rows)
         await db.commit()
-    _log("run completed", run_id=run_id, method_id=method_id)
+    _log(
+        "run completed",
+        run_id=run_id,
+        method_id=method_id,
+        artifacts=len(artifact_rows),
+    )
 
 
 async def _persist_error(
@@ -136,6 +186,44 @@ async def _persist_staging_error(run_id: UUID, err: StagingError) -> None:
             worker_lease_until=None,
         )
     _log("run staging error", run_id=run_id, code=err.code)
+
+
+async def _ingest_failure_logs(
+    run_id: UUID, method_id: str, raw_result: dict[str, Any] | None
+) -> None:
+    """Failed-run retention: register the method's own log uploads.
+
+    The method service auto-uploads ``job.log`` to MinIO at the end of every
+    job (success or failure) and appends a manifest entry for it. So on
+    failure we just parse the same manifest the success path uses and pull out
+    the ``log`` rows. If the method crashed before writing its result we have
+    nothing to register — accept that.
+
+    Cancelled runs intentionally ingest nothing (output is incomplete).
+    """
+    if not isinstance(raw_result, dict):
+        return
+    try:
+        manifest = parse_manifest(raw_result)
+    except ManifestError:
+        return
+    try:
+        artifact_service = ArtifactService()
+        log_rows = artifact_service.ingest(
+            run_id=run_id,
+            method_id=method_id,
+            manifest_artifacts=manifest,
+            logs_only=True,
+        )
+        if not log_rows:
+            return
+        async with AsyncSessionLocal() as db:
+            artifact_repo = ArtifactRepository(db)
+            await artifact_repo.replace_for_run(run_id, log_rows)
+            await db.commit()
+        _log("failure logs ingested", run_id=run_id, logs=len(log_rows))
+    except Exception:  # noqa: BLE001 - never let log ingest mask the real error
+        traceback.print_exc()
 
 
 async def _mark_cancelled(run_id: UUID, message: str = "Run cancelled") -> None:
@@ -189,7 +277,7 @@ async def process_run(run_id: UUID, worker_id: str) -> None:
                         method_id=method_id,
                         original_storage_path=input_storage_path,
                         params=params,
-                        storage=storage,
+                        storage=_storage_backend(),
                     )
                 except StagingError as err:
                     if staged_workspace := getattr(err, "workspace", None):
@@ -285,7 +373,7 @@ async def _poll_method_job(
                     run_id, "FETCHING_RESULT", message="Fetching result", progress=95
                 )
             result = await jobs.get_job_result(method_id, method_job_id)
-            await _persist_done(run_id, method_id, result)
+            await _persist_done(run_id, method_id, method_job_id, result)
             return
 
         if method_status == "ERROR":
@@ -294,6 +382,11 @@ async def _poll_method_job(
                 fallback_message=status.message
                 or (status.error if isinstance(status.error, str) else None),
             )
+            # Retention policy: failed runs keep logs only. The method already
+            # uploaded job.log to MinIO and stamped a manifest entry for it;
+            # the status payload carries that manifest under status.error.
+            method_result = status.error if isinstance(status.error, dict) else None
+            await _ingest_failure_logs(run_id, method_id, method_result)
             await _persist_error(run_id, error_message=err_msg, result_payload=payload)
             return
 

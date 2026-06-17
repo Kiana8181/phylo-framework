@@ -3,6 +3,7 @@ import { apiBaseURL } from "@/lib/config";
 import { notify } from "@/lib/notify";
 import { getAccessToken, getRefreshToken, setTokens, clearTokens } from "@/lib/auth/storage";
 import { authApi } from "@/features/auth/api";
+import { getApiErrorMessage, isAuthRequestUrl } from "@/lib/http/errors";
 
 export const http = axios.create({
   baseURL: apiBaseURL(),
@@ -35,21 +36,14 @@ http.interceptors.response.use(
   async (err) => {
     const status = err?.response?.status;
     const config = err?.config;
-    const data = err?.response?.data as any;
-
-    const msg =
-      data?.message ??
-      (Array.isArray(data?.detail) ? data.detail[0]?.msg : data?.detail) ??
-      data?.error ??
-      err?.message ??
-      "Request failed";
+    const msg = getApiErrorMessage(err, "Request failed");
+    const isAuthEndpoint = isAuthRequestUrl(config?.url);
 
     if (status === 401 && config && !config._retry) {
       const refreshToken = getRefreshToken();
-      const isAuthEndpoint =
-        config.url?.includes("/auth/refresh") || config.url?.includes("/auth/login") || config.url?.includes("/auth/register");
+      const isRefreshEndpoint = config.url?.includes("/auth/refresh");
 
-      if (!isAuthEndpoint && refreshToken) {
+      if (!isRefreshEndpoint && !isAuthEndpoint && refreshToken) {
         if (isRefreshing) {
           return new Promise((resolve, reject) => {
             failedQueue.push({ resolve, reject });
@@ -83,7 +77,9 @@ http.interceptors.response.use(
       return Promise.reject(err);
     }
 
-    notify.error("Request failed", `${status ?? ""} ${msg}`.trim());
+    if (!isAuthEndpoint) {
+      notify.error("Request failed", msg);
+    }
     return Promise.reject(err);
   }
 );

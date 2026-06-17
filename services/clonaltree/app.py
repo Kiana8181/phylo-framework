@@ -452,7 +452,8 @@ def collect_tree_paths(out_dir: Path, run_name: str, limit_order: List[str]) -> 
     return sorted(paths, key=_key)
 
 
-def zip_artifacts(src_dir: Path, name: str) -> Tuple[Optional[str], Optional[str]]:
+def zip_artifacts(src_dir: Path, name: str) -> Tuple[Optional[Path], Optional[str]]:
+    """Build the bundle zip on disk and return (path, name) — no base64."""
     if not src_dir.exists():
         return None, None
     zip_path = src_dir.parent / f"{name}_clonaltree_outputs.zip"
@@ -461,8 +462,7 @@ def zip_artifacts(src_dir: Path, name: str) -> Tuple[Optional[str], Optional[str
             for path in src_dir.rglob("*"):
                 if path.is_file():
                     zf.write(path, arcname=path.relative_to(src_dir))
-        b64 = base64.b64encode(zip_path.read_bytes()).decode("ascii")
-        return b64, zip_path.name
+        return zip_path, zip_path.name
     except Exception:
         return None, None
 
@@ -1120,21 +1120,33 @@ async def run_handler(request: Request):
         except Exception:
             pass
 
-        artifact_b64, artifact_name = zip_artifacts(out_dir, run_name)
+        bundle_path, bundle_filename = zip_artifacts(out_dir, run_name)
         logs.append(
             {
                 "step": "artifact_packaging",
                 "cmd": "zip output directory",
-                "ok": artifact_b64 is not None,
-                "out": artifact_name or "artifact packaging failed",
+                "ok": bundle_path is not None,
+                "out": bundle_filename or "artifact packaging failed",
             }
         )
 
         try:
             logs_path.write_text(json.dumps(logs, indent=2), encoding="utf-8")
-            artifact_b64, artifact_name = zip_artifacts(out_dir, run_name)
+            bundle_path, bundle_filename = zip_artifacts(out_dir, run_name)
         except Exception:
             pass
+
+        # Build artifact_files referencing on-disk paths — no base64 anywhere.
+        artifact_files: List[Dict[str, Any]] = []
+        if bundle_path is not None and bundle_path.exists():
+            artifact_files.append({
+                "path": str(bundle_path),
+                "filename": bundle_filename or "clonaltree_outputs.zip",
+                "kind": "zip",
+                "role": "clone_bundle_zip",
+                "content_type": "application/zip",
+                "previewable": False,
+            })
 
         return ok(
             {
@@ -1153,15 +1165,16 @@ async def run_handler(request: Request):
                 "stats": stats,
                 "warnings": warnings,
                 "logs": logs,
-                "artifact_zip_b64": artifact_b64,
-                "artifact_name": artifact_name,
+                "artifact_files": artifact_files,
+                "artifact_name": bundle_filename,
             }
         )
 
     except Exception as e:
         return err(f"run error: {e}", status_code=500, logs=logs)
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+    # NOTE: do NOT rmtree(tmp) here — the artifact_files paths point into tmp
+    # and materialize_artifacts (running after this handler returns) needs to
+    # copy them. The OS cleans up /tmp when the job_runner process exits.
 
 
 if not STRICT_CONTRACT_ROUTES:

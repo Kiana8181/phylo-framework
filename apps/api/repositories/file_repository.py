@@ -6,8 +6,15 @@ from uuid import UUID
 from sqlalchemy import exists, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apps.api.database.models import File, Run, StorageType
+from apps.api.database.models import (
+    ACTIVE_RUN_STATUSES,
+    File,
+    Run,
+    StorageState,
+    StorageType,
+)
 from apps.api.repositories.base_repository import BaseRepository
+from apps.api.utils.datetime_util import utc_now
 
 
 class FileRepository(BaseRepository[File]):
@@ -26,6 +33,8 @@ class FileRepository(BaseRepository[File]):
         file_size: int,
         mime_type: Optional[str] = None,
         run_id: Optional[UUID] = None,
+        storage_bucket: Optional[str] = None,
+        checksum_sha256: Optional[str] = None,
     ) -> File:
         """Create a new file record."""
         return await self.create(
@@ -37,6 +46,8 @@ class FileRepository(BaseRepository[File]):
             storage_url=storage_url,
             file_size=file_size,
             mime_type=mime_type,
+            storage_bucket=storage_bucket,
+            checksum_sha256=checksum_sha256,
         )
 
     async def get_by_run(self, run_id: UUID) -> List[File]:
@@ -76,9 +87,15 @@ class FileRepository(BaseRepository[File]):
         return result.scalar_one_or_none()
 
     async def get_total_size_by_user(self, user_id: UUID) -> int:
-        """Total bytes used by the user across all their files."""
+        """Total bytes used by the user across their *active* (non-deleted) files.
+
+        Deleted datasets no longer occupy storage, so they are excluded from quota.
+        """
         result = await self.session.execute(
-            select(func.coalesce(func.sum(File.file_size), 0)).where(File.user_id == user_id)
+            select(func.coalesce(func.sum(File.file_size), 0)).where(
+                File.user_id == user_id,
+                File.storage_state == StorageState.ACTIVE,
+            )
         )
         return int(result.scalar() or 0)
 
@@ -97,8 +114,45 @@ class FileRepository(BaseRepository[File]):
             return bool(run_ref.scalar())
         return False
 
+    async def is_referenced_by_active_run(self, file_id: UUID) -> List[UUID]:
+        """Return the IDs of any active (PENDING/QUEUED/RUNNING) runs using this file.
+
+        Used to block dataset deletion while a run is in-flight (avoids a worker
+        failing mid-stage on a missing object).
+        """
+        result = await self.session.execute(
+            select(Run.id).where(
+                Run.input_file_id == file_id,
+                Run.status.in_(ACTIVE_RUN_STATUSES),
+            )
+        )
+        return list(result.scalars().all())
+
+    async def mark_deleted(self, file_id: UUID, deleted_by: Optional[UUID]) -> File:
+        """Soft-delete the dataset metadata row (object is hard-deleted separately).
+
+        Idempotent: safe to call on an already-deleted row.
+        """
+        now = utc_now()
+        file = await self.get_by_id(file_id)
+        if file is None:
+            raise ValueError(f"File not found: {file_id}")
+        file.storage_state = StorageState.DELETED
+        file.deleted_at = file.deleted_at or now
+        file.object_deleted_at = file.object_deleted_at or now
+        if deleted_by is not None:
+            file.deleted_by = deleted_by
+        await self.session.commit()
+        await self.session.refresh(file)
+        return file
+
     async def delete_file(self, file_id: UUID, user_id: UUID) -> Optional[str]:
-        """Delete file by ID if it belongs to the user. Returns storage_path (for storage delete) or None."""
+        """Hard-delete a file row if it belongs to the user. Returns storage_path or None.
+
+        Retained for pre-finalization/temporary-upload cleanup paths. For
+        user-facing dataset deletion use the soft-delete flow (mark_deleted)
+        which preserves historical run metadata.
+        """
         file = await self.get_by_id_and_user(file_id, user_id)
         if not file:
             return None

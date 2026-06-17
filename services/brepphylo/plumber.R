@@ -1114,24 +1114,23 @@ run_handler_impl <- function(req, res) {
     )
     plot_files <- plot_files[grepl("clone_", basename(plot_files), fixed = TRUE)]
 
-    png_data <- list()
-    pdf_data <- list()
+    # Collect figure file PATHS (no base64 round-trip). materialize_artifacts
+    # in the job runner copies these into the run's artifact dir; the API
+    # worker uploads them to object storage. The files already live on disk
+    # in out_dir — no need to load them into RAM here.
+    png_paths <- list()
+    pdf_paths <- list()
     for (cid in clone_ids) {
       prefix <- paste0("clone_", cid, ".")
       candidates <- plot_files[startsWith(basename(plot_files), prefix)]
-      png_data[[cid]] <- NULL
-      pdf_data[[cid]] <- NULL
       if (!length(candidates)) next
-      f <- candidates[[1]]
-      sz <- file.info(f)$size
-      if (is.na(sz) || sz <= 0) next
-      raw <- readBin(f, what = "raw", n = sz)
-      if (grepl("\\.png$", f, ignore.case = TRUE)) png_data[[cid]] <- jsonlite::base64_enc(raw)
-      if (grepl("\\.pdf$", f, ignore.case = TRUE)) pdf_data[[cid]] <- jsonlite::base64_enc(raw)
+      for (f in candidates) {
+        sz <- file.info(f)$size
+        if (is.na(sz) || sz <= 0) next
+        if (grepl("\\.png$", f, ignore.case = TRUE)) png_paths[[cid]] <- f
+        if (grepl("\\.pdf$", f, ignore.case = TRUE)) pdf_paths[[cid]] <- f
+      }
     }
-
-    phylogeny_png <- unname(png_data[clone_ids])
-    phylogeny_pdf <- unname(pdf_data[clone_ids])
 
     annotations <- vector("list", length(clone_ids))
     for (i in seq_along(clone_ids)) {
@@ -1269,7 +1268,10 @@ run_handler_impl <- function(req, res) {
 
     add_log("brepphylo.summarise", TRUE, sprintf("Built %d trees for %d clones.", length(trees), length(clone_ids)))
 
-    artifacts_zip_b64 <- NULL
+    # Build the artifact bundle zip on disk — no base64 anywhere. The path
+    # is then registered into artifact_files for materialize_artifacts to
+    # copy into the run's artifact dir.
+    bundle_zip_path <- NULL
     all_files <- list.files(out_dir, recursive = TRUE, full.names = TRUE)
     if (length(all_files)) {
       exclude_basenames <- unique(c(
@@ -1289,23 +1291,61 @@ run_handler_impl <- function(req, res) {
         if (length(rel_paths)) {
           utils::zip(zipfile = zip_path, files = rel_paths)
           sz <- file.info(zip_path)$size
-          if (!is.na(sz) && sz > 0) {
-            zip_raw <- readBin(zip_path, what = "raw", n = sz)
-            artifacts_zip_b64 <- jsonlite::base64_enc(zip_raw)
-          }
+          if (!is.na(sz) && sz > 0) bundle_zip_path <- zip_path
         }
       }
+    }
+
+    # Assemble artifact_files: per-clone PNG and PDF figures (one entry per
+    # file that actually exists) plus the bundle zip.
+    artifact_files <- list()
+    for (i in seq_along(clone_ids)) {
+      cid <- clone_ids[[i]]
+      p <- png_paths[[cid]]
+      if (!is.null(p) && file.exists(p)) {
+        artifact_files[[length(artifact_files) + 1L]] <- list(
+          path = p,
+          filename = sprintf("phylogeny_%d.png", i),
+          kind = "image",
+          role = "phylogeny",
+          content_type = "image/png",
+          previewable = TRUE,
+          tree_index = i - 1L
+        )
+      }
+      d <- pdf_paths[[cid]]
+      if (!is.null(d) && file.exists(d)) {
+        artifact_files[[length(artifact_files) + 1L]] <- list(
+          path = d,
+          filename = sprintf("phylogeny_%d.pdf", i),
+          kind = "other",
+          role = "phylogeny_pdf",
+          content_type = "application/pdf",
+          previewable = FALSE,
+          tree_index = i - 1L
+        )
+      }
+    }
+    if (!is.null(bundle_zip_path) && file.exists(bundle_zip_path)) {
+      artifact_files[[length(artifact_files) + 1L]] <- list(
+        path = bundle_zip_path,
+        filename = "brepphylo_artifacts.zip",
+        kind = "zip",
+        role = "clone_bundle_zip",
+        content_type = "application/zip",
+        previewable = FALSE
+      )
     }
 
     list(
       ok = TRUE,
       trees = unname(trees),
-      figures = list(phylogeny = phylogeny_png, phylogeny_pdf = phylogeny_pdf),
+      figures = NULL,
       annotations = annotations,
       clones = clones_meta,
       analysis = analysis,
       diagnostics = diagnostics,
-      artifact_zip_b64 = list(clone_bundle_zip = artifacts_zip_b64),
+      artifact_files = artifact_files,
       stats = stats,
       warnings = unname(as.list(warnings)),
       logs = logs,
