@@ -1,21 +1,23 @@
 "use client";
 
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { X } from "lucide-react";
+import { Crosshair, X } from "lucide-react";
 import { Spinner } from "@/components/ui/loading";
 import type { LineagePlot, RunTreeListItem, TreeNodeAttrs } from "@phylo/contracts";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { RunsApi } from "@/features/runs/api";
 import LineageSVG from "@/components/LineageSVG";
-import TreeSVG from "@/components/TreeSVG";
-import TreeZoomPane from "@/components/comparison/TreeZoomPane";
+import TreeZoomPane, { type TreeZoomPaneHandle } from "@/components/comparison/TreeZoomPane";
 import SequenceTraceInfoIcon from "@/components/sequence-trace/SequenceTraceInfoIcon";
+
+/** Zoom level applied when "Show me" centers on a matched node. */
+const FOCUS_SCALE = 2.5;
 
 export type CompareExpandTreeRef = {
   panelId: string;
-  title: string;
   runId: string;
   treeIndex: number;
 };
@@ -24,9 +26,10 @@ type CompareExpandDialogProps = {
   open: boolean;
   onOpenChange: (nextOpen: boolean) => void;
   trees: CompareExpandTreeRef[];
+  /** Initial search text seeded from the page when the dialog opens. */
   highlightText: string;
   displayIdField: string;
-  showLabels: boolean;
+  methodNameById: Map<string, string>;
 };
 
 type ExpandTreeTileProps = {
@@ -34,7 +37,9 @@ type ExpandTreeTileProps = {
   treeRef: CompareExpandTreeRef;
   highlightText: string;
   displayIdField: string;
-  showLabels: boolean;
+  markMatches: boolean;
+  focusSignal: number;
+  methodNameById: Map<string, string>;
 };
 
 function useRunStatus(runId: string | null, enabled: boolean) {
@@ -73,7 +78,9 @@ const ExpandTreeTile = memo(function ExpandTreeTile({
   treeRef,
   highlightText,
   displayIdField,
-  showLabels,
+  markMatches,
+  focusSignal,
+  methodNameById,
 }: ExpandTreeTileProps) {
   const { data: status, isLoading: statusLoading } = useRunStatus(treeRef.runId, open);
   const done = status?.status === "DONE";
@@ -96,38 +103,22 @@ const ExpandTreeTile = memo(function ExpandTreeTile({
     | Record<string, TreeNodeAttrs>
     | undefined;
   const newickText = payload?.original_newick ?? payload?.newick ?? "";
-  const hasLineage = tree?.hasLineagePlot ?? false;
-  const hasNewick = Boolean(newickText.trim());
-  const canRenderLineage = hasLineage && !!lineagePlot;
-  const [activeTab, setActiveTab] = useState<"lineage" | "phylogeny">("lineage");
+  const canRenderLineage = (tree?.hasLineagePlot ?? false) && !!lineagePlot;
 
-  useEffect(() => {
-    if (!canRenderLineage && hasNewick) {
-      setActiveTab("phylogeny");
-      return;
-    }
-    if (canRenderLineage && !hasNewick) {
-      setActiveTab("lineage");
-    }
-  }, [canRenderLineage, hasNewick]);
+  const methodId = status?.method_id ?? "";
+  const methodTitle = (methodId && (methodNameById.get(methodId) ?? methodId)) || "—";
 
-  const phyloAnnotations = useMemo(() => {
-    if (!nodeAttributes) return [];
-    return Object.entries(nodeAttributes).map(([label, attrs]) => ({ label, ...(attrs ?? {}) }));
-  }, [nodeAttributes]);
+  const zoomRef = useRef<TreeZoomPaneHandle>(null);
 
   return (
-    <Card className="flex h-full min-w-[500px] w-[min(92vw,680px)] shrink-0 flex-col">
+    <Card className="flex w-[min(92vw,680px)] shrink-0 flex-col">
       <CardHeader className="border-b pb-3">
-        <CardTitle className="text-base flex items-center gap-1.5">
-          {treeRef.title}
-          {treeRef.title.startsWith("Sequence Trace") && <SequenceTraceInfoIcon />}
-        </CardTitle>
+        <CardTitle className="text-base">{methodTitle}</CardTitle>
         <p className="text-xs text-muted-foreground">
-          {status?.method_id ?? "—"} · {status?.status ?? "—"} · {treeStatusLabel(tree, resolvedTreeIndex)}
+          {treeStatusLabel(tree, resolvedTreeIndex)} · {status?.status ?? "—"}
         </p>
       </CardHeader>
-      <CardContent className="flex flex-1 min-h-0 flex-col gap-3 pt-4">
+      <CardContent className="flex flex-col gap-3 pt-4">
         {(statusLoading || treesLoading || payloadLoading) && (
           <div className="flex items-center gap-2 rounded border p-4 text-sm text-muted-foreground">
             <Spinner className="shrink-0" />
@@ -145,67 +136,28 @@ const ExpandTreeTile = memo(function ExpandTreeTile({
           <p className="rounded border p-3 text-sm text-muted-foreground">No trees are available for this run.</p>
         )}
 
-        {!payloadLoading && (canRenderLineage || hasNewick) && (
-          <>
-            <div className="flex flex-wrap items-center gap-2 border-b pb-2">
-              {canRenderLineage && (
-                <button
-                  type="button"
-                  className={`rounded border px-2 py-1 text-xs ${
-                    activeTab === "lineage" ? "bg-muted font-medium" : ""
-                  }`}
-                  onClick={() => setActiveTab("lineage")}
-                >
-                  Lineage
-                </button>
-              )}
-              {hasNewick && (
-                <button
-                  type="button"
-                  className={`rounded border px-2 py-1 text-xs ${
-                    activeTab === "phylogeny" ? "bg-muted font-medium" : ""
-                  }`}
-                  onClick={() => setActiveTab("phylogeny")}
-                >
-                  Phylogeny
-                </button>
-              )}
-            </div>
-
-            <TreeZoomPane
-              className="flex-1 min-h-[520px]"
-              fitKey={`${treeRef.panelId}:${treeRef.runId}:${treeId ?? "pending"}:${activeTab}`}
-            >
-              <div className="min-h-[460px] rounded-md bg-background p-2">
-                {activeTab === "lineage" && canRenderLineage && lineagePlot && (
-                  <LineageSVG
-                    lineagePlot={lineagePlot}
-                    nodeAttributes={nodeAttributes}
-                    displayIdField={displayIdField || undefined}
-                    showLabels={showLabels}
-                    filename={`comparison-expand-${treeRef.runId}-${treeId}`}
-                    newickText={newickText || undefined}
-                    highlightText={highlightText || undefined}
-                  />
-                )}
-                {activeTab === "phylogeny" && hasNewick && (
-                  <TreeSVG
-                    newick={newickText}
-                    annotations={phyloAnnotations}
-                    showLabels={showLabels}
-                    displayIdField={displayIdField || undefined}
-                    highlightText={highlightText || undefined}
-                    filename={`comparison-expand-${treeRef.runId}-${treeId}`}
-                  />
-                )}
-              </div>
+        {!payloadLoading && canRenderLineage && lineagePlot && (
+          <div className="h-[70vh]">
+            <TreeZoomPane ref={zoomRef} className="h-full" fitKey={`${treeRef.panelId}:${treeId}`}>
+              <LineageSVG
+                lineagePlot={lineagePlot}
+                nodeAttributes={nodeAttributes}
+                displayIdField={displayIdField || undefined}
+                filename={`comparison-expand-${treeRef.runId}-${treeId}`}
+                newickText={newickText || undefined}
+                highlightText={highlightText || undefined}
+                markMatches={markMatches}
+                focusSignal={focusSignal}
+                fitToParent
+                onRequestFocus={(x, y) => zoomRef.current?.focusOnPoint(x, y, FOCUS_SCALE)}
+              />
             </TreeZoomPane>
-          </>
+          </div>
         )}
 
-        {!payloadLoading && done && tree && !canRenderLineage && !hasNewick && (
+        {!payloadLoading && done && tree && !canRenderLineage && (
           <p className="rounded border p-3 text-sm text-muted-foreground">
-            No lineage plot or Newick is available for this tree.
+            No lineage plot is available for this tree.
           </p>
         )}
       </CardContent>
@@ -219,15 +171,24 @@ export default function CompareExpandDialog({
   trees,
   highlightText,
   displayIdField,
-  showLabels,
+  methodNameById,
 }: CompareExpandDialogProps) {
+  const [query, setQuery] = useState(highlightText);
+  const [mark, setMark] = useState(false);
+  const [focus, setFocus] = useState(0);
+
+  useEffect(() => {
+    if (!open) return;
+    // Seed the in-dialog search from the page's current text each time it opens.
+    setQuery(highlightText);
+    setMark(false);
+  }, [open, highlightText]);
+
   useEffect(() => {
     if (!open) return;
     const prevOverflow = document.body.style.overflow;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        onOpenChange(false);
-      }
+      if (event.key === "Escape") onOpenChange(false);
     };
     document.body.style.overflow = "hidden";
     document.addEventListener("keydown", onKeyDown);
@@ -238,6 +199,12 @@ export default function CompareExpandDialog({
   }, [onOpenChange, open]);
 
   if (!open) return null;
+
+  const showMe = () => {
+    if (!query.trim()) return;
+    setMark(true);
+    setFocus((n) => n + 1);
+  };
 
   return (
     <div
@@ -250,40 +217,65 @@ export default function CompareExpandDialog({
         className="mx-auto flex h-full w-full max-w-[99vw] flex-col rounded-lg border bg-background shadow-xl"
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <div className="flex items-center justify-between border-b px-4 py-3">
-          <div className="space-y-1">
-            <div className="flex items-center gap-1.5">
-              <h3 className="text-base font-semibold">Expanded Sequence Trace gallery</h3>
-              <SequenceTraceInfoIcon />
-            </div>
-            <p className="text-xs text-muted-foreground">
-              {trees.length} tree{trees.length === 1 ? "" : "s"} shown from the current panel.
-            </p>
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
+          <div className="flex items-center gap-1.5">
+            <h3 className="text-base font-semibold">Expanded Sequence Trace gallery</h3>
+            <SequenceTraceInfoIcon />
           </div>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            onClick={() => onOpenChange(false)}
-            aria-label="Close expanded Sequence Trace"
-          >
-            <X className="h-4 w-4" />
-          </Button>
+          <div className="flex flex-1 flex-wrap items-center justify-end gap-2">
+            <Input
+              placeholder="sequence_id or label…"
+              value={query}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                setMark(false);
+              }}
+              onKeyDown={(e) => e.key === "Enter" && showMe()}
+              className="max-w-xs"
+            />
+            <Button type="button" onClick={showMe} disabled={!query.trim()} className="gap-1.5">
+              <Crosshair className="h-4 w-4" />
+              Show me
+            </Button>
+            {(query || mark) && (
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => {
+                  setQuery("");
+                  setMark(false);
+                }}
+              >
+                Clear
+              </Button>
+            )}
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={() => onOpenChange(false)}
+              aria-label="Close expanded Sequence Trace"
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-auto p-4">
           {trees.length === 0 ? (
             <p className="text-sm text-muted-foreground">No trees are currently selected in this Sequence Trace panel.</p>
           ) : (
-            <div className="flex h-full min-h-0 items-stretch gap-4 overflow-x-auto pb-2">
+            <div className="flex items-start gap-4 overflow-x-auto pb-2">
               {trees.map((treeRef) => (
                 <ExpandTreeTile
                   key={treeRef.panelId}
                   open={open}
                   treeRef={treeRef}
-                  highlightText={highlightText}
+                  highlightText={query}
                   displayIdField={displayIdField}
-                  showLabels={showLabels}
+                  markMatches={mark}
+                  focusSignal={focus}
+                  methodNameById={methodNameById}
                 />
               ))}
             </div>

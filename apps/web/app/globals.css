@@ -138,15 +138,28 @@
     transform: translateX(100%);
   }
 }
+@keyframes phylo-bounce {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
 .phylo-marching {
   animation: phylo-march 0.7s linear infinite;
 }
 .phylo-shimmer {
   animation: phylo-shimmer 1.4s ease-in-out infinite;
 }
+.phylo-bounce {
+  animation: phylo-bounce 0.9s ease-in-out infinite;
+}
 @media (prefers-reduced-motion: reduce) {
   .phylo-marching,
-  .phylo-shimmer {
+  .phylo-shimmer,
+  .phylo-bounce {
     animation: none;
   }
 }
