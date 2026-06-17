@@ -1,4 +1,15 @@
-export type MethodInfo = { id: string; name: string; version: string };
+export type MethodInfo = {
+  id: string;
+  name: string;
+  version: string;
+  tagline?: string;
+  category?: string;
+  summary?: string;
+  capabilities?: string[];
+  inputFormats?: string[];
+  externalDocUrl?: string;
+  externalDocLabel?: string;
+};
 
 export type MethodSpec = {
   id: string;
@@ -64,6 +75,7 @@ export type RunStatus = {
   params?: RunParams;
   dataset_name?: string | null;
   dataset_files?: string[];
+  input_file_id?: string | null;
   started_at?: string | null;
   finished_at?: string | null;
   error?: {
@@ -88,21 +100,41 @@ export type UploadedFileResponse = {
   storage_url?: string | null;
 };
 
-export type UploadSessionStatus =
-  | "INITIATED"
-  | "UPLOADING"
-  | "COMPLETED"
-  | "CANCELLED"
-  | "ERROR";
+export type UploadSessionStatus = "INITIATED" | "UPLOADING" | "COMPLETED" | "CANCELLED" | "ERROR";
 
-export type FigurePayload = {
-  phylogeny?: string[];
-  [key: string]: Array<string | null> | undefined;
-} | null;
+export type ArtifactKind = "image" | "newick" | "table" | "fasta" | "json" | "log" | "zip" | "other";
 
-export type TreeServiceImage = {
-  mime: string;
-  base64: string;
+/** A generated run output stored in object storage. Binaries are fetched
+ *  lazily via download_url / preview_url — never embedded as base64. */
+export type RunArtifact = {
+  id: string;
+  filename: string;
+  content_type?: string | null;
+  size_bytes: number;
+  checksum_sha256?: string | null;
+  artifact_kind: ArtifactKind;
+  artifact_role?: string | null;
+  is_previewable: boolean;
+  tree_id?: string | null;
+  download_url: string;
+  preview_url?: string | null;
+};
+
+export type RunArtifactsResponse = {
+  artifacts: RunArtifact[];
+};
+
+/** Lightweight dataset metadata attached to a run (history-safe; no binary). */
+export type RunDatasetDescriptor = {
+  id: string;
+  original_filename: string;
+  file_size?: number | null;
+  checksum_sha256?: string | null;
+  mime_type?: string | null;
+  uploaded_at?: string | null;
+  storage_state: "active" | "deleted";
+  is_deleted: boolean;
+  deleted_at?: string | null;
 };
 
 export type TreeNodeAttrs = {
@@ -146,10 +178,8 @@ export type RunTree = {
   original_newick?: string;
   clone_id?: string;
   has_lineage_plot: boolean;
-  has_service_image: boolean;
-  visualizations?: {
-    service_image?: TreeServiceImage;
-  };
+  /** Artifact id of this tree's method-rendered image (served via preview_url). */
+  image_artifact_id?: string | null;
   node_attributes?: Record<string, TreeNodeAttrs>;
   label_to_sequence_id?: Record<string, string>;
   lineage_plot?: LineagePlot;
@@ -174,7 +204,8 @@ export type RunTreePayload = {
   node_attributes?: Record<string, TreeNodeAttrs> | null;
   lineage_plot?: LineagePlot | null;
   label_to_sequence_id?: Record<string, string> | null;
-  service_image?: TreeServiceImage | null;
+  /** Artifact id of this tree's method-rendered image (served via preview_url). */
+  image_artifact_id?: string | null;
 };
 
 export type RunLogEntry = {
@@ -572,14 +603,10 @@ export type RunResult = {
   annotations?: Array<Array<Record<string, unknown>> | null>;
   analysis?: BrepPhyloAnalysis;
   diagnostics?: BrepPhyloDiagnostics;
-  figures?: FigurePayload;
   tables?: RunTables;
   provenance?: RunProvenance;
   warnings?: RunWarning[];
-  render?: string | null;
   logs?: RunLogEntry[];
-  artifact_zip_b64?: string | BrepPhyloArtifactZip | null;
-  artifact_name?: string;
   error?: string | null;
   trees_detail?: DowserTreeDetail[];
   discrete_trait_analysis?: DowserDtaResult;
@@ -588,13 +615,15 @@ export type RunResult = {
   chain_qc?: DowserChainQc;
   input_qc?: DowserInputQc;
   data_provenance?: Record<string, unknown>;
-  artifacts?: DowserArtifact[];
 } & {
   run_id?: string;
   method_id?: string;
   params?: RunParams;
   dataset_name?: string | null;
   dataset_files?: string[];
+  input_file_id?: string | null;
+  dataset?: RunDatasetDescriptor | null;
+  artifact_count?: number;
   started_at?: string | null;
   finished_at?: string | null;
 };

@@ -2,15 +2,14 @@
 
 import Link from "next/link";
 import { useTheme } from "next-themes";
-import { Moon, Sun, LogOut, User } from "lucide-react";
+import { Moon, Sun } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { useAuth } from "@/features/auth/context";
+import { UserAvatarMenu } from "@/components/layout/UserAvatarMenu";
 
 export default function Navbar() {
   const { theme, setTheme, resolvedTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
-  const { user, isAuthenticated, logout } = useAuth();
 
   useEffect(() => {
     setMounted(true);
@@ -28,28 +27,29 @@ export default function Navbar() {
           >
             Phylo Runner
           </Link>
-          <nav className="flex items-center gap-2 sm:gap-4 shrink-0">
-            <Link
-              href="/"
-              className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors whitespace-nowrap"
-            >
-              Home
-            </Link>
+          <nav className="hidden sm:flex items-center gap-2 sm:gap-4 shrink-0">
             <Link
               href="/dashboard"
               className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors whitespace-nowrap"
             >
               Dashboard
             </Link>
+            <Link
+              href="/documents"
+              className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors whitespace-nowrap"
+            >
+              Documentation
+            </Link>
           </nav>
         </div>
-        <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+
+        <div className="flex items-center gap-2 shrink-0">
           <Button
             variant="ghost"
             size="icon"
             onClick={() => setTheme(isDark ? "light" : "dark")}
             aria-label="Toggle theme"
-            className="cursor-pointer"
+            className="cursor-pointer rounded-full"
           >
             {mounted ? (
               isDark ? (
@@ -61,38 +61,7 @@ export default function Navbar() {
               <span className="h-5 w-5" />
             )}
           </Button>
-          {isAuthenticated && user ? (
-            <>
-              <span className="flex items-center gap-2 text-sm text-muted-foreground px-2 select-none">
-                <User className="h-4 w-4 shrink-0" />
-                <span className="truncate max-w-[8rem] sm:max-w-[12rem]">
-                  {user.username || user.email}
-                </span>
-              </span>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-sm gap-1"
-                onClick={() => logout()}
-              >
-                <LogOut className="h-4 w-4" />
-                Log out
-              </Button>
-            </>
-          ) : (
-            <>
-              <Link href="/auth">
-                <Button variant="ghost" size="sm" className="text-sm">
-                  Log in
-                </Button>
-              </Link>
-              <Link href="/auth?mode=signup">
-                <Button size="sm" className="text-sm">
-                  Sign up
-                </Button>
-              </Link>
-            </>
-          )}
+          <UserAvatarMenu />
         </div>
       </div>
     </header>

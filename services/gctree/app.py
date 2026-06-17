@@ -883,9 +883,32 @@ def extract_newicks_from_outtree(outtree_path: Path, limit: int = 10) -> List[st
     return out
 
 
-def zip_artifacts(outdir: Path, outbase: str) -> bytes:
-    buf = io.BytesIO()
-    patterns = [
+def zip_artifacts_to_path(outdir: Path, outbase: str, dest: Path) -> Optional[Path]:
+    """Build the gctree artifact zip directly on disk — no base64 round-trip.
+
+    Returns the destination path on success, or None if no files matched.
+    """
+    patterns = _gctree_zip_patterns(outbase)
+    written = 0
+    try:
+        with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as z:
+            added = set()
+            for pat in patterns:
+                for p in outdir.glob(pat):
+                    if p.is_file() and p.name not in added:
+                        try:
+                            z.write(p, arcname=p.name)
+                            added.add(p.name)
+                            written += 1
+                        except Exception:
+                            pass
+    except Exception:
+        return None
+    return dest if written > 0 else None
+
+
+def _gctree_zip_patterns(outbase: str) -> List[str]:
+    return [
         "outfile",
         "outtree",
         "dnapars.log",
@@ -915,17 +938,6 @@ def zip_artifacts(outdir: Path, outbase: str) -> bytes:
         "*.phylip",
         "*.cfg",
     ]
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        added = set()
-        for pat in patterns:
-            for p in outdir.glob(pat):
-                if p.is_file() and p.name not in added:
-                    try:
-                        z.write(p, arcname=p.name)
-                        added.add(p.name)
-                    except Exception:
-                        pass
-    return buf.getvalue()
 
 
 def _tree_rank_from_figure_name(name: str) -> Optional[int]:
@@ -943,9 +955,15 @@ def _is_render_dependency_failure(log_output: str) -> bool:
     return RENDER_ERROR_PYQT_QTSVG in txt or RENDER_ERROR_ETE3_NODESTYLE in txt
 
 
-def collect_figures(outdir: Path) -> Dict[str, List[str]]:
-    figs: Dict[str, List[str]] = {}
-    phylogeny_ranked: List[Tuple[int, str]] = []
+def collect_figure_files(outdir: Path) -> List[Dict[str, Any]]:
+    """Collect figure files as artifact_files descriptors (paths, no base64).
+
+    Returns a list of {path, filename, kind, role, content_type, previewable,
+    [tree_index]} dicts. materialize_artifacts copies each file into the run's
+    artifact dir; no file is ever loaded into RAM here.
+    """
+    descriptors: List[Dict[str, Any]] = []
+    phylogeny_ranked: List[Tuple[int, Dict[str, Any]]] = []
     mime_by_ext = {
         "svg": "image/svg+xml",
         "png": "image/png",
@@ -959,35 +977,53 @@ def collect_figures(outdir: Path) -> Dict[str, List[str]]:
         if ext not in mime_by_ext:
             continue
 
-        try:
-            b64 = base64.b64encode(p.read_bytes()).decode("ascii")
-        except Exception:
-            continue
-
         name = p.name
         name_lower = name.lower()
+        mime = mime_by_ext[ext]
+        kind = "image" if ext in {"svg", "png"} else "other"
+        # PNG/SVG previewable in browser; PDF is not (download-only).
+        previewable = ext in {"svg", "png"}
+
         tree_rank = _tree_rank_from_figure_name(name)
         if tree_rank is not None:
-            mime = mime_by_ext[ext]
-            phylogeny_ranked.append((tree_rank, f"data:{mime};base64,{b64}"))
+            phylogeny_ranked.append((tree_rank, {
+                "path": str(p),
+                "filename": name,
+                "kind": kind,
+                "role": "phylogeny",
+                "content_type": mime,
+                "previewable": previewable,
+            }))
             continue
 
         if "abundance_rank" in name_lower:
-            key = "abundance_rank"
+            role = "abundance_rank"
         elif ".tree_stats." in name_lower or "tree_stats" in name_lower or "pairplot" in name_lower:
-            key = "tree_stats"
+            role = "tree_stats"
         elif INFERENCE_AUX_IMAGE_RE.match(name):
-            key = "method_charts"
+            role = "method_charts"
         else:
-            key = "other_outputs"
+            role = "other_outputs"
 
-        mime = mime_by_ext[ext]
-        figs.setdefault(key, []).append(f"data:{mime};base64,{b64}")
+        descriptors.append({
+            "path": str(p),
+            "filename": name,
+            "kind": kind,
+            "role": role,
+            "content_type": mime,
+            "previewable": previewable,
+        })
 
-    if phylogeny_ranked:
-        figs["phylogeny"] = [data for _, data in sorted(phylogeny_ranked, key=lambda x: x[0])]
-
-    return figs
+    # phylogeny entries first (in rank order), so the carousel sees tree #1 at index 0.
+    phylogeny_sorted = sorted(phylogeny_ranked, key=lambda x: x[0])
+    out: List[Dict[str, Any]] = []
+    for tree_idx, desc in enumerate(phylogeny_sorted):
+        # desc[1] is the descriptor dict; attach tree_index.
+        d = dict(desc[1])
+        d["tree_index"] = tree_idx
+        out.append(d)
+    out.extend(descriptors)
+    return out
 
 
 def parse_abundances_csv(path: Path) -> Dict[str, float]:
@@ -1100,7 +1136,7 @@ def _base_payload(
     *,
     ok: bool,
     trees: List[str],
-    figures: Optional[Dict[str, List[str]]],
+    figure_files: Optional[List[Dict[str, Any]]],
     logs: List[dict],
     tmp: Path,
     outbase: str,
@@ -1113,13 +1149,33 @@ def _base_payload(
     status_code: int = 200,
     response_idmap_path: Optional[Path] = None,
 ) -> JSONResponse:
-    artifacts_zip = zip_artifacts(tmp, outbase)
+    # Build the artifact zip directly on disk and reference it by path —
+    # no base64 round-trip. materialize_artifacts copies it into the run
+    # artifact dir and the API worker uploads it to object storage.
+    bundle_zip = zip_artifacts_to_path(tmp, outbase, tmp / "gctree_run_artifacts.zip")
+
     node_abundances = parse_abundances_csv(abund_csv)
     label_to_sequence_id = parse_idmap(response_idmap_path or idmap_txt)
+
+    artifact_files: List[Dict[str, Any]] = list(figure_files or [])
+    if bundle_zip is not None and bundle_zip.exists():
+        artifact_files.append({
+            "path": str(bundle_zip),
+            "filename": "gctree_run_artifacts.zip",
+            "kind": "zip",
+            "role": "clone_bundle_zip",
+            "content_type": "application/zip",
+            "previewable": False,
+        })
+
+    has_phylogeny = any(
+        f.get("role") == "phylogeny" for f in artifact_files
+    )
+
     payload: Dict[str, Any] = {
         "ok": ok,
         "trees": trees,
-        "figures": figures or None,
+        "figures": None,
         "annotations": [],
         "clones": {"clone_id": [], "seqs": []},
         "node_abundances": node_abundances or None,
@@ -1128,9 +1184,9 @@ def _base_payload(
         "logs": logs,
         "warnings": warnings,
         "render_meta": render_meta,
-        "artifact_zip_b64": base64.b64encode(artifacts_zip).decode("ascii"),
+        "artifact_files": artifact_files,
         "artifact_name": "gctree_run_artifacts.zip",
-        "render": "phylogeny" if (figures and figures.get("phylogeny")) else None,
+        "render": "phylogeny" if has_phylogeny else None,
         "tree_model": "phylogeny",
     }
     if error:
@@ -1160,7 +1216,7 @@ def early_fail(
     return _base_payload(
         ok=False,
         trees=[],
-        figures=collect_figures(tmp),
+        figure_files=collect_figure_files(tmp),
         logs=logs,
         tmp=tmp,
         outbase=outbase,
@@ -1364,9 +1420,8 @@ def render_colored_phylogeny_from_pickle(
         meta["error"] = str(e)
         return None, meta, extra_warnings
 
-    svg_bytes = colored_svg_path.read_bytes()
-    b64 = base64.b64encode(svg_bytes).decode("ascii")
-    data_url = f"data:image/svg+xml;base64,{b64}"
+    # Return the colored-SVG path (not base64). The caller adds it to
+    # artifact_files; no RAM round-trip.
     logs.append(
         {
             "step": "coloring_render",
@@ -1374,7 +1429,7 @@ def render_colored_phylogeny_from_pickle(
             "out": f"Colored phylogeny feature={feature} scale={effective_scale}.",
         }
     )
-    return data_url, meta, extra_warnings
+    return str(colored_svg_path), meta, extra_warnings
 
 
 def append_infer_options(
@@ -2263,7 +2318,7 @@ async def run_handler(request: Request):
                 }
             )
 
-        figures = collect_figures(tmp)
+        figures = collect_figure_files(tmp)
 
         ok_final = infer_ok
         err_msg: Optional[str] = None
@@ -2279,7 +2334,7 @@ async def run_handler(request: Request):
             )
 
         if infer_ok and apply_coloring:
-            colored_url, cmeta, coloring_warn = render_colored_phylogeny_from_pickle(
+            colored_path, cmeta, coloring_warn = render_colored_phylogeny_from_pickle(
                 tmp=tmp,
                 outbase=outbase_safe,
                 color_mode=color_mode,
@@ -2287,9 +2342,31 @@ async def run_handler(request: Request):
             )
             warnings.extend(coloring_warn)
             render_meta["coloring"] = cmeta
-            if colored_url:
-                figures.setdefault("phylogeny", [])
-                figures["phylogeny"].insert(0, colored_url)
+            if colored_path:
+                # Insert the colored SVG at the front of the phylogeny list and
+                # renumber tree_index. Other figures keep their existing roles.
+                p = Path(colored_path)
+                if p.exists():
+                    new_first = {
+                        "path": str(p),
+                        "filename": p.name,
+                        "kind": "image",
+                        "role": "phylogeny",
+                        "content_type": "image/svg+xml",
+                        "previewable": True,
+                        "tree_index": 0,
+                    }
+                    # Shift existing phylogeny entries' tree_index by 1.
+                    shifted: List[Dict[str, Any]] = []
+                    others: List[Dict[str, Any]] = []
+                    for f in figures:
+                        if f.get("role") == "phylogeny":
+                            g = dict(f)
+                            g["tree_index"] = int(g.get("tree_index", 0)) + 1
+                            shifted.append(g)
+                        else:
+                            others.append(f)
+                    figures = [new_first, *shifted, *others]
             elif cmeta.get("enabled"):
                 warnings.append(
                     {
@@ -2421,7 +2498,7 @@ async def run_handler(request: Request):
         resp = _base_payload(
             ok=ok_final,
             trees=trees,
-            figures=figures,
+            figure_files=figures,
             logs=logs,
             tmp=tmp,
             outbase=outbase_safe,
@@ -2437,11 +2514,12 @@ async def run_handler(request: Request):
         return resp
 
     finally:
-        keep = os.getenv("KEEP_TMP") == "1"
-        if keep:
+        # NOTE: do NOT rmtree(tmp) here — the artifact_files paths point into
+        # tmp and materialize_artifacts (in job_runner.py) needs to upload them
+        # to MinIO after this handler returns. The OS cleans up /tmp when the
+        # method process exits. Set KEEP_TMP=1 to log the location for debugging.
+        if os.getenv("KEEP_TMP") == "1":
             print(f"[gctree-bridge] keeping temp dir at: {tmp}")
-        else:
-            shutil.rmtree(tmp, ignore_errors=True)
 
 
 if not STRICT_CONTRACT_ROUTES:

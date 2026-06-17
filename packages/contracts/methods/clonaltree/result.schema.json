@@ -17,12 +17,19 @@
     "figures": {
       "description": "Optional rendered figures per tree (e.g., PNGs or SVGs).",
       "anyOf": [
-        { "type": "null" },
+        {
+          "type": "null"
+        },
         {
           "type": "object",
           "additionalProperties": {
             "type": "array",
-            "items": { "type": ["string", "null"] }
+            "items": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
           }
         }
       ]
@@ -32,7 +39,9 @@
       "type": "array",
       "items": {
         "anyOf": [
-          { "type": "null" },
+          {
+            "type": "null"
+          },
           {
             "type": "array",
             "items": {
@@ -48,23 +57,31 @@
       "type": "array",
       "items": {
         "type": "object",
-        "additionalProperties": { "type": "number" }
+        "additionalProperties": {
+          "type": "number"
+        }
       }
     },
     "label_to_sequence_id": {
       "description": "Optional per-tree mapping from tree label to source sequence identifier.",
       "anyOf": [
-        { "type": "null" },
+        {
+          "type": "null"
+        },
         {
           "type": "array",
           "items": {
             "type": "object",
-            "additionalProperties": { "type": "string" }
+            "additionalProperties": {
+              "type": "string"
+            }
           }
         },
         {
           "type": "object",
-          "additionalProperties": { "type": "string" }
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       ]
     },
@@ -72,9 +89,24 @@
       "type": "object",
       "description": "Clone summaries aligned 1:1 with trees (same order and count).",
       "properties": {
-        "clone_id": { "type": "array", "items": { "type": "string" } },
-        "abundance": { "type": "array", "items": { "type": "number" } },
-        "seqs": { "type": "array", "items": { "type": "integer" } }
+        "clone_id": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "abundance": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        },
+        "seqs": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        }
       },
       "additionalProperties": true
     },
@@ -82,9 +114,24 @@
       "type": "object",
       "description": "Optional full clone catalog from repertoire_two_levels_info.tsv.",
       "properties": {
-        "clone_id": { "type": "array", "items": { "type": "string" } },
-        "abundance": { "type": "array", "items": { "type": "number" } },
-        "seqs": { "type": "array", "items": { "type": "integer" } }
+        "clone_id": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "abundance": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        },
+        "seqs": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        }
       },
       "additionalProperties": true
     },
@@ -95,9 +142,18 @@
         "repertoire_two_levels_info": {
           "type": "object",
           "properties": {
-            "filename": { "type": "string" },
-            "format": { "type": "string" },
-            "columns": { "type": "array", "items": { "type": "string" } },
+            "filename": {
+              "type": "string"
+            },
+            "format": {
+              "type": "string"
+            },
+            "columns": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
             "rows": {
               "type": "array",
               "items": {
@@ -105,8 +161,12 @@
                 "additionalProperties": true
               }
             },
-            "total_rows": { "type": "integer" },
-            "truncated": { "type": "boolean" }
+            "total_rows": {
+              "type": "integer"
+            },
+            "truncated": {
+              "type": "boolean"
+            }
           },
           "additionalProperties": true
         }
@@ -122,30 +182,63 @@
       "type": "object",
       "description": "Run-level metadata and counters.",
       "properties": {
-        "method": { "type": "string" },
-        "clone_threshold": { "type": "number" },
-        "abundance_threshold": { "type": "integer" },
-        "top_clones": { "type": "integer" },
+        "method": {
+          "type": "string"
+        },
+        "clone_threshold": {
+          "type": "number"
+        },
+        "abundance_threshold": {
+          "type": "integer"
+        },
+        "top_clones": {
+          "type": "integer"
+        },
         "clonotype_limits": {
           "type": "array",
-          "items": { "type": ["integer", "string"] }
+          "items": {
+            "type": [
+              "integer",
+              "string"
+            ]
+          }
         },
-        "use_refinement": { "type": "boolean" },
-        "use_abundance": { "type": "boolean" },
-        "revision": { "type": "boolean" },
-        "n_clones": { "type": "integer" },
-        "n_trees": { "type": "integer" },
-        "total_seqs": { "type": "integer" },
-        "input_basename": { "type": "string" },
-        "clonotype_method": { "type": "string" },
-        "clonotype_similarity_threshold": { "type": "number" }
+        "use_refinement": {
+          "type": "boolean"
+        },
+        "use_abundance": {
+          "type": "boolean"
+        },
+        "revision": {
+          "type": "boolean"
+        },
+        "n_clones": {
+          "type": "integer"
+        },
+        "n_trees": {
+          "type": "integer"
+        },
+        "total_seqs": {
+          "type": "integer"
+        },
+        "input_basename": {
+          "type": "string"
+        },
+        "clonotype_method": {
+          "type": "string"
+        },
+        "clonotype_similarity_threshold": {
+          "type": "number"
+        }
       },
       "additionalProperties": true
     },
     "warnings": {
       "type": "array",
       "description": "Non-fatal warnings raised during the run.",
-      "items": { "type": "string" }
+      "items": {
+        "type": "string"
+      }
     },
     "logs": {
       "type": "array",
@@ -153,27 +246,105 @@
       "items": {
         "type": "object",
         "properties": {
-          "step": { "type": "string" },
-          "ok": { "type": "boolean" },
-          "cmd": { "type": "string" },
-          "out": { "type": "string" }
+          "step": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "cmd": {
+            "type": "string"
+          },
+          "out": {
+            "type": "string"
+          }
         },
         "additionalProperties": true
       }
     },
     "artifact_zip_b64": {
-      "description": "Base64-encoded ZIP archive of run artifacts.",
-      "anyOf": [{ "type": "string" }, { "type": "null" }]
+      "description": "Deprecated. Legacy base64-encoded ZIP. New services emit artifact_files (paths).",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "artifact_files": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "description": "List of artifact file descriptors uploaded directly to object storage by the method service. Each entry carries the object key in the artifact bucket plus content metadata for the API worker to register.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "object_key": {
+            "type": "string",
+            "description": "Object key inside the artifact bucket (e.g. artifacts/<run_id>/<job_id>/<filename>)."
+          },
+          "filename": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "content_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "previewable": {
+            "type": "boolean"
+          },
+          "tree_index": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "checksum_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      }
     },
     "artifact_name": {
-      "type": ["string", "null"],
-      "description": "Suggested filename for the artifact_zip_b64 payload."
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Suggested filename for the bundle ZIP."
     },
     "error": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "Error message when ok = false."
     }
   },
-  "required": ["ok"],
-  "additionalProperties": false
+  "required": [
+    "ok"
+  ],
+  "additionalProperties": true
 }

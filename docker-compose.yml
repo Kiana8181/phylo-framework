@@ -5,6 +5,18 @@ x-api-common-env: &api_common_env
   HOST_RUNTIME_SHARED_ROOT: ${HOST_RUNTIME_SHARED_ROOT:-/runtime/storage}
   STORAGE_LOCAL_PATH: ${HOST_RUNTIME_SHARED_ROOT:-/runtime/storage}
   METHOD_SERVICE_FILE_PREFIX: ${METHOD_SERVICE_FILE_PREFIX:-/runtime/storage}
+  # Object storage (self-hosted MinIO; S3-compatible)
+  STORAGE_BACKEND: ${STORAGE_BACKEND:-minio}
+  # Use the in-cluster endpoint inside containers; the host-side .env value of
+  # S3_ENDPOINT_URL (localhost) is only for host-run scripts/dev.
+  S3_ENDPOINT_URL: ${S3_ENDPOINT_URL_DOCKER:-http://minio:9000}
+  S3_REGION: ${S3_REGION:-us-east-1}
+  S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-${MINIO_ROOT_USER:-phylo_minio}}
+  S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-${MINIO_ROOT_PASSWORD:-phylo_minio_secret}}
+  S3_BUCKET_DATASETS: ${S3_BUCKET_DATASETS:-phylo-datasets}
+  S3_BUCKET_ARTIFACTS: ${S3_BUCKET_ARTIFACTS:-phylo-artifacts}
+  S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
+  PUBLIC_API_BASE_URL: ${PUBLIC_API_BASE_URL:-http://localhost:8000}
   POSTGRES_HOST: postgres
   POSTGRES_PORT: "5432"
   DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-phylo_user}:${POSTGRES_PASSWORD:-phylo_pass}@postgres:5432/${POSTGRES_DB:-phylo_db}
@@ -18,8 +30,20 @@ x-method-common-env: &method_common_env
   STRICT_CONTRACT_ROUTES: ${STRICT_CONTRACT_ROUTES:-true}
   RUNS_DIR: ${METHOD_SERVICE_FILE_PREFIX:-/runtime/storage}
   METHOD_SERVICE_FILE_PREFIX: ${METHOD_SERVICE_FILE_PREFIX:-/runtime/storage}
-  # Writable directory for per-job state/result/error files (async /jobs).
+  # Writable directory for per-job state files (status.json/request.json/job.log)
+  # internal to each method container. Not shared with worker — methods upload
+  # final artifact files directly to MinIO instead.
   METHOD_JOBS_DIR: ${METHOD_JOBS_DIR:-/runtime/method-jobs}
+  # Object storage: methods upload artifact files (PNG/PDF/ZIP/log) directly to
+  # the artifact bucket using a scoped PutObject-only user. No shared volume
+  # with the worker is needed for artifacts.
+  STORAGE_BACKEND: ${STORAGE_BACKEND:-minio}
+  S3_ENDPOINT_URL: ${S3_ENDPOINT_URL_DOCKER:-http://minio:9000}
+  S3_REGION: ${S3_REGION:-us-east-1}
+  S3_ACCESS_KEY_ID: ${MINIO_METHODS_USER:-phylo_methods}
+  S3_SECRET_ACCESS_KEY: ${MINIO_METHODS_PASSWORD:-phylo_methods_secret}
+  S3_BUCKET_ARTIFACTS: ${S3_BUCKET_ARTIFACTS:-phylo-artifacts}
+  S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
 
 services:
   postgres:
@@ -40,6 +64,55 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    profiles: ["dev", "prod"]
+
+  minio:
+    image: minio/minio:latest
+    container_name: phylo-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-phylo_minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-phylo_minio_secret}
+    ports:
+      # API port is published for the host-side storage-check script / local SDK use.
+      # In production, keep this internal and do not expose publicly.
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio_data:/data
+    # No healthcheck: the minio server image ships no curl/mc client. The
+    # minio-init service below retries until MinIO is reachable and the API
+    # gates on minio-init completing successfully.
+    profiles: ["dev", "prod"]
+
+  # One-shot: waits for MinIO, then creates the dataset + artifact buckets.
+  minio-init:
+    image: minio/mc:latest
+    container_name: phylo-minio-init
+    depends_on:
+      minio:
+        condition: service_started
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-phylo_minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-phylo_minio_secret}
+      MINIO_METHODS_USER: ${MINIO_METHODS_USER:-phylo_methods}
+      MINIO_METHODS_PASSWORD: ${MINIO_METHODS_PASSWORD:-phylo_methods_secret}
+      S3_BUCKET_DATASETS: ${S3_BUCKET_DATASETS:-phylo-datasets}
+      S3_BUCKET_ARTIFACTS: ${S3_BUCKET_ARTIFACTS:-phylo-artifacts}
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set local http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD}; do
+        echo 'waiting for minio...'; sleep 2;
+      done;
+      mc mb --ignore-existing local/$${S3_BUCKET_DATASETS};
+      mc mb --ignore-existing local/$${S3_BUCKET_ARTIFACTS};
+      echo 'minio buckets ready';
+      printf '%s\n' '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"s3:PutObject\"],\"Resource\":\"arn:aws:s3:::'\"$${S3_BUCKET_ARTIFACTS}\"'/*\"}]}' > /tmp/methods-policy.json;
+      mc admin policy create local phylo-methods-write /tmp/methods-policy.json 2>/dev/null || mc admin policy update local phylo-methods-write /tmp/methods-policy.json 2>/dev/null || true;
+      mc admin user add local $${MINIO_METHODS_USER} $${MINIO_METHODS_PASSWORD} 2>/dev/null || true;
+      mc admin policy attach local phylo-methods-write --user $${MINIO_METHODS_USER} 2>/dev/null || true;
+      echo 'methods user ready';
+      "
     profiles: ["dev", "prod"]
 
   web:
@@ -109,6 +182,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
       dowser:
         condition: service_started
       gctree:
@@ -142,6 +217,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
       api:
         condition: service_started
     volumes:
@@ -167,6 +244,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
       dowser:
         condition: service_started
       gctree:
@@ -206,6 +285,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
       api-prod:
         condition: service_healthy
     volumes:
@@ -244,9 +325,6 @@ services:
         source: ${STORAGE_LOCAL_PATH:-runtime/storage}
         target: /runtime/storage
         read_only: true
-      - type: volume
-        source: method_jobs
-        target: /runtime/method-jobs
     expose:
       - "${METHOD_DOWSER_CONTAINER_PORT:-8001}"
     command:
@@ -276,9 +354,6 @@ services:
         source: ${STORAGE_LOCAL_PATH:-runtime/storage}
         target: /runtime/storage
         read_only: true
-      - type: volume
-        source: method_jobs
-        target: /runtime/method-jobs
     expose:
       - "${METHOD_GCTREE_CONTAINER_PORT:-8002}"
     command: sh -lc "uvicorn app:app --host 0.0.0.0 --port ${METHOD_GCTREE_CONTAINER_PORT:-8002}"
@@ -307,9 +382,6 @@ services:
         source: ${STORAGE_LOCAL_PATH:-runtime/storage}
         target: /runtime/storage
         read_only: true
-      - type: volume
-        source: method_jobs
-        target: /runtime/method-jobs
     expose:
       - "${METHOD_BREPPHYLO_CONTAINER_PORT:-8003}"
     command:
@@ -339,9 +411,6 @@ services:
         source: ${STORAGE_LOCAL_PATH:-runtime/storage}
         target: /runtime/storage
         read_only: true
-      - type: volume
-        source: method_jobs
-        target: /runtime/method-jobs
     expose:
       - "${METHOD_CLONALTREE_CONTAINER_PORT:-8004}"
     command: sh -lc "uvicorn app:app --host 0.0.0.0 --port ${METHOD_CLONALTREE_CONTAINER_PORT:-8004}"
@@ -349,4 +418,4 @@ services:
 
 volumes:
   postgres_data:
-  method_jobs:
+  minio_data:
