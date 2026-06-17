@@ -87,7 +87,15 @@ export function Loading({
       ) : (
         <Loader2 className={cn(glyphClass, "animate-spin")} aria-hidden="true" />
       )}
-      {label ? <p className={cn("text-muted-foreground", LABEL_SIZE[size])}>{label}</p> : null}
+      {label ? (
+        <p
+          className={cn("text-muted-foreground", LABEL_SIZE[size])}
+          dir="ltr"
+          suppressHydrationWarning
+        >
+          {label}
+        </p>
+      ) : null}
       <span className="sr-only">{label ?? "Loading"}</span>
     </div>
   );
