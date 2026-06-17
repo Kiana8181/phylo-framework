@@ -4,8 +4,6 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import TreeOverlay from "./TreeOverlay";
 
-const NONE = "__none__";
-
 function ToggleRow({
   label,
   hint,
@@ -42,9 +40,6 @@ export default function TreeSettingsPanel({
   displayFields,
   displayIdField,
   setDisplayIdField,
-  sizeFields,
-  sizeByField,
-  setSizeByField,
 }: {
   open: boolean;
   onClose: () => void;
@@ -58,9 +53,6 @@ export default function TreeSettingsPanel({
   displayFields: string[];
   displayIdField: string;
   setDisplayIdField: (v: string) => void;
-  sizeFields: string[];
-  sizeByField: string;
-  setSizeByField: (v: string) => void;
 }) {
   return (
     <TreeOverlay
@@ -115,24 +107,10 @@ export default function TreeSettingsPanel({
           </div>
         )}
 
-        {sizeFields.length > 0 && (
-          <div className="space-y-1.5">
-            <label className="block text-sm font-medium">Tip size by</label>
-            <Select value={sizeByField || NONE} onValueChange={(v) => setSizeByField(v === NONE ? "" : v)}>
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder="Constant size" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={NONE}>Constant size</SelectItem>
-                {sizeFields.map((f) => (
-                  <SelectItem key={f} value={f}>
-                    {f}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        )}
+        <div className="space-y-1.5">
+          <label className="block text-sm font-medium">Tip size by</label>
+          <p className="text-sm text-muted-foreground">abundance</p>
+        </div>
       </div>
     </TreeOverlay>
   );
