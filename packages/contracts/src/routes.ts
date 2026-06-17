@@ -9,13 +9,24 @@ export const API_ROUTES = {
   runCurrent: () => `/runs/current`,
   runStatus: (runId: string) => `/runs/${encodeURIComponent(runId)}/status`,
   runResult: (runId: string) => `/runs/${encodeURIComponent(runId)}/result`,
+  runCancel: (runId: string) => `/runs/${encodeURIComponent(runId)}/cancel`,
   runTrees: (runId: string) => `/runs/${encodeURIComponent(runId)}/trees`,
   runTree: (runId: string, treeId: string) =>
     `/runs/${encodeURIComponent(runId)}/trees/${encodeURIComponent(treeId)}`,
   runSameDataset: (runId: string) =>
     `/runs/${encodeURIComponent(runId)}/same-dataset`,
+  runArtifacts: (runId: string) => `/runs/${encodeURIComponent(runId)}/artifacts`,
+  artifactDownload: (artifactId: string) =>
+    `/artifacts/${encodeURIComponent(artifactId)}/download`,
+  artifactPreview: (artifactId: string) =>
+    `/artifacts/${encodeURIComponent(artifactId)}/preview`,
   filesList: () => `/files`,
   filesDelete: (id: string) => `/files/${encodeURIComponent(id)}`,
+  datasetDelete: (id: string) => `/datasets/${encodeURIComponent(id)}`,
+  datasetDownload: (id: string) => `/datasets/${encodeURIComponent(id)}/download`,
+  uploadInit: () => `/uploads/init`,
+  uploadContent: (uploadId: string) => `/uploads/${encodeURIComponent(uploadId)}/content`,
+  uploadCancel: (uploadId: string) => `/uploads/${encodeURIComponent(uploadId)}`,
   authLogin: () => `/auth/login`,
   authRegister: () => `/auth/register`,
   authForgotPassword: () => `/auth/forgot-password`,

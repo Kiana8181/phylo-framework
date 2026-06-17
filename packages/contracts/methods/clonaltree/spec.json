@@ -4,5 +4,16 @@
   "accepts": [
     "text/tab-separated-values",
     "text/csv"
-  ]
+  ],
+  "tagline": "Minimum-spanning-tree B-cell lineage reconstruction",
+  "category": "Lineage MST",
+  "summary": "Reconstructs B-cell receptor lineage trees from clonally related sequences using a minimum-spanning-tree algorithm combined with genotype abundance information.",
+  "capabilities": [
+    "Minimum-spanning-tree lineage reconstruction with abundance weighting",
+    "AIRR/IMGT formatting, clustering and refinement pipeline",
+    "Configurable distance methods (V, J, CDR3) and clonotype grouping (L1–L5)"
+  ],
+  "inputFormats": ["TSV", "CSV"],
+  "externalDocUrl": "https://github.com/julibinho/ClonalTree/",
+  "externalDocLabel": "github.com/julibinho/ClonalTree"
 }

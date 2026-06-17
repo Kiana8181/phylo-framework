@@ -19,7 +19,9 @@ from apps.api.preprocess.converters import (
     convert_csv_to_tsv,
     convert_table_to_aligned_fasta,
     convert_tsv_to_csv,
+    normalize_table_delimiter,
     rename_table_columns,
+    _table_delimiter,
 )
 from apps.api.preprocess.method_capabilities import (
     describe_safe_paths,
@@ -177,7 +179,13 @@ def _gctree_id_column(params: dict[str, Any]) -> str | None:
 
 
 def _table_stats(path: Path, ext: str) -> dict[str, int]:
-    delimiter = "," if ext == "csv" else "\t"
+    hint: Literal["csv", "tsv"] | None = (
+        "csv" if ext == "csv" else "tsv" if ext == "tsv" else None
+    )
+    try:
+        delimiter = _table_delimiter(path, delimiter=hint)
+    except ConversionError:
+        delimiter = "," if ext == "csv" else "\t"
     with path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.reader(handle, delimiter=delimiter)
         rows = list(reader)
@@ -392,6 +400,71 @@ def prepare_input_for_method(
     current_ext = normalized_ext
     step_offset = 0
     mapping_applied = False
+
+    # Always sanitize tabular uploads before any other step: rewrite with the
+    # canonical delimiter for the extension, strip a leading UTF-8 BOM, and
+    # drop fully-blank padding rows that Excel often appends. Without this,
+    # semicolon-CSV exports reach Dowser as a single concatenated column,
+    # BOM-prefixed headers silently miss required-column checks, and
+    # empty `;;;;;;...` rows trip validators downstream.
+    if current_ext in TABULAR_EXTENSIONS:
+        delimiter_hint: Literal["csv", "tsv"] = (
+            "csv" if current_ext == "csv" else "tsv"
+        )
+        step_offset += 1
+        step_name = "normalize_table_delimiter"
+        output_path = work_dir / f"{step_offset:02d}_{step_name}.{current_ext}"
+        try:
+            norm_stats = normalize_table_delimiter(
+                current_path,
+                output_path,
+                delimiter=delimiter_hint,
+            )
+        except ConversionError as exc:
+            mapped_code = (
+                "INVALID_FILE"
+                if exc.code in INVALID_FILE_CONVERTER_CODES
+                else "CONVERSION_FAILED"
+            )
+            raise _conversion_error(
+                method_id=method,
+                input_ext=current_ext,
+                message=(
+                    f"Failed to normalize input table at step "
+                    f"'{step_name}': {exc.message}"
+                ),
+                converter_error=exc,
+                code=mapped_code,
+                step=step_name,
+            ) from exc
+        stats[f"step_{step_offset}_table"] = {
+            "rows": norm_stats.get("rows", 0),
+            "cols": norm_stats.get("cols", 0),
+            "input_delimiter": norm_stats.get("input_delimiter"),
+            "output_delimiter": norm_stats.get("output_delimiter"),
+            "blank_rows_dropped": norm_stats.get("blank_rows_dropped", 0),
+        }
+        blank_dropped = int(norm_stats.get("blank_rows_dropped") or 0)
+        if blank_dropped:
+            warnings.append(
+                {
+                    "code": "BLANK_ROWS_DROPPED",
+                    "message": (
+                        f"Dropped {blank_dropped} fully-blank padding row(s) "
+                        "from the input table during normalization."
+                    ),
+                }
+            )
+        applied_steps.append(
+            {
+                "step": step_name,
+                "from": current_ext,
+                "to": current_ext,
+                "input_path": str(current_path),
+                "output_path": str(output_path),
+            }
+        )
+        current_path = output_path
 
     if should_apply_column_mapping(method, current_ext, params):
         required_keys = active_required_keys(method, params)

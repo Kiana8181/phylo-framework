@@ -1,1 +1,8 @@
-{ "spec": "/spec", "run": "/run" }
+{
+  "spec": "/spec",
+  "run": "/run",
+  "jobs": "/jobs",
+  "jobStatus": "/jobs/{job_id}/status",
+  "jobResult": "/jobs/{job_id}/result",
+  "jobCancel": "/jobs/{job_id}/cancel"
+}

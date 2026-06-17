@@ -1,50 +1,47 @@
 "use client";
 
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
-
-function b64ToBlob(b64Data: string, contentType = "application/zip") {
-  const byteCharacters = atob(b64Data);
-  const byteArrays = [];
-
-  for (let offset = 0; offset < byteCharacters.length; offset += 1024) {
-    const slice = byteCharacters.slice(offset, offset + 1024);
-    const byteNumbers = new Array(slice.length);
-    for (let i = 0; i < slice.length; i++) {
-      byteNumbers[i] = slice.charCodeAt(i);
-    }
-    byteArrays.push(new Uint8Array(byteNumbers));
-  }
-
-  return new Blob(byteArrays, { type: contentType });
-}
+import { fetchArtifactObjectUrl } from "@/features/runs/api";
+import { notify } from "@/lib/notify";
 
 type Props = {
-  base64: string | null | undefined;
+  /** API path to the artifact download endpoint (e.g. /artifacts/{id}/download). */
+  downloadUrl: string;
   filename?: string;
+  label?: string;
 };
 
-export default function ArtifactsDownloadButton({ base64, filename }: Props) {
-  if (!base64) return null;
+/**
+ * Downloads an artifact by streaming it through the authenticated API and
+ * triggering a browser download from an object URL. No base64 is involved.
+ */
+export default function ArtifactsDownloadButton({ downloadUrl, filename, label }: Props) {
+  const [busy, setBusy] = useState(false);
+  if (!downloadUrl) return null;
 
-  const handleClick = () => {
+  const handleClick = async () => {
+    setBusy(true);
     try {
-      const blob = b64ToBlob(base64);
-      const url = URL.createObjectURL(blob);
+      const url = await fetchArtifactObjectUrl(downloadUrl);
       const a = document.createElement("a");
       a.href = url;
-      a.download = filename || "artifacts.zip";
+      a.download = filename || "artifact";
       document.body.appendChild(a);
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
     } catch (e) {
-      console.error("Download failed", e);
+      notify.error("Download failed", "Could not download the artifact.");
+      console.error("Artifact download failed", e);
+    } finally {
+      setBusy(false);
     }
   };
 
   return (
-    <Button variant="outline" size="sm" onClick={handleClick}>
-      Download artifacts.zip
+    <Button variant="outline" size="sm" onClick={handleClick} disabled={busy}>
+      {busy ? "Downloading…" : label || `Download ${filename || "artifact"}`}
     </Button>
   );
 }

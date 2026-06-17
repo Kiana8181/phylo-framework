@@ -244,8 +244,8 @@ BREP_CONTRACTS_REL="$(relpath_from_dir "$ABS_CONTRACTS" "$BREP_DIR")"
 cleanup(){
   echo
   echo "${YLW}Shutting down...${CLR}"
-  kill ${R_PID:-} ${API_PID:-} ${GCTREE_PID:-} ${CLONAL_PID:-} ${BREP_PID:-} 2>/dev/null || true
-  docker compose --profile dev stop postgres >/dev/null 2>&1 || true
+  kill ${R_PID:-} ${WORKER_PID:-} ${API_PID:-} ${GCTREE_PID:-} ${CLONAL_PID:-} ${BREP_PID:-} 2>/dev/null || true
+  docker compose --profile dev stop postgres minio minio-init >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -253,6 +253,16 @@ echo "${BLU}==> Starting PostgreSQL (Docker Compose, profile=dev)${CLR}"
 docker compose --profile dev up -d postgres
 wait_postgres || die "PostgreSQL did not become healthy"
 echo "${GRN}PostgreSQL is healthy.${CLR}"
+
+echo "${BLU}==> Starting MinIO object storage + creating buckets${CLR}"
+docker compose --profile dev up -d minio minio-init
+docker wait phylo-minio-init >/dev/null 2>&1 || true
+echo "${GRN}MinIO is up; dataset/artifact buckets ready.${CLR}"
+
+# Local method services + the host worker share this host dir for job outputs
+# (artifact files). Exported so every child process agrees on the location.
+export METHOD_JOBS_DIR="$ROOT/runtime/method-jobs"
+mkdir -p "$METHOD_JOBS_DIR"
 
 echo "${BLU}==> Checking required R packages${CLR}"
 set +e
@@ -327,6 +337,17 @@ echo "${BLU}==> Starting API on :${API_PORT}${CLR}"
 uvicorn apps.api.main:app --host 0.0.0.0 --port "$API_PORT" >/tmp/api.log 2>&1 &
 API_PID=$!
 wait_http "$API_PORT" || { echo "${YLW}Last 200 API logs:${CLR}"; tail -n 200 /tmp/api.log || true; die "API failed readiness check"; }
+
+echo "${BLU}==> Starting run worker (processes QUEUED runs)${CLR}"
+python -m apps.api.workers.run_worker >/tmp/run-worker.log 2>&1 &
+WORKER_PID=$!
+sleep 1
+if ! kill -0 "$WORKER_PID" 2>/dev/null; then
+  echo "${YLW}Last 50 run-worker logs:${CLR}"
+  tail -n 50 /tmp/run-worker.log 2>/dev/null || true
+  die "Run worker failed to start"
+fi
+echo "${GRN}Run worker started (pid ${WORKER_PID}).${CLR}"
 
 echo "${BLU}==> Starting GCtree (FastAPI) on :${GCTREE_PORT}${CLR}"
 (

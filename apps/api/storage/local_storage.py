@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
+import shutil
 from pathlib import Path
-from typing import BinaryIO, Optional
+from typing import AsyncIterator, BinaryIO, Optional
 from urllib.parse import urljoin
 
 import aiofiles
@@ -53,16 +55,48 @@ class LocalStorage(StorageInterface):
         
         return safe_path
 
+    async def upload_file(
+        self,
+        local_path: str,
+        file_path: str,
+        content_type: Optional[str] = None,
+    ) -> str:
+        """Copy a file from disk into local storage (test/dev backend)."""
+        safe_path = file_path.lstrip("/")
+        full_path = self.base_path / safe_path
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(local_path, full_path)
+        return safe_path
+
     async def download(self, file_path: str) -> bytes:
         """Download file from local storage."""
         safe_path = file_path.lstrip("/")
         full_path = self.base_path / safe_path
-        
+
         if not full_path.exists():
             raise FileNotFoundError(f"File not found: {file_path}")
-        
+
         async with aiofiles.open(full_path, "rb") as f:
             return await f.read()
+
+    async def stream_download(
+        self,
+        file_path: str,
+        chunk_size: int = 1024 * 1024,
+    ) -> AsyncIterator[bytes]:
+        """Stream a local file in chunks."""
+        safe_path = file_path.lstrip("/")
+        full_path = self.base_path / safe_path
+
+        if not full_path.exists():
+            raise FileNotFoundError(f"File not found: {file_path}")
+
+        async with aiofiles.open(full_path, "rb") as f:
+            while True:
+                chunk = await f.read(chunk_size)
+                if not chunk:
+                    break
+                yield chunk
 
     async def delete(self, file_path: str) -> bool:
         """Delete file from local storage."""
@@ -91,6 +125,14 @@ class LocalStorage(StorageInterface):
         safe_path = file_path.lstrip("/")
         full_path = self.base_path / safe_path
         return full_path.exists()
+
+    async def move(self, src_path: str, dst_path: str) -> str:
+        """Rename a file within local storage (atomic on same filesystem)."""
+        src = self.base_path / src_path.lstrip("/")
+        dst = self.base_path / dst_path.lstrip("/")
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(src, dst)
+        return dst_path.lstrip("/")
 
     def get_storage_type(self) -> str:
         """Get storage type."""

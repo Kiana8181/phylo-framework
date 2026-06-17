@@ -22,14 +22,20 @@
           "type": "array",
           "description": "Per-clone PNG plots as plain base64-encoded blobs.",
           "items": {
-            "type": ["string", "null"]
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "phylogeny_pdf": {
           "type": "array",
           "description": "Per-clone PDF plots as base64 blobs.",
           "items": {
-            "type": ["string", "null"]
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -43,10 +49,18 @@
         "items": {
           "type": "object",
           "properties": {
-            "original_sequence_id": { "type": "string" },
-            "final_tip_label": { "type": "string" },
-            "clone_id": { "type": "string" },
-            "label": { "type": "string" }
+            "original_sequence_id": {
+              "type": "string"
+            },
+            "final_tip_label": {
+              "type": "string"
+            },
+            "clone_id": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            }
           },
           "additionalProperties": true
         }
@@ -58,11 +72,15 @@
       "properties": {
         "clone_id": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         },
         "seqs": {
           "type": "array",
-          "items": { "type": "integer" }
+          "items": {
+            "type": "integer"
+          }
         }
       },
       "additionalProperties": false
@@ -74,10 +92,18 @@
         "batch_summary": {
           "type": "object",
           "properties": {
-            "clones_analyzed": { "type": "integer" },
-            "clones_skipped": { "type": "integer" },
-            "csr_total": { "type": "integer" },
-            "distance_rows": { "type": "integer" }
+            "clones_analyzed": {
+              "type": "integer"
+            },
+            "clones_skipped": {
+              "type": "integer"
+            },
+            "csr_total": {
+              "type": "integer"
+            },
+            "distance_rows": {
+              "type": "integer"
+            }
           },
           "additionalProperties": true
         },
@@ -86,11 +112,20 @@
           "items": {
             "type": "object",
             "properties": {
-              "clone_id": { "type": "string" },
-              "sequence_id": { "type": "string" },
-              "distance": { "type": "number" }
+              "clone_id": {
+                "type": "string"
+              },
+              "sequence_id": {
+                "type": "string"
+              },
+              "distance": {
+                "type": "number"
+              }
             },
-            "required": ["clone_id", "sequence_id"]
+            "required": [
+              "clone_id",
+              "sequence_id"
+            ]
           }
         },
         "csr_events": {
@@ -98,13 +133,31 @@
           "items": {
             "type": "object",
             "properties": {
-              "clone_id": { "type": "string" },
-              "from_isotype": { "type": "string" },
-              "to_isotype": { "type": "string" },
-              "distance_from_germline": { "type": ["number", "null"] },
-              "valid": { "type": ["boolean", "null"] }
+              "clone_id": {
+                "type": "string"
+              },
+              "from_isotype": {
+                "type": "string"
+              },
+              "to_isotype": {
+                "type": "string"
+              },
+              "distance_from_germline": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "valid": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              }
             },
-            "required": ["clone_id"]
+            "required": [
+              "clone_id"
+            ]
           }
         },
         "csr_summary": {
@@ -118,29 +171,55 @@
         "csr_summary_fallback": {
           "type": "object",
           "description": "Internal fallback counts grouped by from->to isotype switch.",
-          "additionalProperties": { "type": "integer" }
+          "additionalProperties": {
+            "type": "integer"
+          }
         },
         "arborescence": {
           "type": "array",
           "items": {
             "type": "object",
             "properties": {
-              "clone_id": { "type": "string" },
+              "clone_id": {
+                "type": "string"
+              },
               "edges": {
                 "type": "array",
                 "items": {
                   "type": "object",
                   "properties": {
-                    "startID": { "type": ["string", "number"] },
-                    "endID": { "type": ["string", "number"] },
-                    "weight": { "type": ["number", "null"] },
-                    "startLabel": { "type": "string" },
-                    "endLabel": { "type": "string" }
+                    "startID": {
+                      "type": [
+                        "string",
+                        "number"
+                      ]
+                    },
+                    "endID": {
+                      "type": [
+                        "string",
+                        "number"
+                      ]
+                    },
+                    "weight": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "startLabel": {
+                      "type": "string"
+                    },
+                    "endLabel": {
+                      "type": "string"
+                    }
                   }
                 }
               }
             },
-            "required": ["clone_id", "edges"]
+            "required": [
+              "clone_id",
+              "edges"
+            ]
           }
         },
         "isotype_switch_validity": {
@@ -148,14 +227,31 @@
           "items": {
             "type": "object",
             "properties": {
-              "clone_id": { "type": "string" },
-              "sequence_id_from": { "type": "string" },
-              "sequence_id_to": { "type": "string" },
-              "from_isotype": { "type": "string" },
-              "to_isotype": { "type": "string" },
-              "valid": { "type": ["boolean", "null"] }
+              "clone_id": {
+                "type": "string"
+              },
+              "sequence_id_from": {
+                "type": "string"
+              },
+              "sequence_id_to": {
+                "type": "string"
+              },
+              "from_isotype": {
+                "type": "string"
+              },
+              "to_isotype": {
+                "type": "string"
+              },
+              "valid": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              }
             },
-            "required": ["clone_id"]
+            "required": [
+              "clone_id"
+            ]
           }
         },
         "per_clone_status": {
@@ -163,16 +259,36 @@
           "items": {
             "type": "object",
             "properties": {
-              "clone_id": { "type": "string" },
-              "n_seqs": { "type": "integer" },
-              "analyzed": { "type": "boolean" },
+              "clone_id": {
+                "type": "string"
+              },
+              "n_seqs": {
+                "type": "integer"
+              },
+              "analyzed": {
+                "type": "boolean"
+              },
               "status": {
                 "type": "string",
-                "enum": ["analyzed", "skipped", "failed"]
+                "enum": [
+                  "analyzed",
+                  "skipped",
+                  "failed"
+                ]
               },
-              "skip_reason": { "type": ["string", "null"] }
+              "skip_reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
             },
-            "required": ["clone_id", "n_seqs", "analyzed", "status"]
+            "required": [
+              "clone_id",
+              "n_seqs",
+              "analyzed",
+              "status"
+            ]
           }
         },
         "skipped_clones": {
@@ -180,10 +296,17 @@
           "items": {
             "type": "object",
             "properties": {
-              "clone_id": { "type": "string" },
-              "reason": { "type": "string" }
+              "clone_id": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
             },
-            "required": ["clone_id", "reason"]
+            "required": [
+              "clone_id",
+              "reason"
+            ]
           }
         }
       },
@@ -198,12 +321,29 @@
           "items": {
             "type": "object",
             "properties": {
-              "row_index": { "type": "integer" },
-              "sequence_id": { "type": ["string", "null"] },
-              "clone_id": { "type": ["string", "null"] },
-              "reason": { "type": "string" }
+              "row_index": {
+                "type": "integer"
+              },
+              "sequence_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "clone_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              }
             },
-            "required": ["row_index", "reason"]
+            "required": [
+              "row_index",
+              "reason"
+            ]
           }
         },
         "rejected_rows": {
@@ -211,12 +351,29 @@
           "items": {
             "type": "object",
             "properties": {
-              "row_index": { "type": "integer" },
-              "sequence_id": { "type": ["string", "null"] },
-              "clone_id": { "type": ["string", "null"] },
-              "reason": { "type": "string" }
+              "row_index": {
+                "type": "integer"
+              },
+              "sequence_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "clone_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              }
             },
-            "required": ["row_index", "reason"]
+            "required": [
+              "row_index",
+              "reason"
+            ]
           }
         },
         "unmapped_input_rows": {
@@ -224,10 +381,27 @@
           "items": {
             "type": "object",
             "properties": {
-              "row_index": { "type": "integer" },
-              "sequence_id": { "type": ["string", "null"] },
-              "clone_id": { "type": ["string", "null"] },
-              "label": { "type": ["string", "null"] }
+              "row_index": {
+                "type": "integer"
+              },
+              "sequence_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "clone_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "label": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
             }
           }
         },
@@ -236,8 +410,12 @@
           "items": {
             "type": "object",
             "properties": {
-              "clone_id": { "type": "string" },
-              "final_tip_label": { "type": "string" }
+              "clone_id": {
+                "type": "string"
+              },
+              "final_tip_label": {
+                "type": "string"
+              }
             }
           }
         },
@@ -246,17 +424,27 @@
           "items": {
             "type": "object",
             "properties": {
-              "clone_id": { "type": "string" },
+              "clone_id": {
+                "type": "string"
+              },
               "distinct_germlines": {
                 "type": "array",
-                "items": { "type": "string" }
+                "items": {
+                  "type": "string"
+                }
               }
             },
-            "required": ["clone_id", "distinct_germlines"]
+            "required": [
+              "clone_id",
+              "distinct_germlines"
+            ]
           }
         },
         "latex_available": {
-          "type": ["boolean", "null"],
+          "type": [
+            "boolean",
+            "null"
+          ],
           "description": "Set when make_alignment_pdf=true; indicates LaTeX toolchain availability."
         }
       },
@@ -266,84 +454,251 @@
       "type": "object",
       "description": "Run-level metadata and summary statistics.",
       "properties": {
-        "method": { "type": "string" },
-        "tree_type_requested": { "type": ["string", "null"] },
-        "tree_type": { "type": "string" },
-        "input_sequence_mode": { "type": "string" },
-        "species": { "type": "string" },
-        "species_effective": { "type": ["string", "null"] },
-        "algorithm": { "type": ["string", "null"] },
-        "plot_type": { "type": "string" },
-        "plot_format": { "type": "string" },
-        "min_clone_size": { "type": "integer" },
-        "gather_plots": { "type": "boolean" },
-        "enable_csr_analysis": { "type": "boolean" },
-        "sequence_column": { "type": "string" },
-        "clone_id_column": { "type": "string" },
-        "germline_id_column": { "type": "string" },
-        "label_column": { "type": ["string", "null"] },
-        "isotype_column": { "type": ["string", "null"] },
+        "method": {
+          "type": "string"
+        },
+        "tree_type_requested": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tree_type": {
+          "type": "string"
+        },
+        "input_sequence_mode": {
+          "type": "string"
+        },
+        "species": {
+          "type": "string"
+        },
+        "species_effective": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "algorithm": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "plot_type": {
+          "type": "string"
+        },
+        "plot_format": {
+          "type": "string"
+        },
+        "min_clone_size": {
+          "type": "integer"
+        },
+        "gather_plots": {
+          "type": "boolean"
+        },
+        "enable_csr_analysis": {
+          "type": "boolean"
+        },
+        "sequence_column": {
+          "type": "string"
+        },
+        "clone_id_column": {
+          "type": "string"
+        },
+        "germline_id_column": {
+          "type": "string"
+        },
+        "label_column": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "isotype_column": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "which_clones": {
           "anyOf": [
-            { "type": "null" },
-            { "type": "array", "items": { "type": "string" } }
+            {
+              "type": "null"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
           ]
         },
         "ignore_clones": {
           "anyOf": [
-            { "type": "null" },
-            { "type": "array", "items": { "type": "string" } }
+            {
+              "type": "null"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
           ]
         },
-        "n_clones": { "type": "integer" },
-        "n_trees": { "type": "integer" },
-        "tree_inference_seconds": { "type": ["number", "null"] },
-        "analysis_seconds": { "type": ["number", "null"] },
-        "ig_stop_policy": { "type": ["string", "null"] },
-        "igphyml_fallback_to_dnapars": { "type": "boolean" }
+        "n_clones": {
+          "type": "integer"
+        },
+        "n_trees": {
+          "type": "integer"
+        },
+        "tree_inference_seconds": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "analysis_seconds": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "ig_stop_policy": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "igphyml_fallback_to_dnapars": {
+          "type": "boolean"
+        }
       },
       "additionalProperties": true
     },
     "artifact_zip_b64": {
-      "type": "object",
-      "description": "Additional BrepPhylo output files bundled as compressed archives.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Deprecated. Legacy base64 bundle; new services emit artifact_files (paths).",
       "properties": {
         "clone_bundle_zip": {
-          "type": ["string", "null"],
-          "description": "ZIP of BrepPhylo output files (base64-encoded)."
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "ZIP of BrepPhylo output files (base64-encoded; deprecated)."
         }
       },
-      "additionalProperties": false
+      "additionalProperties": true
+    },
+    "artifact_files": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "description": "List of artifact file descriptors uploaded directly to object storage by the method service. Each entry carries the object key in the artifact bucket plus content metadata for the API worker to register.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "object_key": {
+            "type": "string",
+            "description": "Object key inside the artifact bucket (e.g. artifacts/<run_id>/<job_id>/<filename>)."
+          },
+          "filename": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "content_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "previewable": {
+            "type": "boolean"
+          },
+          "tree_index": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "checksum_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      }
     },
     "warnings": {
       "type": "array",
-      "items": { "type": "string" }
+      "items": {
+        "type": "string"
+      }
     },
     "logs": {
       "anyOf": [
-        { "type": "null" },
+        {
+          "type": "null"
+        },
         {
           "type": "array",
           "items": {
             "type": "object",
             "properties": {
-              "step": { "type": "string" },
-              "ok": { "type": "boolean" },
-              "out": { "type": "string" }
+              "step": {
+                "type": "string"
+              },
+              "ok": {
+                "type": "boolean"
+              },
+              "out": {
+                "type": "string"
+              }
             },
-            "required": ["step", "ok", "out"],
+            "required": [
+              "step",
+              "ok",
+              "out"
+            ],
             "additionalProperties": true
           }
         }
       ]
     },
     "render": {
-      "type": ["string", "null"]
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "error": {
-      "type": ["string", "null"]
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
-  "required": ["ok"],
-  "additionalProperties": false
+  "required": [
+    "ok"
+  ],
+  "additionalProperties": true
 }

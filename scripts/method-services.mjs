@@ -286,6 +286,19 @@ async function dockerRun(service, envMap) {
   const hostPort = serviceHostPort(service);
   const containerPort = serviceContainerPort(service);
 
+  // Method containers upload artifact files directly to MinIO. In host-run dev
+  // mode they're started with plain `docker run` (not on the compose network),
+  // so reach the host-published MinIO port via host.docker.internal. The
+  // --add-host flag makes this work on Linux Docker too; on Docker Desktop
+  // (mac/win) host.docker.internal already resolves and the flag is a no-op.
+  const minioApiPort = (envMap.get("MINIO_API_PORT") || "9000").trim();
+  const methodsS3Endpoint = `http://host.docker.internal:${minioApiPort}`;
+  const methodsUser = envMap.get("MINIO_METHODS_USER") || "phylo_methods";
+  const methodsPassword = envMap.get("MINIO_METHODS_PASSWORD") || "phylo_methods_secret";
+  const bucketArtifacts = envMap.get("S3_BUCKET_ARTIFACTS") || "phylo-artifacts";
+  const s3Region = envMap.get("S3_REGION") || "us-east-1";
+  const s3ForcePathStyle = envMap.get("S3_FORCE_PATH_STYLE") || "true";
+
   const args = [
     "run",
     "-d",
@@ -293,6 +306,8 @@ async function dockerRun(service, envMap) {
     name,
     "--env-file",
     ROOT_ENV_PATH,
+    "--add-host",
+    "host.docker.internal:host-gateway",
     "-p",
     `${hostPort}:${containerPort}`,
     "-v",
@@ -306,7 +321,23 @@ async function dockerRun(service, envMap) {
     "-e",
     `METHOD_SERVICE_FILE_PREFIX=${containerMount}`,
     "-e",
+    "METHOD_JOBS_DIR=/runtime/method-jobs",
+    "-e",
     `STRICT_CONTRACT_ROUTES=${envMap.get("STRICT_CONTRACT_ROUTES") || "true"}`,
+    "-e",
+    `STORAGE_BACKEND=${envMap.get("STORAGE_BACKEND") || "minio"}`,
+    "-e",
+    `S3_ENDPOINT_URL=${methodsS3Endpoint}`,
+    "-e",
+    `S3_REGION=${s3Region}`,
+    "-e",
+    `S3_ACCESS_KEY_ID=${methodsUser}`,
+    "-e",
+    `S3_SECRET_ACCESS_KEY=${methodsPassword}`,
+    "-e",
+    `S3_BUCKET_ARTIFACTS=${bucketArtifacts}`,
+    "-e",
+    `S3_FORCE_PATH_STYLE=${s3ForcePathStyle}`,
   ];
   if (platform) args.push("--platform", platform);
 

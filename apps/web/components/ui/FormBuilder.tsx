@@ -8,9 +8,9 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Loader2 } from "lucide-react";
-import { ReactNode, useEffect, useMemo, useState } from "react";
-import { Controller, useForm, useWatch } from "react-hook-form";
+import { Spinner } from "@/components/ui/loading";
+import { ReactNode, useEffect, useMemo, useRef } from "react";
+import { Controller, useForm, useWatch, type FieldErrors } from "react-hook-form";
 import { z } from "zod";
 
 type FieldWidget = "textarea";
@@ -19,6 +19,21 @@ type VisibilityRule = {
   when?: Record<string, unknown>;
   whenAll?: Array<Record<string, unknown>>;
   whenAny?: Array<Record<string, unknown>>;
+};
+
+type RequiredWhenRule = VisibilityRule & {
+  field: string;
+  message?: string;
+};
+
+type MutuallyExclusiveRule = {
+  fields: string[];
+  message?: string;
+};
+
+type FormValidation = {
+  requiredWhen?: RequiredWhenRule[];
+  mutuallyExclusive?: MutuallyExclusiveRule[];
 };
 
 type UiSection = {
@@ -39,11 +54,17 @@ type JSONSchema = {
   default?: unknown;
   properties?: Record<string, JSONSchema>;
   required?: string[];
+  minimum?: number;
+  maximum?: number;
+  minLength?: number;
+  maxLength?: number;
+  pattern?: string;
   uiHints?: {
     order?: string[];
     placeholders?: Record<string, string>;
     widgets?: Record<string, FieldWidget>;
     visibility?: Record<string, VisibilityRule>;
+    validation?: FormValidation;
     sections?: unknown;
   };
 };
@@ -225,6 +246,24 @@ function getNestedValue(source: unknown, path: string): unknown {
   return current;
 }
 
+function matchesCondition(values: unknown, cond: Record<string, unknown>): boolean {
+  return Object.entries(cond).every(([key, expected]) => {
+    const actual = getNestedValue(values, key);
+    return Array.isArray(expected) ? expected.includes(actual) : actual === expected;
+  });
+}
+
+function matchesRule(values: unknown, rule: VisibilityRule): boolean {
+  if (rule.when && !matchesCondition(values, rule.when)) return false;
+  if (rule.whenAll && !rule.whenAll.every((c) => matchesCondition(values, c))) return false;
+  if (rule.whenAny && !rule.whenAny.some((c) => matchesCondition(values, c))) return false;
+  return true;
+}
+
+function isEmptyValue(value: unknown): boolean {
+  return value == null || (typeof value === "string" && value.trim() === "");
+}
+
 function collectLeafFields(schema: JSONSchema, prefix = ""): LeafField[] {
   const props = schema.properties ?? {};
   const out: LeafField[] = [];
@@ -242,7 +281,7 @@ function collectLeafFields(schema: JSONSchema, prefix = ""): LeafField[] {
   return out;
 }
 
-function zodFromJsonSchema(schema: JSONSchema): z.ZodType<FormValues, FormValues> {
+function zodObjectFromJsonSchema(schema: JSONSchema): z.ZodTypeAny {
   const props = schema.properties ?? {};
   const required = new Set(schema.required ?? []);
   const shape: Record<string, z.ZodTypeAny> = {};
@@ -254,7 +293,7 @@ function zodFromJsonSchema(schema: JSONSchema): z.ZodType<FormValues, FormValues
     const enumValues = enumValuesFromSchema(def);
 
     if (isObject && Object.keys(nestedProps).length > 0) {
-      zt = zodFromJsonSchema(def);
+      zt = zodObjectFromJsonSchema(def);
     } else if (enumValues.length) {
       const literalSchemas = enumValues.map((value) => z.literal(value));
       const enumSchema =
@@ -269,18 +308,58 @@ function zodFromJsonSchema(schema: JSONSchema): z.ZodType<FormValues, FormValues
             );
       zt = z.preprocess((value) => coerceEnumInput(value, enumValues), enumSchema);
     } else if (def.type === "number" || def.type === "integer") {
-      zt = z.preprocess((v) => (v === "" || v == null ? undefined : Number(v)), z.number());
+      let num = z.number();
+      if (def.type === "integer") num = num.int();
+      if (typeof def.minimum === "number") num = num.min(def.minimum);
+      if (typeof def.maximum === "number") num = num.max(def.maximum);
+      zt = z.preprocess((v) => (v === "" || v == null ? undefined : Number(v)), num);
     } else if (def.type === "boolean") {
       zt = z.boolean();
     } else {
-      zt = z.string();
+      let str = z.string();
+      if (typeof def.minLength === "number") str = str.min(def.minLength);
+      if (typeof def.maxLength === "number") str = str.max(def.maxLength);
+      if (typeof def.pattern === "string") str = str.regex(new RegExp(def.pattern));
+      zt = str;
     }
 
     if (!required.has(key)) zt = zt.optional();
     shape[key] = zt;
   }
 
-  return z.object(shape) as z.ZodType<FormValues, FormValues>;
+  return z.object(shape);
+}
+
+export function buildZodSchema(schema: JSONSchema): z.ZodType<FormValues, FormValues> {
+  const base = zodObjectFromJsonSchema(schema);
+  const validation = schema.uiHints?.validation;
+  if (!validation?.requiredWhen?.length && !validation?.mutuallyExclusive?.length) {
+    return base as z.ZodType<FormValues, FormValues>;
+  }
+
+  return base.superRefine((data: unknown, ctx: z.RefinementCtx) => {
+    for (const rule of validation.requiredWhen ?? []) {
+      if (matchesRule(data, rule) && isEmptyValue(getNestedValue(data, rule.field))) {
+        ctx.addIssue({
+          code: "custom",
+          path: rule.field.split("."),
+          message: rule.message ?? "This field is required.",
+        });
+      }
+    }
+    for (const rule of validation.mutuallyExclusive ?? []) {
+      const set = rule.fields.filter((field) => !isEmptyValue(getNestedValue(data, field)));
+      if (set.length > 1) {
+        for (const field of set) {
+          ctx.addIssue({
+            code: "custom",
+            path: field.split("."),
+            message: rule.message ?? "These fields are mutually exclusive.",
+          });
+        }
+      }
+    }
+  }) as z.ZodType<FormValues, FormValues>;
 }
 
 function defaultForField(def: JSONSchema, hasOverride: boolean, overrideValue: unknown): unknown {
@@ -313,20 +392,54 @@ function defaultsFromSchema(schema: JSONSchema, overrides?: Record<string, any>)
   return out;
 }
 
+function GroupBox({
+  controller,
+  childrenInOrder,
+  fieldMap,
+  isFieldVisible,
+  renderField,
+}: {
+  controller: string;
+  childrenInOrder: string[];
+  fieldMap: Map<string, JSONSchema>;
+  isFieldVisible: (name: string) => boolean;
+  renderField: (name: string) => ReactNode;
+}) {
+  const visibleChildren = childrenInOrder.filter((n) => isFieldVisible(n));
+  if (!visibleChildren.length) return null;
+
+  const title = fieldMap.get(controller)?.title ?? controller;
+  return (
+    <div className="col-span-full rounded-2xl border bg-card/30">
+      <div className="flex items-center justify-between px-4 py-2 border-b">
+        <div className="text-sm font-medium">{title}</div>
+        <div className="text-xs text-muted-foreground">Advanced</div>
+      </div>
+      <div className="p-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        {visibleChildren.map((name) => renderField(name))}
+      </div>
+    </div>
+  );
+}
+
 export default function FormBuilder({
   schema,
   onSubmit,
   defaults,
   footer,
   disabled: formDisabled = false,
+  context,
 }: {
   schema: JSONSchema;
   defaults?: FormValues;
-  onSubmit: (values: FormValues) => void;
+  onSubmit: (values: FormValues) => void | Promise<void>;
   footer?: ReactNode;
   disabled?: boolean;
+  /** Extra read-only values (e.g. `$inputFormat`) merged in for visibility
+   *  evaluation only. Never submitted. Use `$`-prefixed reserved keys. */
+  context?: Record<string, unknown>;
 }) {
-  const zodSchema = useMemo(() => zodFromJsonSchema(schema), [schema]);
+  const zodSchema = useMemo(() => buildZodSchema(schema), [schema]);
   const formDefaults = useMemo(() => defaultsFromSchema(schema, defaults), [schema, defaults]);
   const leafFields = useMemo(() => collectLeafFields(schema), [schema]);
   const fieldMap = useMemo(() => {
@@ -335,14 +448,21 @@ export default function FormBuilder({
     return map;
   }, [leafFields]);
 
+  const formRef = useRef<HTMLFormElement>(null);
   const { control, handleSubmit, reset, formState } = useForm<FormValues>({
     resolver: zodResolver(zodSchema),
     defaultValues: formDefaults,
+    mode: "onTouched",
+    reValidateMode: "onChange",
+    shouldFocusError: false,
   });
 
   const disabled = formState.isSubmitting || formDisabled;
 
   const values = useWatch({ control });
+  // Values used to evaluate visibility rules: live form values plus any
+  // read-only context (e.g. `$inputFormat`). Context is never submitted.
+  const evalValues = useMemo(() => ({ ...context, ...values }), [context, values]);
   const placeholders = useMemo(() => schema.uiHints?.placeholders ?? {}, [schema.uiHints?.placeholders]);
   const widgets = useMemo(() => schema.uiHints?.widgets ?? {}, [schema.uiHints?.widgets]);
   const visibility = useMemo(() => schema.uiHints?.visibility ?? {}, [schema.uiHints?.visibility]);
@@ -359,19 +479,10 @@ export default function FormBuilder({
     [schema.uiHints, order, fieldMap],
   );
 
-  const testWhen = (cond: Record<string, unknown>) =>
-    Object.entries(cond).every(([k, expected]) => {
-      const v = getNestedValue(values, k);
-      return Array.isArray(expected) ? expected.includes(v) : v === expected;
-    });
-
   function isFieldVisible(name: string): boolean {
     const vis = visibility[name];
     if (!vis) return true;
-    if (vis.when && !testWhen(vis.when)) return false;
-    if (vis.whenAll && !vis.whenAll.every((c) => testWhen(c))) return false;
-    if (vis.whenAny && !vis.whenAny.some((c) => testWhen(c))) return false;
-    return true;
+    return matchesRule(evalValues, vis);
   }
 
   function filterVisibleValues(data: FormValues): FormValues {
@@ -382,23 +493,15 @@ export default function FormBuilder({
     return out;
   }
 
-  function validateConditionalRequired(data: FormValues): string | null {
-    if (data.species === "custom") {
-      const text = String(data.germline_set_text ?? "").trim();
-      if (!text) return "Custom germline set is required when species is 'custom'.";
-    }
-    if (data.enable_csr_analysis === true) {
-      const col = String(data.isotype_column ?? "").trim();
-      if (!col) return "Isotype/subclass column is required when CSR analysis is enabled.";
-    }
-    if (data.which_clones && data.ignore_clones) {
-      const which = String(data.which_clones ?? "").trim();
-      const ignore = String(data.ignore_clones ?? "").trim();
-      if (which && ignore) {
-        return "Restrict to clone IDs and Ignore clone IDs are mutually exclusive.";
-      }
-    }
-    return null;
+  function scrollToFirstError(errors: FieldErrors<FormValues>) {
+    const firstName = order.find((name) => Boolean(getNestedValue(errors, name)));
+    if (!firstName) return;
+    const wrapper = formRef.current?.querySelector<HTMLElement>(`[data-field="${firstName}"]`);
+    if (!wrapper) return;
+    wrapper.scrollIntoView({ behavior: "smooth", block: "center" });
+    wrapper
+      .querySelector<HTMLElement>("input, textarea, [role='combobox'], button")
+      ?.focus({ preventScroll: true });
   }
 
   const groupMap = useMemo(() => {
@@ -435,14 +538,15 @@ export default function FormBuilder({
     const enumValues = enumValuesFromSchema(def);
 
     return (
-      <div key={name} className="grid gap-2">
+      <div key={name} data-field={name} className="grid gap-2">
         <Label>{def?.title ?? name}</Label>
 
         <Controller
           name={name}
           control={control}
           defaultValue={getNestedValue(formDefaults, name)}
-          render={({ field }) => {
+          render={({ field, fieldState }) => {
+            const control = (() => {
             if (type === "boolean") {
               return (
                 <Switch checked={Boolean(field.value)} onCheckedChange={field.onChange} disabled={disabled} />
@@ -468,6 +572,7 @@ export default function FormBuilder({
                   ref={field.ref}
                   placeholder={placeholder}
                   disabled={disabled}
+                  aria-invalid={!!fieldState.error}
                 />
               );
             }
@@ -485,7 +590,7 @@ export default function FormBuilder({
                   }}
                   disabled={disabled}
                 >
-                  <SelectTrigger className="w-full">
+                  <SelectTrigger className="w-full" aria-invalid={!!fieldState.error}>
                     <SelectValue placeholder="Select" />
                   </SelectTrigger>
                   <SelectContent>
@@ -510,6 +615,7 @@ export default function FormBuilder({
                   disabled={disabled}
                   rows={2}
                   className="font-mono text-xs"
+                  aria-invalid={!!fieldState.error}
                 />
               );
             }
@@ -522,7 +628,17 @@ export default function FormBuilder({
                 ref={field.ref}
                 placeholder={placeholder}
                 disabled={disabled}
+                aria-invalid={!!fieldState.error}
               />
+            );
+            })();
+            return (
+              <>
+                {control}
+                {fieldState.error ? (
+                  <p className="text-destructive text-sm">{String(fieldState.error.message ?? "")}</p>
+                ) : null}
+              </>
             );
           }}
         />
@@ -532,28 +648,8 @@ export default function FormBuilder({
     );
   }
 
-  function GroupBox({ controller, childrenInOrder }: { controller: string; childrenInOrder: string[] }) {
-    const visibleChildren = childrenInOrder.filter((n) => isFieldVisible(n));
-    if (!visibleChildren.length) return null;
-
-    const title = fieldMap.get(controller)?.title ?? controller;
-    return (
-      <div className="col-span-full rounded-2xl border bg-card/30">
-        <div className="flex items-center justify-between px-4 py-2 border-b">
-          <div className="text-sm font-medium">{title}</div>
-          <div className="text-xs text-muted-foreground">Advanced</div>
-        </div>
-        <div className="p-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {visibleChildren.map((name) => renderField(name))}
-        </div>
-      </div>
-    );
-  }
-
   const basicFields = order.filter((name) => !groupedChildren.has(name));
   const hasSections = sectionGroups.length > 0;
-
-  const [submitError, setSubmitError] = useState<string | null>(null);
 
   function renderFieldsWithGroups(fields: string[]) {
     const fieldSet = new Set(fields);
@@ -572,9 +668,12 @@ export default function FormBuilder({
           const childrenInOrder = fields.filter((name) => groupMap.get(controller)?.includes(name));
           return (
             <GroupBox
-              key={`${controller}-${childrenInOrder.join("|")}`}
+              key={controller}
               controller={controller}
               childrenInOrder={childrenInOrder}
+              fieldMap={fieldMap}
+              isFieldVisible={isFieldVisible}
+              renderField={renderField}
             />
           );
         })}
@@ -609,23 +708,15 @@ export default function FormBuilder({
 
   return (
     <form
-      onSubmit={handleSubmit((data) => {
-        const visible = filterVisibleValues(data);
-        const conditionalErr = validateConditionalRequired(visible);
-        if (conditionalErr) {
-          setSubmitError(conditionalErr);
-          return;
-        }
-        setSubmitError(null);
-        onSubmit(visible);
-      })}
+      ref={formRef}
+      onSubmit={handleSubmit(
+        async (data) => {
+          await onSubmit(filterVisibleValues(data));
+        },
+        (errors) => scrollToFirstError(errors),
+      )}
       className={cn("grid gap-4 grid-cols-1 md:grid-cols-2 xl:grid-cols-3")}
     >
-      {submitError && (
-        <div className="col-span-full rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-          {submitError}
-        </div>
-      )}
       {hasSections ? (
         sectionGroups.map((group) => renderSection(group))
       ) : (
@@ -637,6 +728,9 @@ export default function FormBuilder({
               key={controller}
               controller={controller}
               childrenInOrder={order.filter((n) => groupMap.get(controller)?.includes(n))}
+              fieldMap={fieldMap}
+              isFieldVisible={isFieldVisible}
+              renderField={renderField}
             />
           ))}
         </>
@@ -646,7 +740,7 @@ export default function FormBuilder({
         <Button type="submit" disabled={disabled}>
           {formState.isSubmitting ? (
             <>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              <Spinner className="mr-2" />
               Running…
             </>
           ) : (
