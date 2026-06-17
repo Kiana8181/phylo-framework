@@ -32,8 +32,18 @@ function AuthPageContent() {
     else if (m === "login") setMode("login");
   }, [searchParams]);
 
+  useEffect(() => {
+    if (isLoading) return;
+    if (isAuthenticated) {
+      router.replace("/dashboard");
+    }
+  }, [isAuthenticated, isLoading, router]);
+
+  if (isLoading) {
+    return <Loading fullScreen label="Loading…" />;
+  }
+
   if (isAuthenticated) {
-    router.replace("/dashboard");
     return null;
   }
 
@@ -68,10 +78,6 @@ function AuthPageContent() {
       notify.error("Google sign-in", getApiErrorMessage(err, "Google sign-in is not configured"));
       setGoogleLoading(false);
     }
-  }
-
-  if (isLoading) {
-    return <Loading fullScreen label="Loading…" />;
   }
 
   return (
