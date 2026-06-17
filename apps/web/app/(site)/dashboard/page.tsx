@@ -1,9 +1,8 @@
 "use client";
 
-import ResultsSummary from "@/components/phylo/ResultsSummary";
+import ResultsView from "@/components/phylo/results/ResultsView";
 import RunErrorState from "@/components/phylo/RunErrorState";
 import RunProgress from "@/components/phylo/RunProgress";
-import TreesCarousel from "@/components/phylo/TreesCarousel";
 import RunWizard from "@/components/phylo/wizard/RunWizard";
 import RunParamsPanel from "@/components/runs/RunParamsPanel";
 import { Button } from "@/components/ui/button";
@@ -11,9 +10,8 @@ import { Card } from "@/components/ui/card";
 import { useContractSpec, useMethods } from "@/features/methods/hooks";
 import { RunsApi } from "@/features/runs/api";
 import { useRunResult, useRunStatus } from "@/features/runs/hooks";
-import { cleanNewick } from "@/lib/newick";
 import { formatRunDuration } from "@/lib/runDuration";
-import { readDowserResult, readTreeTipColorStats, readTreeTipSizeBy, type MethodInfo, type RunWarning } from "@phylo/contracts";
+import { type MethodInfo } from "@phylo/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { GitCompare } from "lucide-react";
 import Link from "next/link";
@@ -194,28 +192,6 @@ function DashboardPageContent() {
   const runFinishedAt = status?.finished_at ?? result?.finished_at ?? null;
   const runDurationLabel = formatRunDuration(runStartedAt, runFinishedAt);
 
-  const cloneRows = useMemo(
-    () =>
-      result?.clones?.clone_id?.map((id: string, i: number) => ({
-        id,
-        seqs: result?.clones?.seqs?.[i] ?? 0,
-      })) ?? [],
-    [result],
-  );
-
-  const { colorBy: svgColorBy, unknownValue: svgUnknown } = readTreeTipColorStats(result?.stats);
-  const svgTipSizeBy = readTreeTipSizeBy(result?.stats);
-  const dowserResult = useMemo(() => readDowserResult(result), [result]);
-  const showInternalNodesDefault = useMemo(() => {
-    const mode = (result?.stats as Record<string, unknown> | undefined)?.analysis_mode;
-    return mode === "tree_with_internal_sequences";
-  }, [result?.stats]);
-
-  const warnings = useMemo<RunWarning[]>(() => {
-    const runWarnings = result?.warnings;
-    return Array.isArray(runWarnings) ? runWarnings : [];
-  }, [result?.warnings]);
-
   return (
     <main className="mx-auto max-w-6xl w-full p-4 sm:p-6 space-y-6 sm:space-y-8">
       <header className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between sm:gap-4">
@@ -355,79 +331,7 @@ function DashboardPageContent() {
             </div>
           )}
 
-          <ResultsSummary
-            runId={runId}
-            stats={result?.stats}
-            cloneRows={cloneRows}
-            repertoireTable={result?.tables?.repertoire_two_levels_info}
-            analysis={result?.analysis}
-            diagnostics={result?.diagnostics}
-            dowserDta={dowserResult.dta}
-            dowserTimeEvolution={dowserResult.timeEvolution}
-            dowserInputQc={dowserResult.inputQc}
-            dowserChainQc={dowserResult.chainQc}
-          />
-
-          {warnings.length > 0 && (
-            <div className="rounded border p-3 bg-yellow-50 text-yellow-900 dark:bg-yellow-950/30 dark:text-yellow-200 text-sm space-y-1">
-              {warnings.map((warning, idx) => {
-                if (typeof warning === "string") {
-                  return <div key={`warn-${idx}`}>• {warning}</div>;
-                }
-                const code = String(warning.code ?? "").trim();
-                const msg = String(warning.message ?? "").trim();
-                const treeId = String(warning.treeId ?? "").trim();
-                const prefix = code ? `[${code}] ` : "";
-                const suffix = treeId ? ` (tree: ${treeId})` : "";
-                return (
-                  <div key={`warn-${idx}`}>
-                    • {prefix}
-                    {msg || "Warning"}
-                    {suffix}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          <TreesCarousel
-            runId={runId}
-            trees={result.trees ?? []}
-            cleanNewick={cleanNewick}
-            colorBy={svgColorBy}
-            unknownValue={svgUnknown}
-            tipSizeBy={svgTipSizeBy}
-            showInternalNodesDefault={showInternalNodesDefault}
-          />
-
-          {Array.isArray(result.logs) && result.logs.length > 0 && (
-            <details className="rounded border p-3 bg-card/50">
-              <summary className="cursor-pointer text-sm font-medium">Show model logs</summary>
-              <div className="mt-2 max-h-64 overflow-y-auto space-y-3 text-xs font-mono">
-                {result.logs.map((log, index) => (
-                  <div key={`log-${index}`} className="border-b last:border-0 pb-2 last:pb-0">
-                    <div className="flex justify-between gap-2 text-[11px]">
-                      <span className="font-semibold">{log.step || `Step ${index + 1}`}</span>
-                      {typeof log.ok === "boolean" && (
-                        <span className={log.ok ? "text-emerald-500" : "text-red-500"}>
-                          {log.ok ? "OK" : "FAIL"}
-                        </span>
-                      )}
-                    </div>
-
-                    {log.cmd && (
-                      <div className="mt-1 text-[11px] text-muted-foreground">
-                        <span className="font-semibold">cmd: </span>
-                        <code className="break-all">{log.cmd}</code>
-                      </div>
-                    )}
-
-                    {log.out && <pre className="mt-1 whitespace-pre-wrap">{log.out}</pre>}
-                  </div>
-                ))}
-              </div>
-            </details>
-          )}
+          <ResultsView runId={runId} methodId={runMethodKey} result={result} />
         </section>
       )}
     </main>
