@@ -1,6 +1,7 @@
 node_modules/
 .venv
 .cursor
+.claude
 __pycache__
 dist/
 build/
