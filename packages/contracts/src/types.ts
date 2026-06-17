@@ -1,4 +1,15 @@
-export type MethodInfo = { id: string; name: string; version: string };
+export type MethodInfo = {
+  id: string;
+  name: string;
+  version: string;
+  tagline?: string;
+  category?: string;
+  summary?: string;
+  capabilities?: string[];
+  inputFormats?: string[];
+  externalDocUrl?: string;
+  externalDocLabel?: string;
+};
 
 export type MethodSpec = {
   id: string;

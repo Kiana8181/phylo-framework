@@ -11,12 +11,23 @@ def _read_json(p: Path) -> Any:
     with p.open("r", encoding="utf-8") as f:
         return json.load(f)
 
-def list_methods_from_contracts() -> List[Dict[str, str]]:
+_METHOD_INFO_OPTIONAL_FIELDS = (
+    "tagline",
+    "category",
+    "summary",
+    "capabilities",
+    "inputFormats",
+    "externalDocUrl",
+    "externalDocLabel",
+)
+
+
+def list_methods_from_contracts() -> List[Dict[str, Any]]:
     """
     Build MethodInfo[] by scanning packages/contracts/methods/* directories.
     If spec.json exists, use its name/version. Otherwise infer reasonable defaults.
     """
-    infos: List[Dict[str, str]] = []
+    infos: List[Dict[str, Any]] = []
     if not METHODS_DIR.exists():
         return infos
 
@@ -26,6 +37,7 @@ def list_methods_from_contracts() -> List[Dict[str, str]]:
         method_id = d.name
         name = method_id.capitalize()
         version = "0.1.0"
+        extras: Dict[str, Any] = {}
 
         spec_json = d / "spec.json"
         if spec_json.exists():
@@ -33,11 +45,14 @@ def list_methods_from_contracts() -> List[Dict[str, str]]:
                 spec = _read_json(spec_json)
                 name = spec.get("name", name)
                 version = spec.get("version", version)
+                for key in _METHOD_INFO_OPTIONAL_FIELDS:
+                    if key in spec and spec[key] is not None:
+                        extras[key] = spec[key]
             except Exception:
                 # Do not crash—fallback to inferred
                 pass
 
-        infos.append({"id": method_id, "name": name, "version": version})
+        infos.append({"id": method_id, "name": name, "version": version, **extras})
     return infos
 
 def get_param_schema(method_id: str) -> Dict[str, Any] | None:
