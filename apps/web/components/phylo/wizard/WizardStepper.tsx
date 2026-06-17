@@ -21,13 +21,13 @@ export default function WizardStepper({
   onStepClick?: (step: WizardStepIndex) => void;
 }) {
   return (
-    <ol className="flex items-center gap-2 sm:gap-3">
+    <ol className="flex items-center justify-center gap-2 sm:gap-3">
       {STEPS.map((step, i) => {
         const done = step.index < current;
         const active = step.index === current;
         const clickable = done && !!onStepClick;
         return (
-          <li key={step.index} className="flex flex-1 items-center gap-2 sm:gap-3">
+          <li key={step.index} className="flex items-center gap-2 sm:gap-3">
             <button
               type="button"
               disabled={!clickable}
@@ -60,7 +60,7 @@ export default function WizardStepper({
             {i < STEPS.length - 1 && (
               <span
                 className={cn(
-                  "h-px flex-1 transition",
+                  "h-px w-6 shrink-0 transition sm:w-10",
                   step.index < current ? "bg-primary" : "bg-border",
                 )}
               />
