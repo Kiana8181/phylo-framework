@@ -11,6 +11,7 @@ import { Loading } from "@/components/ui/loading";
 import { useAuth } from "@/features/auth/context";
 import { authApi } from "@/features/auth/api";
 import { notify } from "@/lib/notify";
+import { getApiErrorMessage } from "@/lib/http/errors";
 
 type Mode = "login" | "signup";
 
@@ -49,14 +50,10 @@ function AuthPageContent() {
       }
       router.replace("/dashboard");
     } catch (err: unknown) {
-      const data = (err as { response?: { data?: unknown } })?.response?.data;
-      const message =
-        (typeof data === "object" && data !== null && "detail" in data)
-          ? String((data as { detail: unknown }).detail)
-          : err instanceof Error
-            ? err.message
-            : "Something went wrong";
-      notify.error(mode === "login" ? "Log in failed" : "Sign up failed", message);
+      notify.error(
+        mode === "login" ? "Log in failed" : "Sign up failed",
+        getApiErrorMessage(err)
+      );
     } finally {
       setSubmitting(false);
     }
@@ -68,12 +65,7 @@ function AuthPageContent() {
       const { auth_url } = await authApi.getGoogleAuthUrl();
       window.location.href = auth_url;
     } catch (err: unknown) {
-      const data = (err as { response?: { data?: unknown } })?.response?.data;
-      const message =
-        (typeof data === "object" && data !== null && "detail" in data)
-          ? String((data as { detail: unknown }).detail)
-          : "Google sign-in is not configured";
-      notify.error("Google sign-in", message);
+      notify.error("Google sign-in", getApiErrorMessage(err, "Google sign-in is not configured"));
       setGoogleLoading(false);
     }
   }
