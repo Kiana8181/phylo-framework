@@ -1,78 +1,219 @@
 {
   "type": "object",
   "properties": {
-    "tree_model": {
-      "type": "string",
-      "enum": ["mp", "ml", "igphyml"],
-      "default": "mp",
-      "title": "Model"
+    "doMapping": {
+      "type": "boolean",
+      "default": false,
+      "title": "Enable input column mapping",
+      "description": "When true, map uploaded table headers to canonical Dowser AIRR keys before running."
     },
+    "column_map": {
+      "type": "object",
+      "title": "Input Column Mapping",
+      "description": "Map canonical Dowser AIRR keys to your uploaded table column names. Applied during API prepare before the R service runs.",
+      "properties": {
+        "sequence_id": {
+          "type": "string",
+          "title": "Sequence ID column",
+          "default": ""
+        },
+        "clone_id": {
+          "type": "string",
+          "title": "Clone ID column",
+          "default": ""
+        },
+        "sequence_alignment": {
+          "type": "string",
+          "title": "Aligned sequence column",
+          "default": ""
+        },
+        "germline_alignment_d_mask": {
+          "type": "string",
+          "title": "Germline alignment column",
+          "default": ""
+        },
+        "v_call": {
+          "type": "string",
+          "title": "V call column",
+          "default": ""
+        },
+        "j_call": {
+          "type": "string",
+          "title": "J call column",
+          "default": ""
+        },
+        "junction_length": {
+          "type": "string",
+          "title": "Junction length column",
+          "default": ""
+        },
+        "junction": {
+          "type": "string",
+          "title": "Junction column (optional if junction_length mapped)",
+          "default": ""
+        },
+        "cell_id": {
+          "type": "string",
+          "title": "Cell ID column (paired H/L)",
+          "default": ""
+        },
+        "locus": {
+          "type": "string",
+          "title": "Locus column (paired H/L)",
+          "default": ""
+        },
+        "v_region_start": {
+          "type": "string",
+          "title": "V region start column",
+          "default": ""
+        },
+        "v_region_end": {
+          "type": "string",
+          "title": "V region end column",
+          "default": ""
+        },
+        "j_region_start": {
+          "type": "string",
+          "title": "J region start column",
+          "default": ""
+        },
+        "j_region_end": {
+          "type": "string",
+          "title": "J region end column",
+          "default": ""
+        }
+      }
+    },
+
+    "analysis_mode": {
+      "type": "string",
+      "enum": ["tree_only", "tree_with_internal_sequences", "discrete_trait_analysis", "time_evolution"],
+      "default": "tree_only",
+      "title": "Analysis mode"
+    },
+    "tree_build": {
+      "type": "string",
+      "enum": ["pratchet", "pml", "dnapars", "dnaml", "igphyml", "raxml"],
+      "default": "pratchet",
+      "title": "Tree build method"
+    },
+
     "minseq": { "type": "integer", "default": 3, "title": "Min seq/clone" },
     "nproc": { "type": "integer", "default": 1, "title": "Threads" },
+    "collapse_identical_sequences": {
+      "type": "boolean",
+      "default": true,
+      "title": "Collapse identical sequences"
+    },
+    "collapse_internal_nodes": { "type": "boolean", "default": true, "title": "Collapse internal nodes" },
+    "check_divergence": { "type": "boolean", "default": true, "title": "Check divergence" },
+    "mod3": {
+      "type": "boolean",
+      "default": false,
+      "title": "Pad to codon length (formatClones)",
+      "description": "When true, Dowser formatClones pads sequence ends to make lengths multiples of three. Default false in this framework to avoid changing sequence lengths unless requested."
+    },
+    "filterstop": {
+      "type": "boolean",
+      "default": false,
+      "title": "Remove stop-codon sequences (formatClones)",
+      "description": "When true, Dowser formatClones removes sequences with in-frame stop codons. Default false in this framework to avoid silent sequence removal."
+    },
+    "use_regions": {
+      "type": "boolean",
+      "default": false,
+      "title": "Use region columns (formatClones)",
+      "description": "When true, Dowser formatClones assigns CDR/FWR regions. Requires region start/end columns in the input."
+    },
 
     "label_field": {
       "type": "string",
-      "default": "",
-      "title": "Tip label column (empty = sequence_id)"
+      "default": "sequence_id",
+      "title": "Tip label column (display only)",
+      "description": "Display labels only; canonical Newick always uses sequence_id."
     },
-    "tip_color_by": {
+    "tip_color_by": { "type": "string", "default": "", "title": "Color tips by (column)" },
+    "annotation_fields": { "type": "string", "default": "", "title": "Extra annotation columns" },
+    "numeric_annotation_fields": { "type": "string", "default": "", "title": "Numeric annotation columns" },
+    "columns": { "type": "string", "default": "", "title": "Additional columns to retain" },
+    "unknown_value": { "type": "string", "default": "unknown", "title": "Unknown fill (plotting only)" },
+    "tipsize": { "type": "number", "default": 2, "title": "Tip size (constant)" },
+    "tip_size_by": {
       "type": "string",
       "default": "",
-      "title": "Color tips by (column)"
+      "title": "Scale tip size by (column)",
+      "description": "Numeric metadata column for variable tip sizes in Method Output PNG (e.g. duplicate_count). Overrides constant tipsize when the column is present after formatClones."
     },
-    "annotation_fields": {
-      "type": "string",
-      "title": "Extra annotation columns",
-      "default": ""
-    },
-    "unknown_value": {
-      "type": "string",
-      "default": "unknown",
-      "title": "Unknown fill"
-    },
-    "tipsize": { "type": "number", "default": 2, "title": "Tip size" },
+    "max_tip_categories": { "type": "integer", "default": 30, "title": "Max tip categories" },
 
-    "apply_filters": {
+    "return_internal_sequences": {
       "type": "boolean",
       "default": false,
-      "title": "Apply filters"
+      "title": "Return internal sequences"
     },
-    "uppercase": {
+    "show_node_numbers": { "type": "boolean", "default": false, "title": "Show node numbers in plot" },
+    "export_all_sequences_fasta": {
       "type": "boolean",
       "default": false,
-      "title": "Uppercase sequences"
-    },
-    "len_policy": {
-      "type": "string",
-      "enum": ["ignore", "drop_seqs", "drop_clone", "error"],
-      "default": "ignore",
-      "title": "Unequal length policy"
-    },
-    "gap_policy": {
-      "type": "string",
-      "enum": ["keep", "remove", "replace_N", "replace_NNN", "drop_row"],
-      "default": "keep",
-      "title": "Gap policy"
-    },
-    "noniupac_policy": {
-      "type": "string",
-      "enum": ["keep", "replace_N", "drop_row"],
-      "default": "keep",
-      "title": "Non-IUPAC policy"
+      "title": "Export all sequences FASTA"
     },
 
-    "ig_stop_policy": {
+    "trait_field": { "type": "string", "default": "", "title": "Trait field (DTA)" },
+    "trait_fields": {
       "type": "string",
-      "enum": ["drop_seqs", "fallback_ml", "error"],
-      "default": "drop_seqs",
-      "title": "IgPhyML stop-codon policy"
+      "default": "",
+      "title": "Trait columns to preserve (advanced)",
+      "description": "Optional comma- or space-separated columns passed to Dowser formatClones as traits, so identical sequences with different trait values are not collapsed together. In DTA mode, leave empty to use Trait field (DTA)."
+    },
+    "trait_model": {
+      "type": "string",
+      "enum": ["unconstrained", "isotype_irreversible"],
+      "default": "unconstrained",
+      "title": "Trait model"
+    },
+    "permutations": { "type": "integer", "default": 100, "title": "DTA permutations" },
+    "tip_switch": { "type": "integer", "default": 20, "title": "Tip switch threshold" },
+    "permute_all": { "type": "boolean", "default": false, "title": "Permute all" },
+    "alternative": {
+      "type": "string",
+      "enum": ["greater", "less", "two.sided"],
+      "default": "greater",
+      "title": "SP test alternative"
+    },
+    "run_test_ps": { "type": "boolean", "default": true, "title": "Run testPS" },
+    "run_test_sp": { "type": "boolean", "default": true, "title": "Run testSP" },
+    "run_test_sc": { "type": "boolean", "default": true, "title": "Run testSC" },
+    "isotype_order": { "type": "string", "default": "", "title": "Isotype order (CSR)" },
+    "isotype_exceptions": { "type": "string", "default": "IGHD,IGHM", "title": "Isotype exceptions" },
+
+    "partition_model": {
+      "type": "string",
+      "enum": ["single", "cf", "hl", "hlf", "hlc", "hlcf"],
+      "default": "single",
+      "title": "IgPhyML partition model"
+    },
+    "return_igphyml_parameters": { "type": "boolean", "default": true, "title": "Return IgPhyML parameters" },
+    "modelfile": {
+      "type": "string",
+      "default": "",
+      "title": "Custom trait model file",
+      "description": "Paste Dowser parsimony model-file content."
     },
 
-    "max_tip_categories": {
-      "type": "integer",
-      "default": 30,
-      "title": "Max tip categories"
-    }
+    "chain_mode": {
+      "type": "string",
+      "enum": ["H", "HL"],
+      "default": "H",
+      "title": "Chain mode"
+    },
+    "heavy_locus": { "type": "string", "default": "IGH", "title": "Heavy locus" },
+    "split_light": { "type": "boolean", "default": false, "title": "Split light chains" },
+    "light_traits": { "type": "boolean", "default": false, "title": "Light chain traits" },
+    "majoronly": { "type": "boolean", "default": false, "title": "Major light chain only" },
+
+    "time_field": { "type": "string", "default": "", "title": "Time field" },
+    "time_permutations": { "type": "integer", "default": 100, "title": "Time evolution permutations" },
+    "time_as_numeric": { "type": "boolean", "default": true, "title": "Parse time as numeric" }
   },
-  "required": ["tree_model"]
+  "required": ["tree_build"]
 }

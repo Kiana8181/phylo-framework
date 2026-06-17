@@ -2,36 +2,37 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Card } from "@/components/ui/card";
-import TreeSVG from "@/components/TreeSVG";
-import LineageSVG from "@/components/LineageSVG";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, Maximize2, Settings2 } from "lucide-react";
 import { RunsApi } from "@/features/runs/api";
-import type {
-  FigurePayload,
-  LineagePlot,
-  RunTree,
-  RunTreePayload,
-  TreeServiceImage,
+import {
+  type LineagePlot,
+  type RunTree,
+  type RunTreePayload,
 } from "@phylo/contracts";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
+import { Button } from "@/components/ui/button";
+import TreeSettingsPanel from "@/components/phylo/tree/TreeSettingsPanel";
+import TreeViewport from "@/components/phylo/tree/TreeViewport";
+import TreeOverlay from "@/components/phylo/tree/TreeOverlay";
+
+const VIEW_LABELS: Record<"method" | "phylogeny" | "lineage", string> = {
+  method: "Method output",
+  phylogeny: "Phylogenetic tree",
+  lineage: "Lineage tree",
+};
+
+const TIP_SIZE_FIELD = "abundance";
 
 type TreesCarouselProps = {
   runId?: string | null;
   trees: Array<RunTree | string>;
-  figures?: FigurePayload;
-  annotations?: Array<Array<Record<string, any>> | null>;
   cleanNewick: (s: string) => string;
   colorBy?: string;
   unknownValue?: string;
+  showInternalNodesDefault?: boolean;
 };
 
-type TreeImage = {
-  mime: string;
-  base64: string;
-};
-
-type TreeVM = {
+export type TreeVM = {
   id: string;
   cloneId?: string;
   phylogenyNewick: string;
@@ -39,51 +40,21 @@ type TreeVM = {
   hasLineagePlot: boolean;
   loadError?: string;
   isLoading?: boolean;
-  serviceImage?: TreeImage;
+  /** Artifact id of the method-rendered image, served via the preview endpoint. */
+  imageArtifactId?: string | null;
   nodeAttributes?: Record<string, Record<string, any>>;
   lineagePlot?: LineagePlot;
 };
-
-function toImagePayload(raw?: string | null): TreeImage | undefined {
-  if (!raw) return undefined;
-  const txt = String(raw).trim();
-  if (!txt) return undefined;
-  const m = txt.match(/^data:([^;]+);base64,(.+)$/i);
-  if (m) return { mime: m[1], base64: m[2] };
-  return { mime: "image/png", base64: txt };
-}
-
-function fromServiceImage(raw?: TreeServiceImage | null): TreeImage | undefined {
-  if (!raw?.base64) return undefined;
-  return { mime: raw.mime || "image/png", base64: raw.base64 };
-}
-
-function buildAnnoMapFromRows(rows?: Array<Record<string, any>> | null): Record<string, Record<string, any>> {
-  const out: Record<string, Record<string, any>> = {};
-  if (!Array.isArray(rows)) return out;
-  for (const row of rows) {
-    const label = String(row?.label ?? "").trim();
-    if (!label) continue;
-    const item = { ...row };
-    delete item.label;
-    out[label] = item;
-  }
-  return out;
-}
 
 function treeIdFor(tree: RunTree | string, index: number): string {
   if (typeof tree === "string") return `tree-${index + 1}`;
   return tree.id || `tree-${index + 1}`;
 }
 
-function hasEmbeddedPayload(tree: RunTree): boolean {
-  return Boolean(
-    tree.lineage_plot ||
-      tree.node_attributes ||
-      tree.label_to_sequence_id ||
-      tree.visualizations?.service_image
-  );
-}
+// Per-tree heavyweight payloads (newick, node_attributes, lineage_plot,
+// image_artifact_id) live in run_trees and are fetched on demand via
+// RunsApi.tree. The slim result.trees entries don't carry them, so we no
+// longer short-circuit the per-tree fetch on "embedded" hints.
 
 function treeLabel(treeIdx: number, cloneId?: string): string {
   const cloneText = String(cloneId ?? "").trim();
@@ -94,20 +65,23 @@ function treeLabel(treeIdx: number, cloneId?: string): string {
 export default function TreesCarousel({
   runId,
   trees,
-  figures,
-  annotations,
   cleanNewick,
   colorBy,
   unknownValue,
+  showInternalNodesDefault = false,
 }: TreesCarouselProps) {
   const total = trees?.length ?? 0;
   const [idx, setIdx] = useState(0);
   const [activeTab, setActiveTab] = useState<"method" | "phylogeny" | "lineage">("phylogeny");
   const [showLabels, setShowLabels] = useState(true);
+  const [showInternalNodes, setShowInternalNodes] = useState(showInternalNodesDefault);
+  const [showNodeNumbers, setShowNodeNumbers] = useState(showInternalNodesDefault);
   const [displayIdField, setDisplayIdField] = useState<string>("sequence_id");
   const [treeCache, setTreeCache] = useState<Record<string, RunTreePayload>>({});
   const [loadingTreeId, setLoadingTreeId] = useState<string | null>(null);
   const [treeLoadErrors, setTreeLoadErrors] = useState<Record<string, string>>({});
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [expandOpen, setExpandOpen] = useState(false);
 
   const canPrev = idx > 0;
   const canNext = idx < Math.max(0, total - 1);
@@ -130,8 +104,11 @@ export default function TreesCarousel({
     if (!runId || !currentRawTree || typeof currentRawTree === "string") return;
     const treeId = treeIdFor(currentRawTree, idx);
     if (!treeId) return;
-    if (treeCache[treeId]) return;
-    if (hasEmbeddedPayload(currentRawTree)) return;
+    // Use `in` rather than a truthiness check: a falsy-but-cached payload
+    // (e.g. null) must still short-circuit, otherwise the effect would
+    // refetch forever (each refetch creates a new treeCache reference,
+    // re-triggering this effect via its dependency array).
+    if (treeId in treeCache) return;
 
     let cancelled = false;
     setLoadingTreeId(treeId);
@@ -145,6 +122,10 @@ export default function TreesCarousel({
     RunsApi.tree(runId, treeId)
       .then((payload) => {
         if (cancelled) return;
+        if (!payload) {
+          setTreeLoadErrors((prev) => ({ ...prev, [treeId]: "Failed to load tree data." }));
+          return;
+        }
         setTreeCache((prev) => ({ ...prev, [treeId]: payload }));
       })
       .catch((err: any) => {
@@ -167,48 +148,41 @@ export default function TreesCarousel({
     };
   }, [currentRawTree, idx, runId, treeCache]);
 
-  const viewTrees = useMemo<TreeVM[]>(() => {
-    return (trees ?? []).map((t, i) => {
-      if (typeof t === "string") {
-        const figureImage = toImagePayload(figures?.phylogeny?.[i]);
-        return {
-          id: `tree-${i + 1}`,
-          cloneId: undefined,
-          phylogenyNewick: cleanNewick(t),
-          hasServiceImage: Boolean(figureImage?.base64),
-          hasLineagePlot: false,
-          isLoading: false,
-          loadError: undefined,
-          serviceImage: figureImage,
-          nodeAttributes: buildAnnoMapFromRows(annotations?.[i]),
-        };
-      }
+  useEffect(() => {
+    setShowInternalNodes(showInternalNodesDefault);
+    setShowNodeNumbers(showInternalNodesDefault);
+  }, [runId, showInternalNodesDefault]);
 
+  const viewTrees = useMemo<TreeVM[]>(() => {
+    // Per-tree heavyweight data (newick, node_attributes, lineage_plot,
+    // image_artifact_id) is sourced exclusively from RunsApi.tree, cached in
+    // treeCache. The slim result.trees array only provides the tree id and
+    // clone id; the only fallback is when the active tree's payload hasn't
+    // arrived yet, in which case the view shows a loading state.
+    return (trees ?? []).map((t, i) => {
       const treeId = treeIdFor(t, i);
       const payload = treeCache[treeId];
-      const svcImage =
-        fromServiceImage(payload?.service_image) ??
-        fromServiceImage(t.visualizations?.service_image) ??
-        toImagePayload(figures?.phylogeny?.[i]);
-      const attrs =
-        payload?.node_attributes ??
-        t.node_attributes ??
-        buildAnnoMapFromRows(annotations?.[i]);
-      const lineagePlot = (payload?.lineage_plot ?? t.lineage_plot) as LineagePlot | undefined;
+      const lineagePlot = payload?.lineage_plot as LineagePlot | undefined;
+      const imageArtifactId = payload?.image_artifact_id ?? null;
+      const cloneId =
+        typeof t !== "string" && typeof t.clone_id === "string" ? t.clone_id : undefined;
+      const phylogenyNewick = payload?.newick
+        ? cleanNewick(payload.original_newick || payload.newick || "")
+        : "";
       return {
         id: treeId,
-        cloneId: typeof t.clone_id === "string" ? t.clone_id : undefined,
-        phylogenyNewick: cleanNewick(t.original_newick || t.newick || ""),
-        hasServiceImage: Boolean(t.has_service_image || svcImage?.base64),
-        hasLineagePlot: Boolean(t.has_lineage_plot || lineagePlot),
+        cloneId,
+        phylogenyNewick,
+        hasServiceImage: Boolean(imageArtifactId),
+        hasLineagePlot: Boolean(lineagePlot),
         isLoading: loadingTreeId === treeId,
         loadError: treeLoadErrors[treeId],
-        serviceImage: svcImage,
-        nodeAttributes: attrs,
+        imageArtifactId,
+        nodeAttributes: payload?.node_attributes ?? {},
         lineagePlot,
       };
     });
-  }, [annotations, cleanNewick, figures?.phylogeny, loadingTreeId, treeCache, treeLoadErrors, trees]);
+  }, [cleanNewick, loadingTreeId, treeCache, treeLoadErrors, trees]);
 
   const current = viewTrees[idx];
   const isRenderableTreeTab = activeTab === "phylogeny" || activeTab === "lineage";
@@ -229,7 +203,7 @@ export default function TreesCarousel({
     if (!tabs.includes(activeTab)) setActiveTab(tabs[0]);
   }, [activeTab, tabs]);
 
-  const phyloAnnotations = useMemo(() => {
+  const phyloAnnotations = useMemo((): Array<{ label: string } & Record<string, any>> => {
     if (!current?.nodeAttributes) return [];
     return Object.entries(current.nodeAttributes).map(([label, attrs]) => ({
       label,
@@ -247,17 +221,39 @@ export default function TreesCarousel({
         keySet.add(key);
       }
     }
+    for (const row of phyloAnnotations) {
+      for (const [key, value] of Object.entries(row)) {
+        if (["label", "final_tip_label"].includes(key)) continue;
+        if (value != null && value !== "") keySet.add(key);
+      }
+    }
     const options = Array.from(keySet).sort((a, b) => a.localeCompare(b, "en"));
     if (options.includes("sequence_id")) {
       return ["sequence_id", ...options.filter((k) => k !== "sequence_id")];
     }
     return options;
-  }, [current?.nodeAttributes]);
+  }, [current?.nodeAttributes, phyloAnnotations]);
 
   useEffect(() => {
     if (!displayFields.length) return;
     if (!displayFields.includes(displayIdField)) setDisplayIdField(displayFields[0]);
   }, [displayFields, displayIdField]);
+
+  const viewportProps = {
+    activeTab,
+    current,
+    idx,
+    phyloAnnotations,
+    colorBy,
+    unknownValue,
+    displayIdField,
+    showLabels,
+    showInternalNodes,
+    showNodeNumbers,
+    sizeByField: TIP_SIZE_FIELD,
+    lineageDownloadName,
+    lineageNewick,
+  };
 
   if (!total) {
     return (
@@ -268,27 +264,65 @@ export default function TreesCarousel({
   }
 
   return (
-    <Card className="p-4 space-y-3">
-      <div className="flex items-center justify-between">
-        <h4 className="font-medium">Trees</h4>
-        <div className="text-xs text-muted-foreground">
-          {idx + 1} / {total}
-        </div>
-      </div>
+    <Card className="relative overflow-hidden p-4 space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b pb-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {total > 1 && (
+            <Select value={String(idx)} onValueChange={(v) => setIdx(Number(v))}>
+              <SelectTrigger className="w-[200px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {viewTrees.map((tree, treeIdx) => (
+                  <SelectItem key={tree.id} value={String(treeIdx)}>
+                    {treeLabel(treeIdx, tree.cloneId)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
 
-      <div className="overflow-x-auto">
-        <div className="flex min-w-max items-center gap-2">
-          {viewTrees.map((tree, treeIdx) => (
-            <button
-              key={tree.id}
-              className={`rounded border px-3 py-1 text-xs ${
-                treeIdx === idx ? "bg-muted font-medium" : "bg-transparent"
-              }`}
-              onClick={() => setIdx(treeIdx)}
+          {tabs.length > 0 && (
+            <Select value={activeTab} onValueChange={(v) => setActiveTab(v as typeof activeTab)}>
+              <SelectTrigger className="w-[190px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {tabs.map((tab) => (
+                  <SelectItem key={tab} value={tab}>
+                    {VIEW_LABELS[tab]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2">
+          {tabs.length > 0 && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              onClick={() => setExpandOpen(true)}
             >
-              {treeLabel(treeIdx, tree.cloneId)}
-            </button>
-          ))}
+              <Maximize2 className="size-4" />
+              Expand
+            </Button>
+          )}
+          {isRenderableTreeTab && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              onClick={() => setSettingsOpen(true)}
+            >
+              <Settings2 className="size-4" />
+              Settings
+            </Button>
+          )}
         </div>
       </div>
 
@@ -302,100 +336,7 @@ export default function TreesCarousel({
         </button>
 
         <div className="flex-1 overflow-auto space-y-3">
-          {tabs.length > 0 && (
-            <div className="flex items-center gap-2 border-b pb-2">
-              {tabs.map((tab) => (
-                <button
-                  key={tab}
-                  className={`rounded px-3 py-1.5 text-sm border ${
-                    activeTab === tab ? "bg-muted font-medium" : "bg-transparent"
-                  }`}
-                  onClick={() => setActiveTab(tab)}
-                >
-                  {tab === "method" && "Method Output"}
-                  {tab === "phylogeny" && "Phylogeny"}
-                  {tab === "lineage" && "Lineage"}
-                </button>
-              ))}
-
-              {isRenderableTreeTab && (
-                <div className="ml-auto flex items-center gap-4">
-                  <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <span>Show labels</span>
-                    <Switch checked={showLabels} onCheckedChange={setShowLabels} aria-label="Show labels" />
-                  </label>
-
-                  {displayFields.length > 0 && (
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-muted-foreground">Display ID</span>
-                      <Select value={displayIdField} onValueChange={setDisplayIdField}>
-                        <SelectTrigger className="w-[180px]">
-                          <SelectValue placeholder="Display field" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {displayFields.map((f) => (
-                            <SelectItem key={f} value={f}>
-                              {f}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-
-          {activeTab === "method" && current?.serviceImage?.base64 && (
-            <div className="overflow-hidden rounded border bg-white">
-              <img
-                src={`data:${current.serviceImage.mime};base64,${current.serviceImage.base64}`}
-                alt={`Method output tree ${idx + 1}`}
-                className="w-full h-auto mx-auto"
-              />
-            </div>
-          )}
-          {activeTab === "method" && !current?.serviceImage?.base64 && current?.isLoading && (
-            <div className="rounded border p-4 text-sm text-muted-foreground">Loading tree image...</div>
-          )}
-          {activeTab === "method" && !current?.serviceImage?.base64 && !current?.isLoading && current?.loadError && (
-            <div className="rounded border p-4 text-sm text-red-600">{current.loadError}</div>
-          )}
-          {activeTab === "method" && !current?.serviceImage?.base64 && !current?.isLoading && !current?.loadError && (
-            <div className="rounded border p-4 text-sm text-muted-foreground">No method output available.</div>
-          )}
-
-          {activeTab === "phylogeny" && current?.phylogenyNewick && (
-            <TreeSVG
-              newick={current.phylogenyNewick}
-              annotations={phyloAnnotations}
-              showLabels={showLabels}
-              colorBy={colorBy}
-              unknownValue={unknownValue}
-              displayIdField={displayIdField || undefined}
-            />
-          )}
-
-          {activeTab === "lineage" && current?.lineagePlot && (
-            <LineageSVG
-              lineagePlot={current.lineagePlot}
-              nodeAttributes={current.nodeAttributes}
-              displayIdField={displayIdField || undefined}
-              showLabels={showLabels}
-              filename={lineageDownloadName}
-              newickText={lineageNewick}
-            />
-          )}
-          {activeTab === "lineage" && !current?.lineagePlot && current?.isLoading && (
-            <div className="rounded border p-4 text-sm text-muted-foreground">Loading lineage plot...</div>
-          )}
-          {activeTab === "lineage" && !current?.lineagePlot && !current?.isLoading && current?.loadError && (
-            <div className="rounded border p-4 text-sm text-red-600">{current.loadError}</div>
-          )}
-          {activeTab === "lineage" && !current?.lineagePlot && !current?.isLoading && !current?.loadError && (
-            <div className="rounded border p-4 text-sm text-muted-foreground">No lineage plot available.</div>
-          )}
+          <TreeViewport {...viewportProps} />
         </div>
 
         <button
@@ -406,6 +347,30 @@ export default function TreesCarousel({
           Next <ChevronRight className="w-4 h-4" />
         </button>
       </div>
+
+      <TreeSettingsPanel
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        showLabels={showLabels}
+        setShowLabels={setShowLabels}
+        showInternalControls={Boolean(current?.hasLineagePlot || showInternalNodesDefault)}
+        showInternalNodes={showInternalNodes}
+        setShowInternalNodes={setShowInternalNodes}
+        showNodeNumbers={showNodeNumbers}
+        setShowNodeNumbers={setShowNodeNumbers}
+        displayFields={displayFields}
+        displayIdField={displayIdField}
+        setDisplayIdField={setDisplayIdField}
+      />
+
+      <TreeOverlay
+        open={expandOpen}
+        onClose={() => setExpandOpen(false)}
+        size="full"
+        title={`${VIEW_LABELS[activeTab]} — ${treeLabel(idx, current?.cloneId)}`}
+      >
+        <TreeViewport {...viewportProps} viewportHeight="78vh" />
+      </TreeOverlay>
     </Card>
   );
 }

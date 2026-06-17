@@ -2,38 +2,280 @@
   "requiresFile": true,
   "maxFiles": 1,
   "uploadGuidance": [
-    "Dowser accepts TSV, CSV, RDA, and RDS.",
-    "If you want to compare across methods, upload a format accepted by all desired methods."
+    "Dowser requires aligned AIRR/Change-O clone tables (TSV, CSV, RDS, RDA).",
+    "Raw FASTA must be processed by AIRR/Change-O/IgBLAST/IMGT before Dowser.",
+    "If your column names differ from standard AIRR keys, enable Input Mapping and map each field once — the R service always uses canonical names."
   ],
   "order": [
-    "tree_model",
+    "doMapping",
+    "column_map.sequence_id",
+    "column_map.clone_id",
+    "column_map.sequence_alignment",
+    "column_map.germline_alignment_d_mask",
+    "column_map.v_call",
+    "column_map.j_call",
+    "column_map.junction_length",
+    "column_map.junction",
+    "column_map.cell_id",
+    "column_map.locus",
+    "column_map.v_region_start",
+    "column_map.v_region_end",
+    "column_map.j_region_start",
+    "column_map.j_region_end",
+
+    "analysis_mode",
+    "tree_build",
     "minseq",
     "nproc",
+    "collapse_identical_sequences",
+    "trait_fields",
+    "mod3",
+    "filterstop",
+    "use_regions",
+    "collapse_internal_nodes",
+    "check_divergence",
     "label_field",
     "tip_color_by",
     "unknown_value",
     "annotation_fields",
+    "numeric_annotation_fields",
+    "columns",
     "tipsize",
+    "tip_size_by",
+    "max_tip_categories",
 
-    "apply_filters",
-    "len_policy",
-    "gap_policy",
-    "noniupac_policy",
-    "uppercase",
+    "return_internal_sequences",
+    "show_node_numbers",
+    "export_all_sequences_fasta",
 
-    "ig_stop_policy",
-    "max_tip_categories"
+    "trait_field",
+    "trait_model",
+    "modelfile",
+    "permutations",
+    "tip_switch",
+    "permute_all",
+    "alternative",
+    "run_test_ps",
+    "run_test_sp",
+    "run_test_sc",
+    "isotype_order",
+    "isotype_exceptions",
+
+    "partition_model",
+    "return_igphyml_parameters",
+
+    "chain_mode",
+    "heavy_locus",
+    "split_light",
+    "light_traits",
+    "majoronly",
+
+    "time_field",
+    "time_permutations",
+    "time_as_numeric"
+  ],
+  "widgets": {
+    "modelfile": "textarea"
+  },
+  "sections": [
+    {
+      "id": "inputMapping",
+      "label": "Input Mapping",
+      "order": 0,
+      "fields": [
+        "doMapping",
+        "column_map.sequence_id",
+        "column_map.clone_id",
+        "column_map.sequence_alignment",
+        "column_map.germline_alignment_d_mask",
+        "column_map.v_call",
+        "column_map.j_call",
+        "column_map.junction_length",
+        "column_map.junction",
+        "column_map.cell_id",
+        "column_map.locus",
+        "column_map.v_region_start",
+        "column_map.v_region_end",
+        "column_map.j_region_start",
+        "column_map.j_region_end"
+      ]
+    },
+    {
+      "id": "treeConstruction",
+      "label": "Tree Construction",
+      "order": 1,
+      "fields": [
+        "analysis_mode",
+        "tree_build",
+        "minseq",
+        "nproc",
+        "collapse_identical_sequences",
+        "trait_fields",
+        "mod3",
+        "filterstop",
+        "use_regions",
+        "collapse_internal_nodes",
+        "check_divergence"
+      ]
+    },
+    {
+      "id": "outputPlotting",
+      "label": "Output & Plotting",
+      "order": 2,
+      "fields": [
+        "label_field",
+        "tip_color_by",
+        "unknown_value",
+        "annotation_fields",
+        "numeric_annotation_fields",
+        "columns",
+        "tipsize",
+        "tip_size_by",
+        "max_tip_categories"
+      ]
+    },
+    {
+      "id": "internalSequences",
+      "label": "Internal Sequences",
+      "order": 3,
+      "fields": ["return_internal_sequences", "show_node_numbers", "export_all_sequences_fasta"]
+    },
+    {
+      "id": "dta",
+      "label": "Discrete Trait Analysis",
+      "order": 4,
+      "fields": [
+        "trait_field",
+        "trait_model",
+        "modelfile",
+        "permutations",
+        "tip_switch",
+        "permute_all",
+        "alternative",
+        "isotype_order",
+        "isotype_exceptions",
+        "run_test_ps",
+        "run_test_sp",
+        "run_test_sc"
+      ]
+    },
+    {
+      "id": "igphyml",
+      "label": "IgPhyML",
+      "order": 5,
+      "fields": ["partition_model", "return_igphyml_parameters"]
+    },
+    {
+      "id": "pairedChain",
+      "label": "Paired H/L Chains",
+      "order": 6,
+      "fields": ["chain_mode", "heavy_locus", "split_light", "light_traits", "majoronly"]
+    },
+    {
+      "id": "timeEvolution",
+      "label": "Time Evolution",
+      "order": 7,
+      "fields": ["time_field", "time_permutations", "time_as_numeric"]
+    }
   ],
   "placeholders": {
-    "label_field": "empty = sequence_id",
-    "tip_color_by": "empty = no coloring"
+    "column_map.sequence_id": "your column → sequence_id",
+    "column_map.clone_id": "your column → clone_id",
+    "column_map.sequence_alignment": "your column → sequence_alignment",
+    "column_map.germline_alignment_d_mask": "your column → germline_alignment_d_mask",
+    "column_map.v_call": "your column → v_call",
+    "column_map.j_call": "your column → j_call",
+    "column_map.junction_length": "your column → junction_length",
+    "column_map.junction": "your column → junction (optional)",
+    "column_map.cell_id": "your column → cell_id (HL mode)",
+    "column_map.locus": "your column → locus (HL mode)",
+    "column_map.v_region_start": "your column → v_region_start (use regions)",
+    "column_map.v_region_end": "your column → v_region_end (use regions)",
+    "column_map.j_region_start": "your column → j_region_start (use regions)",
+    "column_map.j_region_end": "your column → j_region_end (use regions)",
+    "label_field": "display only; canonical Newick uses sequence_id",
+    "tip_color_by": "empty = no coloring",
+    "tip_size_by": "e.g. duplicate_count scales tip dot size in Method Output PNG",
+    "trait_field": "canonical column name after mapping, e.g. c_call",
+    "trait_fields": "optional extra trait columns to preserve during clone formatting",
+    "modelfile": "#BEGIN\n3\n\n#STATES\nA\nB\nC\n\n#CONSTRAINTS\nC A 1000\nC B 1000\n\n\n#AMBIGUOUS\nGERM A\nGERM B\nGERM C"
   },
   "visibility": {
-    "len_policy": { "when": { "apply_filters": true } },
-    "gap_policy": { "when": { "apply_filters": true } },
-    "noniupac_policy": { "when": { "apply_filters": true } },
-    "uppercase": { "when": { "apply_filters": true } },
+    "column_map.sequence_id": { "when": { "doMapping": true } },
+    "column_map.clone_id": { "when": { "doMapping": true } },
+    "column_map.sequence_alignment": { "when": { "doMapping": true } },
+    "column_map.germline_alignment_d_mask": { "when": { "doMapping": true } },
+    "column_map.v_call": { "when": { "doMapping": true } },
+    "column_map.j_call": { "when": { "doMapping": true } },
+    "column_map.junction_length": { "when": { "doMapping": true } },
+    "column_map.junction": { "when": { "doMapping": true } },
+    "column_map.cell_id": {
+      "whenAll": [{ "doMapping": true }, { "chain_mode": "HL" }]
+    },
+    "column_map.locus": {
+      "whenAll": [{ "doMapping": true }, { "chain_mode": "HL" }]
+    },
+    "column_map.v_region_start": {
+      "whenAll": [{ "doMapping": true }, { "use_regions": true }]
+    },
+    "column_map.v_region_end": {
+      "whenAll": [{ "doMapping": true }, { "use_regions": true }]
+    },
+    "column_map.j_region_start": {
+      "whenAll": [{ "doMapping": true }, { "use_regions": true }]
+    },
+    "column_map.j_region_end": {
+      "whenAll": [{ "doMapping": true }, { "use_regions": true }]
+    },
 
-    "ig_stop_policy": { "when": { "tree_model": "igphyml" } }
+    "return_internal_sequences": {
+      "whenAny": [
+        { "analysis_mode": "tree_with_internal_sequences" },
+        { "analysis_mode": "tree_only" },
+        { "analysis_mode": "discrete_trait_analysis" }
+      ]
+    },
+    "show_node_numbers": {
+      "whenAny": [
+        { "return_internal_sequences": true },
+        { "analysis_mode": "tree_with_internal_sequences" }
+      ]
+    },
+    "export_all_sequences_fasta": { "when": { "return_internal_sequences": true } },
+
+    "trait_field": { "when": { "analysis_mode": "discrete_trait_analysis" } },
+    "trait_model": { "when": { "analysis_mode": "discrete_trait_analysis" } },
+    "modelfile": { "when": { "analysis_mode": "discrete_trait_analysis" } },
+    "permutations": { "when": { "analysis_mode": "discrete_trait_analysis" } },
+    "tip_switch": { "when": { "analysis_mode": "discrete_trait_analysis" } },
+    "permute_all": { "when": { "analysis_mode": "discrete_trait_analysis" } },
+    "alternative": { "when": { "analysis_mode": "discrete_trait_analysis" } },
+    "run_test_ps": { "when": { "analysis_mode": "discrete_trait_analysis" } },
+    "run_test_sp": { "when": { "analysis_mode": "discrete_trait_analysis" } },
+    "run_test_sc": { "when": { "analysis_mode": "discrete_trait_analysis" } },
+    "isotype_order": {
+      "whenAll": [
+        { "analysis_mode": "discrete_trait_analysis" },
+        { "trait_model": "isotype_irreversible" }
+      ]
+    },
+    "isotype_exceptions": {
+      "whenAll": [
+        { "analysis_mode": "discrete_trait_analysis" },
+        { "trait_model": "isotype_irreversible" }
+      ]
+    },
+
+    "partition_model": { "when": { "tree_build": "igphyml" } },
+    "return_igphyml_parameters": { "when": { "tree_build": "igphyml" } },
+
+    "heavy_locus": { "when": { "chain_mode": "HL" } },
+    "split_light": { "when": { "chain_mode": "HL" } },
+    "light_traits": { "when": { "chain_mode": "HL" } },
+    "majoronly": { "when": { "chain_mode": "HL" } },
+
+    "time_field": { "when": { "analysis_mode": "time_evolution" } },
+    "time_permutations": { "when": { "analysis_mode": "time_evolution" } },
+    "time_as_numeric": { "when": { "analysis_mode": "time_evolution" } }
   }
 }

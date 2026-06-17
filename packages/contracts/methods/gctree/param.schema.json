@@ -1,48 +1,87 @@
 {
   "type": "object",
   "properties": {
+    "input_scenario": {
+      "type": "string",
+      "title": "Input scenario",
+      "description": "How GCtree is invoked: aligned FASTA (or FASTA from tabular adapter), DNAPARS outfile + abundances bundle (see upload guidance), or GCtree forest pickle re-ranking.",
+      "enum": [
+        "aligned_fasta_with_root",
+        "airr_or_changeo_table_adapter",
+        "dnapars_outfile_with_abundance",
+        "gctree_forest_pickle"
+      ],
+      "default": "aligned_fasta_with_root"
+    },
+    "doMapping": {
+      "type": "boolean",
+      "title": "Enable input column mapping",
+      "description": "When true and a CSV/TSV input is selected, map source table headers to canonical GCtree tabular keys before conversion.",
+      "default": false
+    },
+    "column_map": {
+      "type": "object",
+      "title": "Input Column Mapping",
+      "description": "Map canonical GCtree tabular keys to source table columns.",
+      "properties": {
+        "sequence_id": {
+          "type": "string",
+          "title": "FASTA ID column",
+          "default": ""
+        },
+        "sequence_alignment": {
+          "type": "string",
+          "title": "Aligned sequence column",
+          "default": ""
+        }
+      }
+    },
     "root": {
       "type": "string",
       "title": "Root sequence ID",
-      "description": "ID of the germline / outgroup sequence in the input FASTA/PHYLIP alignment.",
+      "description": "Original uploaded ID of the germline / outgroup sequence in the input FASTA alignment (FASTA-derived scenarios). It may be remapped internally to a short PHYLIP/GCtree-safe ID.",
       "default": "GL"
     },
     "frame": {
       "type": "integer",
-      "title": "Coding frame (0, 1, 2 ⇒ frames 1–3)",
-      "description": "0 means frame 1 (start at first nucleotide), 1 ⇒ frame 2, 2 ⇒ frame 3. Used for amino-acid mutation annotation in GCtree.",
+      "title": "Coding frame (1–3)",
+      "description": "Reading frame for amino-acid mutation annotation in GCtree (GCtree CLI --frame).",
+      "enum": [1, 2, 3],
+      "default": 1
+    },
+    "frame2": {
+      "type": "integer",
+      "title": "Coding frame for second chain (advanced)",
+      "description": "When set, passed as --frame2 to GCtree for paired-chain workflows.",
+      "enum": [1, 2, 3]
+    },
+    "chain_split": {
+      "type": "integer",
+      "title": "Chain split (advanced)",
+      "description": "When greater than 0, passed as --chain_split to GCtree.",
       "minimum": 0,
-      "maximum": 2,
       "default": 0
     },
-    "pipeline": {
-      "type": "string",
-      "title": "Pipeline backend",
-      "description": "Use the built-in PHYLIP + GCtree pipeline (recommended) or the SCons pipeline if available in the container.",
-      "enum": ["phylip", "scons"],
-      "default": "phylip"
-    },
-    "infer": {
+    "apply_isotype": {
       "type": "boolean",
-      "title": "Run GCtree likelihood ranking",
-      "description": "If false, stop after DNAPARS and return parsimony trees from PHYLIP outtree (no GCtree ranking).",
-      "default": true
+      "title": "Add isotype annotation/rendering",
+      "description": "After a successful inference, run the GCtree isotype utility when idmap and isotype map files are provided (zip bundle). This can change tree rendering when resolving isotype conflicts; it is not simple coloring.",
+      "default": false
     },
     "top_n": {
       "type": "integer",
       "title": "Number of trees to return",
-      "description": "Maximum number of top trees to extract from GCtree output (or DNAPARS outtree, if GCtree fails).",
+      "description": "Maximum top ranked trees to extract from GCtree output. GCtree normally renders/ranks a limited set of representative top trees.",
       "minimum": 1,
-      "maximum": 50,
+      "maximum": 10,
       "default": 3
     },
     "ranking_strategy": {
       "type": "string",
       "title": "Ranking strategy expression",
-      "description": "Optional GCtree ranking expression, e.g. \"B,A\" (lexicographic) or \"B+I+0.1C+0.01A\" (linear combination). Leave empty for the default ranking.",
-      "default": ""
+      "description": "GCtree ranking expression using non-experimental/simple criteria only: B = branching process log loss, A = number of alleles, R = sitewise reversions to the naive/root sequence. Lexicographic examples: B,A or B,R,A. Linear examples: B+0.01A or B+0.1R+0.01A. Experimental criteria I, C, and M are not accepted.",
+      "default": "B,A"
     },
-
     "quick": {
       "type": "boolean",
       "title": "Quick parsimony search",
@@ -56,14 +95,6 @@
       "minimum": 0,
       "default": 0
     },
-    "bootstrap": {
-      "type": "integer",
-      "title": "Bootstrap replicates",
-      "description": "If set, pass --bootstrap N to mkconfig for DNAPARS bootstrap resampling.",
-      "minimum": 0,
-      "default": 0
-    },
-
     "img_type": {
       "type": "string",
       "title": "Image file type",
@@ -104,34 +135,15 @@
     "apply_coloring_settings": {
       "type": "boolean",
       "default": false,
-      "title": "Apply Coloring Settings"
+      "title": "Apply coloring settings"
     },
-     "color_mode": {
+    "color_mode": {
       "type": "string",
       "title": "Coloring mode",
-      "enum": ["none", "abundance", "LBI", "feature"],
+      "enum": ["none", "abundance", "LBI"],
       "default": "none",
-      "description": "How to color GCtree figures. 'abundance' and 'LBI' use built-in features; 'feature' expects a custom numeric node feature name on the GCtree CollapsedTree."
-    },
-    "color_feature": {
-      "type": "string",
-      "title": "Custom feature name",
-      "default": "",
-      "description": "Feature name for coloring when color_mode = 'feature' (e.g. 'affinity'). Must exist on all nodes in the CollapsedTree."
-    },
-    "color_palette": {
-      "type": "string",
-      "title": "Colormap (Matplotlib name)",
-      "default": "viridis",
-      "description": "Any Matplotlib colormap name (e.g. 'viridis', 'magma', 'plasma')."
-    },
-    "color_scale": {
-      "type": "string",
-      "title": "Color scale",
-      "enum": ["linear", "log", "symlog"],
-      "default": "linear",
-      "description": "Scale for mapping feature values to colors."
+      "description": "Extra simplified coloring on the top-ranked GCtree tree: abundance (linear, viridis) or local branching index LBI (log, viridis). none skips extra colored render."
     }
   },
-  "required": ["root"]
+  "required": ["input_scenario"]
 }

@@ -244,8 +244,8 @@ BREP_CONTRACTS_REL="$(relpath_from_dir "$ABS_CONTRACTS" "$BREP_DIR")"
 cleanup(){
   echo
   echo "${YLW}Shutting down...${CLR}"
-  kill ${R_PID:-} ${API_PID:-} ${GCTREE_PID:-} ${CLONAL_PID:-} ${BREP_PID:-} 2>/dev/null || true
-  docker compose --profile dev stop postgres >/dev/null 2>&1 || true
+  kill ${R_PID:-} ${WORKER_PID:-} ${API_PID:-} ${GCTREE_PID:-} ${CLONAL_PID:-} ${BREP_PID:-} 2>/dev/null || true
+  docker compose --profile dev stop postgres minio minio-init >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -254,10 +254,20 @@ docker compose --profile dev up -d postgres
 wait_postgres || die "PostgreSQL did not become healthy"
 echo "${GRN}PostgreSQL is healthy.${CLR}"
 
+echo "${BLU}==> Starting MinIO object storage + creating buckets${CLR}"
+docker compose --profile dev up -d minio minio-init
+docker wait phylo-minio-init >/dev/null 2>&1 || true
+echo "${GRN}MinIO is up; dataset/artifact buckets ready.${CLR}"
+
+# Local method services + the host worker share this host dir for job outputs
+# (artifact files). Exported so every child process agrees on the location.
+export METHOD_JOBS_DIR="$ROOT/runtime/method-jobs"
+mkdir -p "$METHOD_JOBS_DIR"
+
 echo "${BLU}==> Checking required R packages${CLR}"
 set +e
 MISSING=$(Rscript --vanilla -e 'suppressPackageStartupMessages(suppressWarnings({
-  pkgs <- c("plumber","dowser","alakazam","shazam","ggtree","ape","jsonlite","jsonvalidate","sodium","BrepPhylo","Biostrings","igraph")
+  pkgs <- c("plumber","dowser","alakazam","shazam","ggtree","ape","phangorn","jsonlite","jsonvalidate","sodium","Biostrings")
   miss <- pkgs[!sapply(pkgs, require, character.only=TRUE, quietly=TRUE)]
   if (length(miss)>0) { cat(paste(miss, collapse=",")); quit(status=10) }
 }))' 2>/dev/null)
@@ -279,8 +289,17 @@ export METHOD_SERVICE_FILE_PREFIX="$ABS_STORAGE"
 export HOST_RUNTIME_SHARED_ROOT="$ABS_STORAGE"
 export NEXT_PUBLIC_API_BASE_URL="${NEXT_PUBLIC_API_BASE_URL:-http://localhost:${API_PORT}}"
 
+echo "${BLU}==> Checking Dowser external binaries (optional build backends)${CLR}"
+for tool in dnapars dnaml raxml-ng igphyml; do
+  if command -v "$tool" >/dev/null 2>&1; then
+    echo "${GRN}  found: $(command -v "$tool")${CLR}"
+  else
+    echo "${YLW}  missing: $tool (tree_build=$tool will return structured preflight error)${CLR}"
+  fi
+done
+
 echo "${BLU}==> Starting Dowser (R/plumber) on :${DOWSER_PORT}${CLR}"
-Rscript --vanilla -e "setwd('$PLUMBER_DIR'); Sys.setenv(CONTRACTS_DIR='${R_CONTRACTS_REL}', STRICT_CONTRACT_ROUTES='${STRICT_CONTRACT_ROUTES:-true}', IGPHYML_BIN='${IGPHYML_BIN:-/usr/local/share/igphyml/src/igphyml}', IGPHYML_MOTIFS='${IGPHYML_MOTIFS:-/usr/local/share/igphyml/src/motifs}', IGPHYML_PATH='${IGPHYML_PATH:-/usr/local/share/igphyml/src/motifs}'); pr <- plumber::plumb('plumber.R'); pr\$run(host='0.0.0.0', port=${DOWSER_PORT})" \
+Rscript --vanilla -e "setwd('$PLUMBER_DIR'); Sys.setenv(CONTRACTS_DIR='${R_CONTRACTS_REL}', STRICT_CONTRACT_ROUTES='${STRICT_CONTRACT_ROUTES:-true}', DNAPARS_PATH='${DNAPARS_PATH:-}', DNAML_PATH='${DNAML_PATH:-}', RAXML_BIN='${RAXML_BIN:-}', IGPHYML_BIN='${IGPHYML_BIN:-/usr/local/share/igphyml/src/igphyml}', IGPHYML_MOTIFS='${IGPHYML_MOTIFS:-/usr/local/share/igphyml/src/motifs}', IGPHYML_PATH='${IGPHYML_PATH:-/usr/local/share/igphyml/src/motifs}'); pr <- plumber::plumb('plumber.R'); pr\$run(host='0.0.0.0', port=${DOWSER_PORT})" \
   >/tmp/dowser.log 2>&1 &
 R_PID=$!
 wait_http "$DOWSER_PORT" || { echo "${YLW}Last 200 Dowser logs:${CLR}"; tail -n 200 /tmp/dowser.log || true; die "Dowser failed readiness check"; }
@@ -318,6 +337,17 @@ echo "${BLU}==> Starting API on :${API_PORT}${CLR}"
 uvicorn apps.api.main:app --host 0.0.0.0 --port "$API_PORT" >/tmp/api.log 2>&1 &
 API_PID=$!
 wait_http "$API_PORT" || { echo "${YLW}Last 200 API logs:${CLR}"; tail -n 200 /tmp/api.log || true; die "API failed readiness check"; }
+
+echo "${BLU}==> Starting run worker (processes QUEUED runs)${CLR}"
+python -m apps.api.workers.run_worker >/tmp/run-worker.log 2>&1 &
+WORKER_PID=$!
+sleep 1
+if ! kill -0 "$WORKER_PID" 2>/dev/null; then
+  echo "${YLW}Last 50 run-worker logs:${CLR}"
+  tail -n 50 /tmp/run-worker.log 2>/dev/null || true
+  die "Run worker failed to start"
+fi
+echo "${GRN}Run worker started (pid ${WORKER_PID}).${CLR}"
 
 echo "${BLU}==> Starting GCtree (FastAPI) on :${GCTREE_PORT}${CLR}"
 (

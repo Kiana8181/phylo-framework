@@ -1,12 +1,16 @@
 "use client";
 
-import { useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { AlertCircle, ChevronDown, ChevronRight } from "lucide-react";
+import { SpinnerIllustration } from "@/components/ui/spinner-illustration";
+import { AlertCircle } from "lucide-react";
 import { formatRunDuration } from "@/lib/runDuration";
+import { useCancelRun } from "@/features/runs/hooks";
+import { notify } from "@/lib/notify";
+import RunStageFlowchart from "./RunStageFlowchart";
+import { humanizeStage } from "@phylo/contracts";
 
-const MAX_INLINE_ERROR = 200;
+const ACTIVE_STATUSES = new Set(["PENDING", "QUEUED", "RUNNING"]);
 
 function getStatusBadge(status?: string, isError?: boolean) {
   if (isError) return "bg-red-100 text-red-700 border-red-200 dark:bg-red-950/50 dark:text-red-300 dark:border-red-800";
@@ -25,6 +29,10 @@ export default function RunProgress({
   status,
   progress,
   message,
+  stage,
+  stageMessage,
+  cancelRequested,
+  methodId,
   startedAt,
   finishedAt,
   statusError,
@@ -34,14 +42,30 @@ export default function RunProgress({
   status?: string;
   progress: number;
   message?: string;
+  stage?: string | null;
+  stageMessage?: string | null;
+  cancelRequested?: boolean;
+  methodId?: string | null;
   startedAt?: string | null;
   finishedAt?: string | null;
   statusError?: unknown;
   onDismiss?: () => void;
 }) {
-  const [detailsOpen, setDetailsOpen] = useState(false);
+  const cancelRun = useCancelRun();
+  const isCancelling = stage === "CANCELLING" || !!cancelRequested;
+  const canStop = !!status && ACTIVE_STATUSES.has(status) && !isCancelling;
+
+  async function handleStop() {
+    try {
+      await cancelRun.mutateAsync(runId);
+      notify.success("Cancelling run…");
+    } catch {
+      /* error toast handled in hook */
+    }
+  }
+
   const isStatusError = !!statusError;
-  const httpStatus = (statusError as any)?.response?.status;
+  const httpStatus = (statusError as { response?: { status?: number } })?.response?.status;
   const apiErrorMessage =
     httpStatus === 403
       ? "You don't have access to this run. It may have been started in a different session."
@@ -51,31 +75,38 @@ export default function RunProgress({
       ? (statusError as Error)?.message || "Could not load status."
       : null;
 
-  const runErrorMessage = status === "ERROR" ? message : null;
-  const showExpandableError = runErrorMessage && runErrorMessage.length > MAX_INLINE_ERROR;
-  const shortRunError =
-    runErrorMessage && runErrorMessage.length > MAX_INLINE_ERROR
-      ? runErrorMessage.slice(0, MAX_INLINE_ERROR).trim() + "…"
-      : runErrorMessage;
-
   const badge = getStatusBadge(status, isStatusError);
   const label = getStatusLabel(status, isStatusError);
   const durationLabel = formatRunDuration(startedAt, finishedAt);
+  const isActive = !!status && ACTIVE_STATUSES.has(status);
+  const displayStage =
+    status === "RUNNING" && stage === "QUEUED"
+      ? "Running method"
+      : humanizeStage(stage) || (status ?? "PENDING");
 
   return (
-    <Card className="p-4 space-y-3">
-      <div className="flex items-center justify-between gap-2 flex-wrap">
-        <div className="text-sm min-w-0">
-          Run ID: <span className="font-mono truncate">{runId}</span>
+    <Card className="space-y-3 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="min-w-0 text-sm">
+          Run ID: <span className="truncate font-mono">{runId}</span>
         </div>
         <div className="flex items-center gap-2">
-          <span className={`text-xs px-2 py-0.5 rounded border shrink-0 ${badge}`}>
-            {label}
-          </span>
+          <span className={`shrink-0 rounded border px-2 py-0.5 text-xs ${badge}`}>{label}</span>
           {durationLabel && !isStatusError && (
-            <span className="text-xs px-2 py-0.5 rounded border shrink-0 bg-muted text-muted-foreground">
+            <span className="shrink-0 rounded border bg-muted px-2 py-0.5 text-xs text-muted-foreground">
               Duration: {durationLabel}
             </span>
+          )}
+          {!isStatusError && (canStop || isCancelling) && (
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={handleStop}
+              disabled={!canStop || cancelRun.isPending}
+              className="shrink-0"
+            >
+              {isCancelling ? "Cancelling…" : "Stop run"}
+            </Button>
           )}
           {onDismiss && (
             <Button variant="ghost" size="sm" onClick={onDismiss} className="shrink-0">
@@ -86,53 +117,56 @@ export default function RunProgress({
       </div>
 
       {isStatusError && apiErrorMessage && (
-        <div className="flex items-start gap-2 rounded-md border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950/30 p-3 text-sm text-red-800 dark:text-red-200">
-          <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+        <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-950/30 dark:text-red-200">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
           <span className="break-words">{apiErrorMessage}</span>
         </div>
       )}
 
-      {!isStatusError && status === "ERROR" && runErrorMessage && (
-        <div className="rounded-md border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950/30 overflow-hidden">
-          <div className="p-3 text-sm text-red-800 dark:text-red-200">
-            {!showExpandableError && <span className="break-words whitespace-pre-wrap">{runErrorMessage}</span>}
-            {showExpandableError && (
-              <>
-                <span className="break-words whitespace-pre-wrap">{shortRunError}</span>
-                <button
-                  type="button"
-                  onClick={() => setDetailsOpen((o) => !o)}
-                  className="mt-2 flex items-center gap-1 text-xs font-medium text-red-600 dark:text-red-300 hover:underline cursor-pointer"
-                >
-                  {detailsOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                  {detailsOpen ? "Hide full error" : "Show full error details"}
-                </button>
-                {detailsOpen && (
-                  <pre className="mt-2 p-2 rounded bg-red-100/50 dark:bg-red-900/20 text-xs whitespace-pre-wrap break-words overflow-auto max-h-64 border border-red-200/50 dark:border-red-800/50">
-                    {runErrorMessage}
-                  </pre>
-                )}
-              </>
+      {!isStatusError && (
+        <>
+          <div className="flex items-center gap-3">
+            {isActive && <SpinnerIllustration className="size-9 shrink-0 text-primary" />}
+            <div className="min-w-0 text-sm">
+              <p>
+                Currently: <span className="font-medium">{displayStage}</span>
+                {Number.isFinite(progress) ? (
+                  <span className="text-muted-foreground"> ({progress}%)</span>
+                ) : null}
+              </p>
+              {isActive ? (
+                <p className="text-xs text-muted-foreground">
+                  {stageMessage || message
+                    ? `${stageMessage || message} — `
+                    : ""}
+                  please be patient while your run completes.
+                </p>
+              ) : (
+                (stageMessage || message) && (
+                  <p className="text-xs text-muted-foreground">{stageMessage || message}</p>
+                )
+              )}
+            </div>
+          </div>
+
+          <div className="relative h-2 w-full overflow-hidden rounded bg-muted">
+            <div
+              className="h-full rounded bg-primary transition-[width]"
+              style={{ width: `${progress ?? 0}%` }}
+            />
+            {isActive && (
+              <div className="phylo-shimmer absolute inset-y-0 left-0 w-1/3 -translate-x-full bg-gradient-to-r from-transparent via-primary/40 to-transparent" />
             )}
           </div>
-        </div>
-      )}
 
-      {!isStatusError && status !== "ERROR" && (
-        <div className="text-sm text-muted-foreground">
-          {status ?? "PENDING"}
-          {Number.isFinite(progress) ? ` (${progress}%)` : ""}
-          {message ? ` — ${message}` : ""}
-        </div>
-      )}
-
-      {!isStatusError && (
-        <div className="h-2 w-full bg-muted rounded overflow-hidden">
-          <div
-            className="h-full rounded bg-primary transition-[width]"
-            style={{ width: `${progress ?? 0}%` }}
+          <RunStageFlowchart
+            methodId={methodId}
+            status={status}
+            stage={stage}
+            progress={progress}
+            stageMessage={stageMessage}
           />
-        </div>
+        </>
       )}
     </Card>
   );

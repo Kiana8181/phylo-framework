@@ -1,4 +1,15 @@
-export type MethodInfo = { id: string; name: string; version: string };
+export type MethodInfo = {
+  id: string;
+  name: string;
+  version: string;
+  tagline?: string;
+  category?: string;
+  summary?: string;
+  capabilities?: string[];
+  inputFormats?: string[];
+  externalDocUrl?: string;
+  externalDocLabel?: string;
+};
 
 export type MethodSpec = {
   id: string;
@@ -24,6 +35,7 @@ export type RunSummary = {
   status: string;
   progress?: number;
   message?: string | null;
+  stage?: string | null;
   params?: RunParams;
   dataset_name?: string | null;
   dataset_files?: string[];
@@ -53,10 +65,17 @@ export type RunStatus = {
   status: "PENDING" | "RUNNING" | "DONE" | "ERROR" | "QUEUED" | "CANCELLED";
   progress?: number;
   message?: string;
+  /** High-level stage identifier (e.g. STAGING_INPUT, BUILDING_TREES, CANCELLING). */
+  stage?: string | null;
+  /** User-facing message tied to the current stage. */
+  stage_message?: string | null;
+  /** True once cancellation has been requested (worker is winding down). */
+  cancel_requested?: boolean;
   method_id?: string;
   params?: RunParams;
   dataset_name?: string | null;
   dataset_files?: string[];
+  input_file_id?: string | null;
   started_at?: string | null;
   finished_at?: string | null;
   error?: {
@@ -66,14 +85,56 @@ export type RunStatus = {
   };
 };
 
-export type FigurePayload = {
-  phylogeny?: string[];
-  [key: string]: Array<string | null> | undefined;
-} | null;
+export type UploadInitResponse = {
+  upload_id: string;
+  content_url: string;
+  status: string;
+};
 
-export type TreeServiceImage = {
-  mime: string;
-  base64: string;
+export type UploadedFileResponse = {
+  upload_id: string;
+  file_id: string;
+  original_filename: string;
+  file_size: number;
+  mime_type?: string | null;
+  storage_url?: string | null;
+};
+
+export type UploadSessionStatus = "INITIATED" | "UPLOADING" | "COMPLETED" | "CANCELLED" | "ERROR";
+
+export type ArtifactKind = "image" | "newick" | "table" | "fasta" | "json" | "log" | "zip" | "other";
+
+/** A generated run output stored in object storage. Binaries are fetched
+ *  lazily via download_url / preview_url — never embedded as base64. */
+export type RunArtifact = {
+  id: string;
+  filename: string;
+  content_type?: string | null;
+  size_bytes: number;
+  checksum_sha256?: string | null;
+  artifact_kind: ArtifactKind;
+  artifact_role?: string | null;
+  is_previewable: boolean;
+  tree_id?: string | null;
+  download_url: string;
+  preview_url?: string | null;
+};
+
+export type RunArtifactsResponse = {
+  artifacts: RunArtifact[];
+};
+
+/** Lightweight dataset metadata attached to a run (history-safe; no binary). */
+export type RunDatasetDescriptor = {
+  id: string;
+  original_filename: string;
+  file_size?: number | null;
+  checksum_sha256?: string | null;
+  mime_type?: string | null;
+  uploaded_at?: string | null;
+  storage_state: "active" | "deleted";
+  is_deleted: boolean;
+  deleted_at?: string | null;
 };
 
 export type TreeNodeAttrs = {
@@ -117,10 +178,8 @@ export type RunTree = {
   original_newick?: string;
   clone_id?: string;
   has_lineage_plot: boolean;
-  has_service_image: boolean;
-  visualizations?: {
-    service_image?: TreeServiceImage;
-  };
+  /** Artifact id of this tree's method-rendered image (served via preview_url). */
+  image_artifact_id?: string | null;
   node_attributes?: Record<string, TreeNodeAttrs>;
   label_to_sequence_id?: Record<string, string>;
   lineage_plot?: LineagePlot;
@@ -145,7 +204,8 @@ export type RunTreePayload = {
   node_attributes?: Record<string, TreeNodeAttrs> | null;
   lineage_plot?: LineagePlot | null;
   label_to_sequence_id?: Record<string, string> | null;
-  service_image?: TreeServiceImage | null;
+  /** Artifact id of this tree's method-rendered image (served via preview_url). */
+  image_artifact_id?: string | null;
 };
 
 export type RunLogEntry = {
@@ -199,28 +259,371 @@ export type RunProvenance = {
   [key: string]: any;
 };
 
+export type BrepPhyloRowDiagnostic = {
+  row_index: number;
+  sequence_id?: string | null;
+  clone_id?: string | null;
+  reason?: string;
+  label?: string | null;
+};
+
+export type BrepPhyloMixedGermlineClone = {
+  clone_id: string;
+  distinct_germlines: string[];
+};
+
+export type BrepPhyloDistanceFromGermline = {
+  clone_id: string;
+  sequence_id: string;
+  distance?: number | null;
+};
+
+export type BrepPhyloCsrEvent = {
+  clone_id: string;
+  from_isotype?: string | null;
+  to_isotype?: string | null;
+  distance_from_germline?: number | null;
+  valid?: boolean | null;
+};
+
+export type BrepPhyloArborescenceEdge = {
+  startID?: string | number;
+  endID?: string | number;
+  weight?: number | null;
+  startLabel?: string;
+  endLabel?: string;
+};
+
+export type BrepPhyloArborescence = {
+  clone_id: string;
+  edges: BrepPhyloArborescenceEdge[];
+};
+
+export type BrepPhyloIsotypeSwitchValidity = {
+  clone_id: string;
+  sequence_id_from?: string;
+  sequence_id_to?: string;
+  from_isotype?: string;
+  to_isotype?: string;
+  valid?: boolean | null;
+};
+
+export type BrepPhyloPerCloneStatus = {
+  clone_id: string;
+  n_seqs: number;
+  analyzed: boolean;
+  status?: "analyzed" | "skipped" | "failed";
+  skip_reason?: string | null;
+};
+
+export type BrepPhyloSkippedClone = {
+  clone_id: string;
+  reason: string;
+};
+
+export type BrepPhyloBatchSummary = {
+  clones_analyzed?: number;
+  clones_skipped?: number;
+  csr_total?: number;
+  distance_rows?: number;
+};
+
+export type BrepPhyloAnalysis = {
+  batch_summary?: BrepPhyloBatchSummary;
+  distance_from_germline?: BrepPhyloDistanceFromGermline[];
+  csr_events?: BrepPhyloCsrEvent[];
+  csr_summary?: Record<string, unknown>[];
+  csr_summary_fallback?: Record<string, number>;
+  arborescence?: BrepPhyloArborescence[];
+  isotype_switch_validity?: BrepPhyloIsotypeSwitchValidity[];
+  per_clone_status?: BrepPhyloPerCloneStatus[];
+  skipped_clones?: BrepPhyloSkippedClone[];
+};
+
+export type BrepPhyloDiagnostics = {
+  dropped_rows?: BrepPhyloRowDiagnostic[];
+  rejected_rows?: BrepPhyloRowDiagnostic[];
+  unmapped_input_rows?: BrepPhyloRowDiagnostic[];
+  unmapped_tree_tips?: Array<{ clone_id: string; final_tip_label: string }>;
+  mixed_germline_clones?: BrepPhyloMixedGermlineClone[];
+  latex_available?: boolean | null;
+};
+
+export type BrepPhyloArtifactZip = {
+  clone_bundle_zip?: string | null;
+};
+
+export type BrepPhyloStats = {
+  method?: string;
+  tree_type_requested?: string | null;
+  tree_type?: string;
+  input_sequence_mode?: string;
+  species?: string;
+  species_effective?: string | null;
+  algorithm?: string | null;
+  plot_type?: string;
+  plot_format?: string;
+  min_clone_size?: number;
+  gather_plots?: boolean;
+  enable_csr_analysis?: boolean;
+  n_clones?: number;
+  n_trees?: number;
+  tree_inference_seconds?: number | null;
+  analysis_seconds?: number | null;
+  isotype_column?: string | null;
+  label_column?: string | null;
+  sequence_column?: string;
+  clone_id_column?: string;
+  germline_id_column?: string;
+  which_clones?: string[] | null;
+  ignore_clones?: string[] | null;
+  total_seqs?: number;
+};
+
+/** Optional tip-colouring metadata (e.g. Dowser); not used by BrepPhylo after colour controls were removed. */
+export type TreeTipColorStats = {
+  tip_color_by?: string | null;
+  tip_states_capped?: boolean;
+  unknown_value?: string;
+};
+
+export type DowserAnalysisMode =
+  | "tree_only"
+  | "tree_with_internal_sequences"
+  | "discrete_trait_analysis"
+  | "time_evolution";
+
+export type DowserTreeBuild = "pratchet" | "pml" | "dnapars" | "dnaml" | "igphyml" | "raxml";
+
+export type DowserTipLabelMap = {
+  sequence_id: string;
+  display_label: string;
+};
+
+export type DowserNode = {
+  clone_id?: string;
+  node?: number;
+  node_id?: string;
+  sequence?: string;
+  sequence_alignment?: string;
+  locus?: string;
+  is_internal?: boolean;
+  is_observed?: boolean;
+  parent?: string;
+  children?: string[];
+  branch_length?: number;
+  trait_state?: string;
+};
+
+export type DowserTreeDetail = {
+  clone_id?: string;
+  canonical_newick?: string;
+  display_newick?: string | null;
+  lineage_newick?: string | null;
+  tip_label_map?: DowserTipLabelMap[];
+  nodes?: DowserNode[];
+  all_sequences?: Array<Record<string, unknown>>;
+  show_node_numbers?: boolean;
+};
+
+export type DowserDtaResult = {
+  trait_field?: string;
+  trait_model?: string;
+  permutations?: number;
+  tip_switch?: number;
+  switches?: Array<Record<string, unknown>>;
+  ps?: { summary?: Array<Record<string, unknown>>; raw?: Array<Record<string, unknown>> };
+  sp?: { summary?: Array<Record<string, unknown>>; raw?: Array<Record<string, unknown>> };
+  sc?: { summary?: Array<Record<string, unknown>>; raw?: Array<Record<string, unknown>> };
+  interpretation_warning?: string;
+};
+
+export type DowserTimeEvolution = {
+  time_field?: string;
+  permutations?: number;
+  results?: Array<Record<string, unknown>>;
+  plots?: unknown[];
+  interpretation_warning?: string;
+};
+
+export type DowserIgPhyML = {
+  exec?: string | null;
+  motifs?: string | null;
+  partition_model?: string;
+  parameters?: Record<string, unknown>;
+  warnings?: string[];
+};
+
+export type DowserChainQc = {
+  chain_mode?: string;
+  n_input_rows?: number;
+  n_after_resolve?: number;
+  n_dropped?: number;
+  heavy_locus?: string;
+  light_loci?: string[];
+};
+
+export type DowserArtifact = {
+  name?: string;
+  path?: string;
+  kind?: string;
+};
+
+export type DowserInputQc = {
+  n_input_rows?: number;
+  n_working_rows?: number;
+  n_clones_input?: number;
+  n_clones_working?: number;
+  n_duplicate_sequence_id?: number;
+  n_excluded_trait_missing?: number;
+  n_missing_sequence_alignment?: number;
+  n_missing_germline_alignment?: number;
+  n_length_mismatch?: number;
+  excluded_records?: Array<Record<string, unknown>>;
+};
+
+function asCount(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (Array.isArray(value)) return value.length;
+  return undefined;
+}
+
+function normalizeDowserInputQc(raw: Record<string, unknown> | null | undefined): DowserInputQc | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+
+  const nInputRows = asCount(raw.n_input_rows ?? raw.n_rows_original);
+  const nWorkingRows = asCount(
+    raw.n_working_rows ?? raw.n_rows_after_trait_exclusion ?? raw.n_rows_after_derived_fields,
+  );
+  const nClonesInput = asCount(raw.n_clones_input ?? raw.n_clones_original);
+  const nClonesWorking = asCount(raw.n_clones_working ?? raw.n_clones_after_trait_exclusion);
+  const nExcludedTraitMissing = asCount(raw.n_excluded_trait_missing ?? raw.excluded_missing_trait);
+  const nLengthMismatch = asCount(raw.n_length_mismatch ?? raw.length_mismatch);
+  const nDuplicateSequenceId = asCount(raw.n_duplicate_sequence_id ?? raw.duplicate_sequence_ids);
+
+  const normalized: DowserInputQc = {};
+  if (nInputRows != null) normalized.n_input_rows = nInputRows;
+  if (nWorkingRows != null) normalized.n_working_rows = nWorkingRows;
+  if (nClonesInput != null) normalized.n_clones_input = nClonesInput;
+  if (nClonesWorking != null) normalized.n_clones_working = nClonesWorking;
+  if (nExcludedTraitMissing != null) normalized.n_excluded_trait_missing = nExcludedTraitMissing;
+  if (nLengthMismatch != null) normalized.n_length_mismatch = nLengthMismatch;
+  if (nDuplicateSequenceId != null) normalized.n_duplicate_sequence_id = nDuplicateSequenceId;
+
+  const nMissingSeq = asCount(raw.n_missing_sequence_alignment);
+  if (nMissingSeq != null) normalized.n_missing_sequence_alignment = nMissingSeq;
+  const nMissingGerm = asCount(raw.n_missing_germline_alignment);
+  if (nMissingGerm != null) normalized.n_missing_germline_alignment = nMissingGerm;
+
+  return Object.keys(normalized).length ? normalized : undefined;
+}
+
+export type DowserStats = TreeTipColorStats & {
+  analysis_mode?: DowserAnalysisMode;
+  tree_build?: DowserTreeBuild;
+  canonical_ids?: string;
+  n_clones?: number;
+  n_trees?: number;
+  total_seqs?: number;
+  label_field?: string;
+  tip_size_by?: string;
+};
+
+export function readTreeTipSizeBy(
+  stats: (BrepPhyloStats & TreeTipColorStats & DowserStats) | Record<string, unknown> | null | undefined,
+): string | undefined {
+  if (!stats || typeof stats !== "object") return undefined;
+  const field = (stats as DowserStats).tip_size_by;
+  return typeof field === "string" && field.length > 0 ? field : undefined;
+}
+
+export function readTreeTipColorStats(
+  stats: (BrepPhyloStats & TreeTipColorStats & DowserStats) | Record<string, unknown> | null | undefined,
+): { colorBy?: string; unknownValue: string } {
+  if (!stats || typeof stats !== "object") {
+    return { unknownValue: "unknown" };
+  }
+  const s = stats as TreeTipColorStats;
+  if (s.tip_states_capped) {
+    return { unknownValue: s.unknown_value ?? "unknown" };
+  }
+  const colorBy =
+    typeof s.tip_color_by === "string" && s.tip_color_by.length > 0 ? s.tip_color_by : undefined;
+  return { colorBy, unknownValue: s.unknown_value ?? "unknown" };
+}
+
+export function readDowserResult(result: RunResult | Record<string, unknown> | null | undefined) {
+  if (!result || typeof result !== "object") {
+    return {
+      treesDetail: [] as DowserTreeDetail[],
+      dta: undefined as DowserDtaResult | undefined,
+      timeEvolution: undefined as DowserTimeEvolution | undefined,
+      igphyml: undefined as DowserIgPhyML | undefined,
+      chainQc: undefined as DowserChainQc | undefined,
+      inputQc: undefined as DowserInputQc | undefined,
+      dataProvenance: undefined as Record<string, unknown> | undefined,
+      artifacts: [] as DowserArtifact[],
+      isDowser: false,
+    };
+  }
+  const r = result as RunResult & {
+    trees_detail?: DowserTreeDetail[];
+    discrete_trait_analysis?: DowserDtaResult;
+    time_evolution?: DowserTimeEvolution;
+    igphyml?: DowserIgPhyML;
+    chain_qc?: DowserChainQc;
+    input_qc?: DowserInputQc;
+    data_provenance?: Record<string, unknown>;
+    artifacts?: DowserArtifact[];
+  };
+  const stats = r.stats as DowserStats | undefined;
+  const isDowser = Boolean(
+    stats?.analysis_mode || stats?.tree_build || r.trees_detail || r.discrete_trait_analysis,
+  );
+  return {
+    treesDetail: r.trees_detail ?? [],
+    dta: r.discrete_trait_analysis,
+    timeEvolution: r.time_evolution,
+    igphyml: r.igphyml,
+    chainQc: r.chain_qc,
+    inputQc: normalizeDowserInputQc(r.input_qc as Record<string, unknown> | undefined),
+    dataProvenance: r.data_provenance,
+    artifacts: r.artifacts ?? [],
+    isDowser,
+  };
+}
+
 export type RunResult = {
   ok: boolean;
   trees: Array<RunTree | string>;
-  clones: any;
-  clone_catalog?: any;
-  stats: any;
+  clones: { clone_id?: string[]; seqs?: number[] } | null;
+  clone_catalog?: Record<string, unknown>;
+  stats: BrepPhyloStats | DowserStats | Record<string, unknown>;
   node_abundances?: Array<Record<string, number>>;
-  annotations?: Array<Array<Record<string, any>> | null>;
-  figures?: FigurePayload;
+  annotations?: Array<Array<Record<string, unknown>> | null>;
+  analysis?: BrepPhyloAnalysis;
+  diagnostics?: BrepPhyloDiagnostics;
   tables?: RunTables;
   provenance?: RunProvenance;
   warnings?: RunWarning[];
-  render?: string | null;
   logs?: RunLogEntry[];
-  artifact_zip_b64?: any;
-  artifact_name?: string;
+  error?: string | null;
+  trees_detail?: DowserTreeDetail[];
+  discrete_trait_analysis?: DowserDtaResult;
+  time_evolution?: DowserTimeEvolution;
+  igphyml?: DowserIgPhyML;
+  chain_qc?: DowserChainQc;
+  input_qc?: DowserInputQc;
+  data_provenance?: Record<string, unknown>;
 } & {
   run_id?: string;
   method_id?: string;
   params?: RunParams;
   dataset_name?: string | null;
   dataset_files?: string[];
+  input_file_id?: string | null;
+  dataset?: RunDatasetDescriptor | null;
+  artifact_count?: number;
   started_at?: string | null;
   finished_at?: string | null;
 };

@@ -2,13 +2,16 @@ from __future__ import annotations
 
 from typing import Optional, List
 from uuid import UUID
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 
-from sqlalchemy import case, exists, or_, select, update
+from sqlalchemy import String, and_, case, cast, exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.database.models import Run, RunStatus, ACTIVE_RUN_STATUSES
 from apps.api.repositories.base_repository import BaseRepository
+from apps.api.utils.datetime_util import utc_now
+
+TERMINAL_RUN_STATUSES = (RunStatus.DONE, RunStatus.ERROR, RunStatus.CANCELLED)
 
 
 class RunRepository(BaseRepository[Run]):
@@ -32,7 +35,9 @@ class RunRepository(BaseRepository[Run]):
             user_id=user_id,
             input_file_id=input_file_id,
             dataset_name=dataset_name,
-            status=RunStatus.PENDING,
+            status=RunStatus.QUEUED,
+            stage="QUEUED",
+            stage_message="Queued",
             progress=0,
             message="Queued",
         )
@@ -53,14 +58,31 @@ class RunRepository(BaseRepository[Run]):
         user_id: UUID,
         skip: int = 0,
         limit: int = 100,
+        *,
+        run_id: Optional[str] = None,
+        dataset: Optional[str] = None,
+        status: Optional[RunStatus] = None,
+        method_id: Optional[str] = None,
+        created_on: Optional[date] = None,
     ) -> List[Run]:
-        """Get all runs for a user."""
+        """Get a user's runs, optionally filtered (all filters ANDed with the
+        per-user scope). `run_id`/`dataset` are case-insensitive substring
+        matches; `created_on` matches runs created on that calendar day."""
+        stmt = select(Run).where(Run.user_id == user_id)
+
+        if run_id:
+            stmt = stmt.where(cast(Run.id, String).ilike(f"%{run_id.strip()}%"))
+        if dataset:
+            stmt = stmt.where(Run.dataset_name.ilike(f"%{dataset.strip()}%"))
+        if status is not None:
+            stmt = stmt.where(Run.status == status)
+        if method_id:
+            stmt = stmt.where(Run.method_id == method_id)
+        if created_on is not None:
+            stmt = stmt.where(func.date(Run.created_at) == created_on)
+
         result = await self.session.execute(
-            select(Run)
-            .where(Run.user_id == user_id)
-            .order_by(Run.created_at.desc())
-            .offset(skip)
-            .limit(limit)
+            stmt.order_by(Run.created_at.desc()).offset(skip).limit(limit)
         )
         return list(result.scalars().all())
 
@@ -124,9 +146,9 @@ class RunRepository(BaseRepository[Run]):
             update_data["message"] = message
 
         if status == RunStatus.RUNNING:
-            update_data["started_at"] = datetime.utcnow()
+            update_data["started_at"] = utc_now()
         elif status in (RunStatus.DONE, RunStatus.ERROR, RunStatus.CANCELLED):
-            update_data["finished_at"] = datetime.utcnow()
+            update_data["finished_at"] = func.now()
 
         return await self.update(run_id, **update_data)
 
@@ -143,7 +165,7 @@ class RunRepository(BaseRepository[Run]):
         """
         update_data = {
             "status": RunStatus.RUNNING,
-            "started_at": datetime.utcnow(),
+            "started_at": utc_now(),
             "progress": case(
                 (Run.progress < 5, 5),
                 else_=Run.progress,
@@ -160,6 +182,179 @@ class RunRepository(BaseRepository[Run]):
         )
         claimed = (await self.session.execute(stmt)).scalar_one_or_none()
         return claimed is not None
+
+    async def claim_next_run(
+        self,
+        worker_id: str,
+        lease_seconds: int = 120,
+    ) -> Optional[Run]:
+        """Atomically claim the next runnable run for this worker.
+
+        Picks either a freshly QUEUED run, or a RUNNING run whose lease has
+        expired (worker crashed/restarted). Uses SELECT ... FOR UPDATE
+        SKIP LOCKED so two workers never claim the same run.
+
+        Commits the claim and returns the leased Run, or None when idle.
+        """
+        now = utc_now()
+        lease_until = now + timedelta(seconds=lease_seconds)
+
+        candidate_stmt = (
+            select(Run.id)
+            .where(
+                or_(
+                    Run.status == RunStatus.QUEUED,
+                    and_(
+                        Run.status == RunStatus.RUNNING,
+                        Run.worker_lease_until.isnot(None),
+                        Run.worker_lease_until < now,
+                    ),
+                )
+            )
+            .order_by(Run.created_at.asc())
+            .limit(1)
+            .with_for_update(skip_locked=True)
+        )
+        candidate_id = (await self.session.execute(candidate_stmt)).scalar_one_or_none()
+        if candidate_id is None:
+            await self.session.commit()
+            return None
+
+        stmt = (
+            update(Run)
+            .where(Run.id == candidate_id)
+            .values(
+                status=RunStatus.RUNNING,
+                worker_id=worker_id,
+                worker_lease_until=lease_until,
+                started_at=case((Run.started_at.is_(None), func.now()), else_=Run.started_at),
+            )
+            .returning(Run)
+        )
+        run = (await self.session.execute(stmt)).scalar_one_or_none()
+        await self.session.commit()
+        return run
+
+    async def renew_lease(
+        self,
+        run_id: UUID,
+        worker_id: str,
+        lease_seconds: int = 120,
+    ) -> bool:
+        """Extend the worker lease for a run still owned by this worker."""
+        lease_until = utc_now() + timedelta(seconds=lease_seconds)
+        stmt = (
+            update(Run)
+            .where(Run.id == run_id, Run.worker_id == worker_id, Run.status == RunStatus.RUNNING)
+            .values(worker_lease_until=lease_until)
+            .returning(Run.id)
+        )
+        renewed = (await self.session.execute(stmt)).scalar_one_or_none()
+        await self.session.commit()
+        return renewed is not None
+
+    async def set_method_job_id(self, run_id: UUID, method_job_id: str) -> Optional[Run]:
+        """Persist the method service job id for a run (for resume/cancel)."""
+        return await self.update(run_id, method_job_id=method_job_id)
+
+    async def update_stage(
+        self,
+        run_id: UUID,
+        stage: Optional[str] = None,
+        *,
+        message: Optional[str] = None,
+        progress: Optional[int] = None,
+    ) -> Optional[Run]:
+        """Update the high-level stage (and optional progress/message).
+
+        Progress is only set on stage transitions and never decreases.
+        """
+        values: dict[str, object] = {}
+        if stage is not None:
+            values["stage"] = stage
+        if message is not None:
+            values["stage_message"] = message
+            values["message"] = message
+        if progress is not None:
+            bounded = max(0, min(100, progress))
+            values["progress"] = case(
+                (Run.progress < bounded, bounded),
+                else_=Run.progress,
+            )
+        if not values:
+            return await self.get_by_id(run_id)
+
+        stmt = (
+            update(Run)
+            .where(Run.id == run_id)
+            .where(Run.status.in_(ACTIVE_RUN_STATUSES))
+            .values(**values)
+            .returning(Run)
+        )
+        result = await self.session.execute(stmt)
+        await self.session.commit()
+        return result.scalar_one_or_none()
+
+    async def cancel_if_queued(self, run_id: UUID, message: Optional[str] = None) -> bool:
+        """Immediately cancel a run that is still QUEUED and unclaimed.
+
+        Used when a user cancels before the worker picks up the run.
+        """
+        now = utc_now()
+        stmt = (
+            update(Run)
+            .where(
+                Run.id == run_id,
+                Run.status == RunStatus.QUEUED,
+                Run.worker_lease_until.is_(None),
+            )
+            .values(
+                status=RunStatus.CANCELLED,
+                stage="CANCELLED",
+                stage_message=message or "Cancelled before execution",
+                message=message or "Cancelled before execution",
+                cancel_requested_at=now,
+                finished_at=func.now(),
+                worker_lease_until=None,
+            )
+            .returning(Run.id)
+        )
+        cancelled = (await self.session.execute(stmt)).scalar_one_or_none()
+        await self.session.commit()
+        return cancelled is not None
+
+    async def request_cancel(self, run_id: UUID, message: Optional[str] = None) -> Optional[Run]:
+        """Mark a RUNNING run as cancel-requested so the worker terminates it."""
+        now = utc_now()
+        stmt = (
+            update(Run)
+            .where(Run.id == run_id, Run.status.in_(ACTIVE_RUN_STATUSES))
+            .values(
+                cancel_requested_at=case(
+                    (Run.cancel_requested_at.is_(None), now),
+                    else_=Run.cancel_requested_at,
+                ),
+                stage="CANCELLING",
+                stage_message=message or "Cancelling...",
+                message=message or "Cancelling...",
+            )
+            .returning(Run)
+        )
+        result = await self.session.execute(stmt)
+        await self.session.commit()
+        return result.scalar_one_or_none()
+
+    async def mark_cancelled(self, run_id: UUID, message: Optional[str] = None) -> Optional[Run]:
+        """Finalize a run as CANCELLED and release the worker lease."""
+        return await self.update(
+            run_id,
+            status=RunStatus.CANCELLED,
+            stage="CANCELLED",
+            stage_message=message or "Run cancelled",
+            message=message or "Run cancelled",
+            finished_at=func.now(),
+            worker_lease_until=None,
+        )
 
     async def update_progress(
         self,
@@ -206,9 +401,12 @@ class RunRepository(BaseRepository[Run]):
             run_id,
             result=result,
             status=status,
+            stage="COMPLETED" if status == RunStatus.DONE else None,
+            stage_message="Completed" if status == RunStatus.DONE else None,
             progress=100,
             message="Completed",
-            finished_at=datetime.utcnow(),
+            finished_at=func.now(),
+            worker_lease_until=None,
         )
 
     async def set_error(
@@ -220,10 +418,12 @@ class RunRepository(BaseRepository[Run]):
         return await self.update(
             run_id,
             status=RunStatus.ERROR,
+            stage="ERROR",
             error=error,
             progress=100,
             message=error,
-            finished_at=datetime.utcnow(),
+            finished_at=func.now(),
+            worker_lease_until=None,
         )
 
     async def get_expired_runs(self) -> List[Run]:
@@ -231,7 +431,7 @@ class RunRepository(BaseRepository[Run]):
         result = await self.session.execute(
             select(Run)
             .where(Run.expires_at.isnot(None))
-            .where(Run.expires_at < datetime.utcnow())
+            .where(Run.expires_at < utc_now())
         )
         return list(result.scalars().all())
 

@@ -1,5 +1,22 @@
 {
   "name": "GCtree",
   "version": "dynamic",
-  "accepts": ["text/fasta", "text/x-fasta", "text/csv", "text/tab-separated-values"]
+  "accepts": [
+    "text/fasta",
+    "text/x-fasta",
+    "text/csv",
+    "text/tab-separated-values",
+    "application/zip"
+  ],
+  "tagline": "Abundance-aware maximum-parsimony B-cell lineage trees",
+  "category": "Abundance-aware",
+  "summary": "A Python tool that reconstructs genotype-collapsed B-cell lineage trees by combining PHYLIP/dnapars maximum-parsimony with a branching-process ranking driven by clonal abundance.",
+  "capabilities": [
+    "Phylogenetic inference that incorporates sequence abundance",
+    "PHYLIP/dnapars parsimony combined with branching-process ranking",
+    "Re-ranking and re-rendering from a saved forest pickle"
+  ],
+  "inputFormats": ["FASTA", "CSV", "TSV", "ZIP"],
+  "externalDocUrl": "https://matsen.group/gctree/",
+  "externalDocLabel": "matsen.group/gctree"
 }

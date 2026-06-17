@@ -2,6 +2,9 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { LineagePlot, LineagePlotNode, TreeNodeAttrs } from "@phylo/contracts";
+import DownloadMenu from "@/components/phylo/tree/DownloadMenu";
+import NodeDetailModal, { type NodeDetail } from "@/components/phylo/tree/NodeDetailModal";
+import MatchArrow from "@/components/phylo/tree/MatchArrow";
 
 type NodeAttrs = TreeNodeAttrs;
 
@@ -15,6 +18,7 @@ type RenderNode = {
   color: string;
   title: string;
   displayLabel: string;
+  rows: NodeDetail["rows"];
 };
 
 type RenderEdge = {
@@ -159,6 +163,24 @@ function buildTitle(
   return lines.join("\n");
 }
 
+/** Structured field rows for the node-detail modal (clicking a node). */
+function buildRows(node: LineagePlotNode, attrs: NodeAttrs | undefined): NodeDetail["rows"] {
+  const rows: NodeDetail["rows"] = [{ key: "label", value: String(node.label ?? node.id) }];
+  const seq = String(attrs?.sequence_id ?? "").trim();
+  if (seq) rows.push({ key: "sequence_id", value: seq });
+  rows.push({ key: "abundance", value: String(toAbundance(node.abundance ?? attrs?.abundance, 1)) });
+  if (node.parentId) rows.push({ key: "parentId", value: String(node.parentId) });
+  rows.push({ key: "type", value: node.isLeaf ? "leaf" : "internal" });
+  if (attrs && typeof attrs === "object") {
+    const ignored = new Set<string>(["tooltip", "sequence_id", "abundance"]);
+    for (const key of Object.keys(attrs).filter((k) => !ignored.has(k)).sort((a, b) => a.localeCompare(b, "en"))) {
+      const value = String(attrs[key] ?? "").trim();
+      if (value) rows.push({ key, value });
+    }
+  }
+  return rows;
+}
+
 function truncateLabel(label: string, maxChars: number): string {
   if (maxChars <= 1) return "…";
   if (label.length <= maxChars) return label;
@@ -185,11 +207,36 @@ function splitByHighlight(text: string, highlight: string): Array<{ text: string
   return parts.length ? parts : [{ text, highlight: false }];
 }
 
+function resolveNodeDisplayLabel(
+  node: LineagePlotNode,
+  attrs: NodeAttrs | undefined,
+  displayIdField: string | null | undefined,
+  showInternalNodes: boolean,
+  showNodeNumbers: boolean,
+): string {
+  if (!node.isLeaf && showInternalNodes) {
+    const nodeId = String(attrs?.node_id ?? "").trim();
+    const seq = String(attrs?.sequence ?? "").trim();
+    const nodeNum = attrs?.nodeNumber ?? attrs?.node;
+    if (showNodeNumbers && nodeNum != null && String(nodeNum).trim()) {
+      const numLabel = `#${nodeNum}`;
+      if (nodeId) return `${numLabel} ${nodeId}`;
+      if (seq) return `${numLabel} ${seq.slice(0, 12)}`;
+      return numLabel;
+    }
+    if (nodeId) return nodeId;
+    if (seq) return seq.length > 16 ? `${seq.slice(0, 16)}…` : seq;
+  }
+  return resolveDisplayLabel(node, attrs, displayIdField);
+}
+
 function buildLayout(
   lineagePlot: LineagePlot,
   nodeAttributes: Record<string, NodeAttrs> | undefined,
   displayIdField: string | null | undefined,
   showLabels: boolean,
+  showInternalNodes: boolean,
+  showNodeNumbers: boolean,
 ): LayoutResult {
   const warnings: LayoutWarning[] = [];
   let invalidNodeCount = 0;
@@ -286,7 +333,13 @@ function buildLayout(
     const attrs = resolveNodeAttrs(node, nodeAttributes);
     const abundance = toAbundance(node.abundance ?? attrs?.abundance, 1);
     const radius = radiusForAbundance(abundance, minAbundance, maxAbundance);
-    const displayLabel = resolveDisplayLabel(node, attrs, displayIdField);
+    const displayLabel = resolveNodeDisplayLabel(
+      node,
+      attrs,
+      displayIdField,
+      showInternalNodes,
+      showNodeNumbers,
+    );
     return {
       id: node.id,
       label: node.label,
@@ -297,6 +350,7 @@ function buildLayout(
       color: colorForAbundance(abundance, minAbundance, maxAbundance),
       title: buildTitle(node, attrs, displayIdField),
       displayLabel,
+      rows: buildRows(node, attrs),
     };
   });
 
@@ -316,8 +370,8 @@ function buildLayout(
   const maxChars = leafLabels.length ? Math.max(...leafLabels.map((label) => label.length)) : 0;
   const labelWidth = clamp(maxChars * LABEL_CHAR_WIDTH, MIN_LABEL_AREA, MAX_LABEL_AREA);
   const maxLabelChars = Math.max(1, Math.floor(labelWidth / LABEL_CHAR_WIDTH));
-  const labelAreaWidth = showLabels ? LABEL_PAD + labelWidth : 0;
-  if (showLabels) maxX += labelAreaWidth;
+  const labelAreaWidth = showLabels || showInternalNodes ? LABEL_PAD + labelWidth : 0;
+  if (showLabels || showInternalNodes) maxX += labelAreaWidth;
 
   const offsetX = PAD - minX;
   const offsetY = PAD - minY;
@@ -332,8 +386,8 @@ function buildLayout(
     (acc, node) => Math.max(acc, node.x + node.radius),
     Number.NEGATIVE_INFINITY,
   );
-  const labelX = showLabels ? plotRightX + LABEL_PAD : 0;
-  const connectorX = showLabels ? Math.round(labelX) - LABEL_CONNECTOR_GAP : 0;
+  const labelX = showLabels || showInternalNodes ? plotRightX + LABEL_PAD : 0;
+  const connectorX = showLabels || showInternalNodes ? Math.round(labelX) - LABEL_CONNECTOR_GAP : 0;
 
   const renderEdges: RenderEdge[] = edges.map((edge, idx) => {
     const source = coords.get(edge.source);
@@ -373,25 +427,93 @@ export default function LineageSVG({
   nodeAttributes,
   displayIdField,
   showLabels = true,
+  showInternalNodes = false,
+  showNodeNumbers = false,
   filename = "tree",
   newickText,
   highlightText,
+  viewportHeight,
+  markMatches = false,
+  focusSignal,
+  fitToParent = false,
+  onRequestFocus,
 }: {
   lineagePlot: LineagePlot;
   nodeAttributes?: Record<string, NodeAttrs>;
   displayIdField?: string | null;
   showLabels?: boolean;
+  showInternalNodes?: boolean;
+  showNodeNumbers?: boolean;
   filename?: string;
   newickText?: string | null;
   highlightText?: string | null;
+  /** Override for the scrollable viewport height (e.g. fullscreen expand). */
+  viewportHeight?: number | string;
+  /** Draw a "Show me" arrow above every node matching `highlightText`. */
+  markMatches?: boolean;
+  /** Bumping this focuses the first matching node (Sequence Trace). */
+  focusSignal?: number;
+  /** Render the bare svg only (no own scroll), to be driven by a zoom pane. */
+  fitToParent?: boolean;
+  /** In `fitToParent` mode, report the first match's coords instead of scrolling. */
+  onRequestFocus?: (x: number, y: number) => void;
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
+  const [selectedNode, setSelectedNode] = useState<NodeDetail | null>(null);
 
   const layout = useMemo(
-    () => buildLayout(lineagePlot, nodeAttributes, displayIdField, showLabels),
-    [displayIdField, lineagePlot, nodeAttributes, showLabels],
+    () =>
+      buildLayout(
+        lineagePlot,
+        nodeAttributes,
+        displayIdField,
+        showLabels,
+        showInternalNodes ?? false,
+        showNodeNumbers ?? false,
+      ),
+    [displayIdField, lineagePlot, nodeAttributes, showInternalNodes, showLabels, showNodeNumbers],
   );
+
+  // Nodes matching the searched text (same predicate as the red highlight),
+  // used to scroll the first match into view on "Show me".
+  const needle = highlightText?.trim() ?? "";
+  const matchedNodes = useMemo(() => {
+    if (!needle) return [] as Array<{ x: number; y: number }>;
+    const lc = needle.toLowerCase();
+    return layout.nodes
+      .filter(
+        (node) =>
+          node.title.toLowerCase().includes(lc) ||
+          node.displayLabel.toLowerCase().includes(lc) ||
+          node.label.toLowerCase().includes(lc),
+      )
+      .map((node) => ({ x: node.x, y: node.y }));
+  }, [needle, layout.nodes]);
+
+  const focusState = useRef({ matchedNodes, markMatches, fitToParent, onRequestFocus });
+  focusState.current = { matchedNodes, markMatches, fitToParent, onRequestFocus };
+  useEffect(() => {
+    if (!focusSignal) return;
+    const { matchedNodes: nodes, markMatches: mm, fitToParent: fit, onRequestFocus: req } =
+      focusState.current;
+    const first = nodes[0];
+    if (!mm || !first) return;
+    // In a zoom pane, hand the coordinate to the parent to zoom-and-center;
+    // otherwise scroll our own container so the first match is centered.
+    if (fit) {
+      req?.(first.x, first.y);
+      return;
+    }
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({
+      left: Math.max(0, first.x - el.clientWidth / 2),
+      top: Math.max(0, first.y - el.clientHeight / 2),
+      behavior: "smooth",
+    });
+  }, [focusSignal]);
 
   useEffect(() => {
     if (!layout.warnings.length) return;
@@ -475,15 +597,7 @@ export default function LineageSVG({
     );
   }
 
-  return (
-    <div className="space-y-3">
-      {!!layout.warnings.length && (
-        <div className="rounded border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
-          {layout.warnings[0]?.message}
-        </div>
-      )}
-
-      <div className="w-full overflow-auto rounded border" style={{ maxHeight: VIEWPORT_MAX_HEIGHT }}>
+  const svgEl = (
         <svg
           ref={svgRef}
           width={layout.svgWidth}
@@ -526,6 +640,7 @@ export default function LineageSVG({
                   key={node.id}
                   onMouseEnter={() => setHoveredNodeId(node.id)}
                   onMouseLeave={() => setHoveredNodeId(null)}
+                  onClick={() => setSelectedNode({ title: node.displayLabel || node.label || node.id, rows: node.rows })}
                 >
                   <circle
                     cx={node.x}
@@ -539,7 +654,10 @@ export default function LineageSVG({
                   >
                     <title>{node.title}</title>
                   </circle>
-                  {showLabels && node.isLeaf && (
+                  {markMatches && matchesHighlight && (
+                    <MatchArrow x={node.x} y={node.y} gap={node.radius + 6} />
+                  )}
+                  {((showLabels && node.isLeaf) || (showInternalNodes && !node.isLeaf)) && (
                     <g>
                       <line
                         x1={node.x}
@@ -556,7 +674,8 @@ export default function LineageSVG({
                         y={node.y}
                         dominantBaseline="middle"
                         fontSize={LABEL_FONT_SIZE}
-                        fill="currentColor"
+                        fill={matchesHighlight ? "#dc2626" : "currentColor"}
+                        fontWeight={matchesHighlight ? "bold" : undefined}
                       >
                         {splitByHighlight(
                           truncateLabel(node.displayLabel, layout.maxLabelChars),
@@ -579,23 +698,50 @@ export default function LineageSVG({
             })}
           </g>
         </svg>
+  );
+
+  const modal = <NodeDetailModal detail={selectedNode} onClose={() => setSelectedNode(null)} />;
+
+  // Zoom-pane mode: render the bare svg so TreeZoomPane controls fit/zoom/pan.
+  if (fitToParent) {
+    return (
+      <>
+        {svgEl}
+        {modal}
+      </>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {!!layout.warnings.length && (
+        <div className="rounded border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
+          {layout.warnings[0]?.message}
+        </div>
+      )}
+
+      <div
+        ref={scrollRef}
+        className="w-full overflow-auto rounded border"
+        style={{ maxHeight: viewportHeight ?? VIEWPORT_MAX_HEIGHT }}
+      >
+        {svgEl}
       </div>
 
-      <div className="flex flex-wrap gap-2">
-        <button onClick={downloadPNG} className="rounded border px-3 py-1 text-sm">
-          Download PNG
-        </button>
-        <button onClick={downloadSVG} className="rounded border px-3 py-1 text-sm">
-          Download SVG
-        </button>
-        <button
-          onClick={downloadNewick}
-          disabled={!String(newickText ?? lineagePlot.meta?.normalizedNewick ?? "").trim()}
-          className="rounded border px-3 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          Download Newick
-        </button>
-      </div>
+      <DownloadMenu
+        formats={[
+          { label: "PNG image", description: "Raster image of the current view", onSelect: downloadPNG },
+          { label: "SVG image", description: "Scalable vector graphic", onSelect: downloadSVG },
+          {
+            label: "Newick",
+            description: "Tree topology (.nwk)",
+            onSelect: downloadNewick,
+            disabled: !String(newickText ?? lineagePlot.meta?.normalizedNewick ?? "").trim(),
+          },
+        ]}
+      />
+
+      {modal}
     </div>
   );
 }
