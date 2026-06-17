@@ -60,7 +60,8 @@ export default function RunStageFlowchart({
   return (
     <div className="space-y-2">
       <span className="text-xs font-medium text-muted-foreground">Pipeline</span>
-      <ol className="flex flex-wrap items-start gap-y-3">
+      <div className="flex justify-center">
+        <ol className="flex flex-wrap items-start justify-center gap-y-3">
         {nodes.map((node, i) => {
           const isLast = i === nodes.length - 1;
           return (
@@ -99,7 +100,8 @@ export default function RunStageFlowchart({
             </li>
           );
         })}
-      </ol>
+        </ol>
+      </div>
     </div>
   );
 }
