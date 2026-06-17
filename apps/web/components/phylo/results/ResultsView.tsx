@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import type { RunResult } from "@phylo/contracts";
-import { readTreeTipColorStats, readTreeTipSizeBy } from "@phylo/contracts";
+import { readTreeTipColorStats } from "@phylo/contracts";
 import { cleanNewick } from "@/lib/newick";
 import TreesCarousel from "@/components/phylo/TreesCarousel";
 import RunArtifactsSection from "@/components/phylo/RunArtifactsSection";
@@ -28,7 +28,6 @@ export default function ResultsView({
   const method = (methodId ?? result.method_id ?? "").toLowerCase();
 
   const { colorBy, unknownValue } = readTreeTipColorStats(result.stats);
-  const tipSizeBy = readTreeTipSizeBy(result.stats);
   const showInternalNodesDefault = useMemo(() => {
     const mode = (result.stats as Record<string, unknown> | undefined)?.analysis_mode;
     return mode === "tree_with_internal_sequences";
@@ -69,7 +68,6 @@ export default function ResultsView({
         cleanNewick={cleanNewick}
         colorBy={colorBy}
         unknownValue={unknownValue}
-        tipSizeBy={tipSizeBy}
         showInternalNodesDefault={showInternalNodesDefault}
       />
 

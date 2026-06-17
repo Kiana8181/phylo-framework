@@ -21,13 +21,14 @@ const VIEW_LABELS: Record<"method" | "phylogeny" | "lineage", string> = {
   lineage: "Lineage tree",
 };
 
+const TIP_SIZE_FIELD = "abundance";
+
 type TreesCarouselProps = {
   runId?: string | null;
   trees: Array<RunTree | string>;
   cleanNewick: (s: string) => string;
   colorBy?: string;
   unknownValue?: string;
-  tipSizeBy?: string;
   showInternalNodesDefault?: boolean;
 };
 
@@ -67,7 +68,6 @@ export default function TreesCarousel({
   cleanNewick,
   colorBy,
   unknownValue,
-  tipSizeBy,
   showInternalNodesDefault = false,
 }: TreesCarouselProps) {
   const total = trees?.length ?? 0;
@@ -77,7 +77,6 @@ export default function TreesCarousel({
   const [showInternalNodes, setShowInternalNodes] = useState(showInternalNodesDefault);
   const [showNodeNumbers, setShowNodeNumbers] = useState(showInternalNodesDefault);
   const [displayIdField, setDisplayIdField] = useState<string>("sequence_id");
-  const [sizeByField, setSizeByField] = useState<string>("");
   const [treeCache, setTreeCache] = useState<Record<string, RunTreePayload>>({});
   const [loadingTreeId, setLoadingTreeId] = useState<string | null>(null);
   const [treeLoadErrors, setTreeLoadErrors] = useState<Record<string, string>>({});
@@ -235,32 +234,6 @@ export default function TreesCarousel({
     return options;
   }, [current?.nodeAttributes, phyloAnnotations]);
 
-  const sizeFields = useMemo(() => {
-    const nums = new Set<string>();
-    for (const row of phyloAnnotations) {
-      for (const [key, value] of Object.entries(row)) {
-        if (["label", "final_tip_label"].includes(key)) continue;
-        const n = Number(value);
-        if (Number.isFinite(n)) nums.add(key);
-      }
-    }
-    return Array.from(nums).sort((a, b) => a.localeCompare(b, "en"));
-  }, [phyloAnnotations]);
-
-  useEffect(() => {
-    if (!sizeFields.length) {
-      setSizeByField("");
-      return;
-    }
-    const preferred = tipSizeBy && sizeFields.includes(tipSizeBy) ? tipSizeBy : "";
-    if (preferred) {
-      setSizeByField(preferred);
-      return;
-    }
-    if (sizeByField && sizeFields.includes(sizeByField)) return;
-    setSizeByField("");
-  }, [sizeFields, sizeByField, tipSizeBy, idx]);
-
   useEffect(() => {
     if (!displayFields.length) return;
     if (!displayFields.includes(displayIdField)) setDisplayIdField(displayFields[0]);
@@ -277,7 +250,7 @@ export default function TreesCarousel({
     showLabels,
     showInternalNodes,
     showNodeNumbers,
-    sizeByField,
+    sizeByField: TIP_SIZE_FIELD,
     lineageDownloadName,
     lineageNewick,
   };
@@ -388,9 +361,6 @@ export default function TreesCarousel({
         displayFields={displayFields}
         displayIdField={displayIdField}
         setDisplayIdField={setDisplayIdField}
-        sizeFields={sizeFields}
-        sizeByField={sizeByField}
-        setSizeByField={setSizeByField}
       />
 
       <TreeOverlay
