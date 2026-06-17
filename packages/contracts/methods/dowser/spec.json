@@ -1,5 +1,16 @@
 {
   "name": "Dowser",
   "version": "dynamic",
-  "accepts": ["text/csv", "text/tab-separated-values", "application/x-rda", "application/x-rds"]
+  "accepts": ["text/csv", "text/tab-separated-values", "application/x-rda", "application/x-rds"],
+  "tagline": "B-cell receptor phylogenetics in the Immcantation framework",
+  "category": "Immcantation",
+  "summary": "An R package in the Immcantation framework that builds lineage trees from BCR sequences, reconstructs germline and intermediate sequences, and tests for B-cell evolution.",
+  "capabilities": [
+    "Multiple tree builders: pratchet, pml, dnapars, dnaml, IgPhyML and RAxML",
+    "Germline and intermediate (internal-node) sequence reconstruction",
+    "Discrete trait analysis and measurable-evolution / time-resolved analysis"
+  ],
+  "inputFormats": ["TSV", "CSV", "RDA", "RDS"],
+  "externalDocUrl": "https://dowser.readthedocs.io/en/stable/",
+  "externalDocLabel": "dowser.readthedocs.io"
 }

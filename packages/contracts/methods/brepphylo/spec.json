@@ -4,5 +4,16 @@
   "accepts": [
     "text/csv",
     "text/tab-separated-values"
-  ]
+  ],
+  "tagline": "B-cell repertoire lineage trees with class-switch analysis",
+  "category": "Repertoire & CSR",
+  "summary": "An R package that reconstructs evolutionary lineages of B-cell clonotypes from high-throughput immunoglobulin sequencing data and identifies Class-Switch Recombination events.",
+  "capabilities": [
+    "Tree construction via simple parsimony, DNAPARS or IgPhyML",
+    "Class-Switch Recombination (CSR) / arborescence analysis",
+    "Species-specific germline reference handling"
+  ],
+  "inputFormats": ["TSV", "CSV"],
+  "externalDocUrl": "https://htmlpreview.github.io/?https://github.com/Fraternalilab/BrepPhylo/blob/main/vignettes/phylogenetic.html",
+  "externalDocLabel": "BrepPhylo vignette"
 }

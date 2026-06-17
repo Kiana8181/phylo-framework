@@ -18,7 +18,10 @@ RUN set -eux; \
       libjpeg-turbo-devel \
       libtiff-devel \
       fontconfig-devel \
-      freetype-devel; \
+      freetype-devel \
+      libuv-devel \
+      fribidi-devel \
+      harfbuzz-devel; \
     dnapars_bin="$(command -v dnapars || true)"; \
     if [ -n "$dnapars_bin" ]; then \
       if [ "$dnapars_bin" != "/usr/local/bin/dnapars" ]; then \
@@ -37,12 +40,32 @@ RUN DOWNLOAD_STATIC_LIBV8=1 R -q -e "install.packages( \
     repos = 'https://cloud.r-project.org' \
     )" \
     && R -q -e "install.packages('BiocManager', repos = 'https://cloud.r-project.org'); \
-    BiocManager::install(c('Biostrings','msa','GenomicRanges','GenomicAlignments'), ask = FALSE)" \
-    && R -q -e "remotes::install_github('Fraternalilab/BrepPhylo', dependencies = TRUE)"
+    BiocManager::install(c('Biostrings','msa','GenomicRanges','GenomicAlignments'), ask = FALSE)"
+
+# Install BrepPhylo via codeload tarball + install_local, NOT install_github.
+# install_github goes through api.github.com which is rate-limited to 60 req/hr
+# for unauthenticated users — Docker build retries silently exhausted the quota.
+# codeload.github.com serves the raw tarball via CDN, no rate limit. stopifnot
+# at the end fails the build loudly if BrepPhylo somehow didn't install.
+RUN curl -fsSL -o /tmp/brepphylo.tar.gz \
+      https://codeload.github.com/Fraternalilab/BrepPhylo/tar.gz/refs/heads/main \
+    && R -q -e "remotes::install_local('/tmp/brepphylo.tar.gz', dependencies = TRUE, upgrade = 'never'); \
+                stopifnot('BrepPhylo' %in% rownames(installed.packages()))" \
+    && rm -f /tmp/brepphylo.tar.gz
+
+# paws.storage + digest installed AFTER BrepPhylo so they don't interfere with the
+# upstream install chain. Required by services/brepphylo/object_storage.R to
+# upload artifact files directly to MinIO.
+RUN R -q -e "install.packages(c('paws.storage', 'digest'), repos = 'https://cloud.r-project.org'); \
+    stopifnot(all(c('paws.storage', 'digest') %in% rownames(installed.packages())))"
 
 WORKDIR /srv
 COPY validators.R /srv/validators.R
 COPY plumber.R /srv/plumber.R
+COPY job_manager.R /srv/job_manager.R
+COPY job_runner.R /srv/job_runner.R
+COPY artifact_manifest.R /srv/artifact_manifest.R
+COPY object_storage.R /srv/object_storage.R
 
 EXPOSE 8003
 

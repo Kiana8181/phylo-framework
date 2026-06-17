@@ -58,8 +58,11 @@ RUN DOWNLOAD_STATIC_LIBV8=1 R -q -e "install.packages( \
     BiocManager::install(c('Biostrings', 'ggtree'), ask = FALSE); \
     stopifnot('jsonvalidate' %in% rownames(installed.packages()))"
 
+RUN R -q -e "install.packages(c('paws.storage', 'digest'), repos = 'https://cloud.r-project.org'); \
+    stopifnot(all(c('paws.storage', 'digest') %in% rownames(installed.packages())))"
+
 WORKDIR /srv
-COPY validators.R data_io.R format_clones.R tree_build.R dta.R time_evolution.R internal_seqs.R exports.R handlers.R plumber.R /srv/
+COPY validators.R data_io.R format_clones.R tree_build.R dta.R time_evolution.R internal_seqs.R exports.R handlers.R plumber.R job_manager.R job_runner.R artifact_manifest.R object_storage.R /srv/
 
 EXPOSE 8001
 

@@ -44,6 +44,15 @@ RESULT_SCHEMA <- RESULT_SCHEMA_PATH
 SPEC_JSON <- read_json_or(SPEC_JSON_PATH, list())
 UI_JSON <- read_json_or(UI_JSON_PATH, list())
 ROUTES <- read_json_or(ROUTES_JSON_PATH, list(spec = "/spec", run = "/run"))
+ROUTES <- modifyList(
+  list(
+    spec = "/spec", run = "/run", jobs = "/jobs",
+    jobStatus = "/jobs/{job_id}/status",
+    jobResult = "/jobs/{job_id}/result",
+    jobCancel = "/jobs/{job_id}/cancel"
+  ),
+  ROUTES
+)
 
 merge_list <- function(a, b) {
   a[names(b)] <- b
@@ -115,6 +124,20 @@ spec_handler_impl <- function() {
 
 STRICT_CONTRACT <- tolower(Sys.getenv("STRICT_CONTRACT_ROUTES", "true")) %in% c("1", "true", "yes")
 
+# ---------------------------------------------------------------------------
+# Async job execution (/jobs contract) - per-job child Rscript process.
+# ---------------------------------------------------------------------------
+source_job_manager <- function() {
+  for (base in c("/srv", getwd())) {
+    p <- file.path(base, "job_manager.R")
+    if (file.exists(p)) { source(p, local = FALSE); return(invisible(TRUE)) }
+  }
+  stop("job_manager.R not found")
+}
+source_job_manager()
+JOB_MGR <- job_manager_new("dowser")
+to_plumber_path <- function(p) gsub("\\{job_id\\}", "<job_id>", p, perl = TRUE)
+
 #* @plumber
 function(pr) {
   if (!STRICT_CONTRACT) {
@@ -123,6 +146,39 @@ function(pr) {
   }
   pr$handle("GET", ROUTES$spec, serializer = SER, function(req, res) spec_handler_impl())
   pr$handle("POST", ROUTES$run, serializer = SER, function(req, res) run_handler_impl(req, res))
+
+  # Async jobs
+  pr$handle("POST", ROUTES$jobs, serializer = SER, function(req, res) {
+    body_raw <- req$postBody
+    if (is.raw(body_raw)) body_raw <- rawToChar(body_raw)
+    body <- tryCatch(jsonlite::fromJSON(body_raw, simplifyVector = FALSE), error = function(e) NULL)
+    if (is.null(body) || !is.list(body)) { res$status <- 400; return(list(ok = FALSE, error = "JSON body required")) }
+    job_id <- tryCatch(
+      job_manager_submit(JOB_MGR, body$file_path %||% NULL, body$params %||% list(), body$run_id %||% NULL),
+      error = function(e) e
+    )
+    if (inherits(job_id, "error")) { res$status <- 500; return(list(ok = FALSE, error = conditionMessage(job_id))) }
+    list(ok = TRUE, job_id = job_id, status = "QUEUED")
+  })
+  pr$handle("GET", to_plumber_path(ROUTES$jobStatus), serializer = SER, function(req, res, job_id) {
+    st <- job_manager_status(JOB_MGR, job_id)
+    if (is.null(st)) { res$status <- 404; return(list(ok = FALSE, error = "Job not found")) }
+    st
+  })
+  pr$handle("GET", to_plumber_path(ROUTES$jobResult), serializer = plumber::serializer_content_type("application/json"),
+    function(req, res, job_id) {
+      r <- job_manager_result(JOB_MGR, job_id)
+      if (r$code == 404) { res$status <- 404; return('{"ok":false,"error":"Job not found"}') }
+      if (r$code == 409) { res$status <- 409; return('{"ok":false,"error":"Job not finished"}') }
+      readChar(r$path, file.info(r$path)$size, useBytes = TRUE)
+    })
+  cancel_fn <- function(req, res, job_id) {
+    st <- job_manager_cancel(JOB_MGR, job_id)
+    if (is.null(st)) { res$status <- 404; return(list(ok = FALSE, error = "Job not found")) }
+    st
+  }
+  pr$handle("POST", to_plumber_path(ROUTES$jobCancel), serializer = SER, cancel_fn)
+  pr$handle("DELETE", to_plumber_path(ROUTES$jobCancel), serializer = SER, cancel_fn)
 
   pr_set_error(pr, function(req, res, err) {
     res$status <- 500

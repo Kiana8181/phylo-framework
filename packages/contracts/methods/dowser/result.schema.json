@@ -1,52 +1,113 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
-  "required": ["ok", "trees", "clones", "annotations", "stats"],
+  "required": [
+    "ok",
+    "trees",
+    "clones",
+    "annotations",
+    "stats"
+  ],
   "properties": {
-    "ok": { "type": "boolean" },
-    "trees": { "type": "array", "items": { "type": "string" } },
+    "ok": {
+      "type": "boolean"
+    },
+    "trees": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
     "trees_detail": {
       "type": "array",
       "items": {
         "type": "object",
         "properties": {
-          "clone_id": { "type": "string" },
-          "canonical_newick": { "type": "string" },
-          "display_newick": { "type": ["string", "null"] },
-          "lineage_newick": { "type": ["string", "null"] },
+          "clone_id": {
+            "type": "string"
+          },
+          "canonical_newick": {
+            "type": "string"
+          },
+          "display_newick": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lineage_newick": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "tip_label_map": {
             "type": "array",
             "items": {
               "type": "object",
               "properties": {
-                "sequence_id": { "type": "string" },
-                "display_label": { "type": "string" }
+                "sequence_id": {
+                  "type": "string"
+                },
+                "display_label": {
+                  "type": "string"
+                }
               }
             }
           },
-          "nodes": { "type": "array", "items": { "type": "object" } },
-          "all_sequences": { "type": "array", "items": { "type": "object" } },
-          "show_node_numbers": { "type": "boolean" }
+          "nodes": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "all_sequences": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "show_node_numbers": {
+            "type": "boolean"
+          }
         },
         "additionalProperties": true
       }
     },
     "figures": {
-      "type": ["object", "null"],
+      "type": [
+        "object",
+        "null"
+      ],
       "properties": {
-        "phylogeny": { "type": "array", "items": { "type": "string" } }
+        "phylogeny": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       },
       "additionalProperties": true
     },
     "annotations": {
       "type": "array",
       "items": {
-        "type": ["array", "null"],
+        "type": [
+          "array",
+          "null"
+        ],
         "items": {
           "type": "object",
           "properties": {
-            "label": { "type": "string" },
-            "sequence_id": { "type": ["string", "null"] }
+            "label": {
+              "type": "string"
+            },
+            "sequence_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
           },
           "additionalProperties": true
         }
@@ -54,62 +115,221 @@
     },
     "clones": {
       "type": "object",
-      "required": ["clone_id", "seqs"],
+      "required": [
+        "clone_id",
+        "seqs"
+      ],
       "properties": {
-        "clone_id": { "type": "array", "items": { "type": "string" } },
-        "seqs": { "type": "array", "items": { "type": "integer" } }
+        "clone_id": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "seqs": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        }
       }
     },
     "stats": {
       "type": "object",
       "properties": {
-        "n_clones": { "type": ["integer", "null"] },
-        "n_trees": { "type": ["integer", "null"] },
-        "total_seqs": { "type": ["integer", "null"] },
-        "analysis_mode": { "type": "string" },
-        "tree_build": { "type": "string" },
-        "canonical_ids": { "type": "string" }
+        "n_clones": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "n_trees": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "total_seqs": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "analysis_mode": {
+          "type": "string"
+        },
+        "tree_build": {
+          "type": "string"
+        },
+        "canonical_ids": {
+          "type": "string"
+        }
       },
       "additionalProperties": true
     },
-    "input_qc": { "type": "object", "additionalProperties": true },
-    "data_provenance": { "type": "object", "additionalProperties": true },
-    "discrete_trait_analysis": { "type": ["object", "null"], "additionalProperties": true },
-    "time_evolution": { "type": ["object", "null"], "additionalProperties": true },
-    "igphyml": { "type": ["object", "null"], "additionalProperties": true },
-    "chain_qc": { "type": ["object", "null"], "additionalProperties": true },
+    "input_qc": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "data_provenance": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "discrete_trait_analysis": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": true
+    },
+    "time_evolution": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": true
+    },
+    "igphyml": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": true
+    },
+    "chain_qc": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": true
+    },
     "artifacts": {
       "type": "array",
       "items": {
         "type": "object",
         "properties": {
-          "name": { "type": "string" },
-          "path": { "type": "string" },
-          "kind": { "type": "string" }
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          }
         },
         "additionalProperties": true
       }
     },
     "artifact_zip_b64": {
-      "type": "object",
-      "description": "Export bundle as a base64-encoded ZIP archive.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Deprecated. Legacy base64-encoded bundle; new Dowser emits artifact_files (paths).",
       "properties": {
         "clone_bundle_zip": {
-          "type": ["string", "null"],
-          "description": "ZIP of Dowser export files (base64-encoded)."
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "ZIP of Dowser export files (base64-encoded; deprecated)."
         }
       },
-      "additionalProperties": false
+      "additionalProperties": true
+    },
+    "artifact_files": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "description": "List of artifact file descriptors uploaded directly to object storage by the method service. Each entry carries the object key in the artifact bucket plus content metadata for the API worker to register.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "object_key": {
+            "type": "string",
+            "description": "Object key inside the artifact bucket (e.g. artifacts/<run_id>/<job_id>/<filename>)."
+          },
+          "filename": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "content_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "previewable": {
+            "type": "boolean"
+          },
+          "tree_index": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "checksum_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      }
     },
     "artifact_name": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "Suggested filename for the artifact ZIP download."
     },
-    "warnings": { "type": "array", "items": { "type": "string" } },
-    "logs": { "type": "array", "items": { "type": "object" } },
-    "error": { "type": ["string", "null"] },
-    "step": { "type": ["string", "null"] },
-    "render": { "type": ["string", "null"] }
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "logs": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "error": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "step": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "render": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
   },
   "additionalProperties": true
 }

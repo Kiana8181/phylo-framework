@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 import { useRunsList } from "@/features/runs/hooks";
+import type { RunListFilters } from "@/features/runs/api";
+import RunHistoryFilters from "@/components/runs/RunHistoryFilters";
 import { formatRunDuration } from "@/lib/runDuration";
 import {
   Card,
@@ -11,7 +13,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { ExternalLink, Loader2, ChevronLeft, ChevronRight, Copy, GitCompare } from "lucide-react";
+import { ExternalLink, ChevronLeft, ChevronRight, Copy, GitCompare } from "lucide-react";
+import { Loading } from "@/components/ui/loading";
 import { useState } from "react";
 import { notify } from "@/lib/notify";
 
@@ -53,11 +56,18 @@ function statusBadge(status: string) {
 
 export default function RunHistoryPage() {
   const [page, setPage] = useState(0);
+  const [filters, setFilters] = useState<RunListFilters>({});
   const skip = page * PAGE_SIZE;
-  const { data: runs, isLoading, error } = useRunsList({ skip, limit: PAGE_SIZE });
+  const { data: runs, isLoading, error } = useRunsList({ skip, limit: PAGE_SIZE, filters });
 
   const hasMore = runs != null && runs.length === PAGE_SIZE;
   const hasPrev = page > 0;
+  const hasActiveFilters = Object.values(filters).some(Boolean);
+
+  const handleFiltersChange = (next: RunListFilters) => {
+    setFilters(next);
+    setPage(0);
+  };
 
   return (
     <main className="mx-auto max-w-5xl w-full p-4 sm:p-6 space-y-6">
@@ -76,11 +86,9 @@ export default function RunHistoryPage() {
           <CardDescription>Your runs, newest first.</CardDescription>
         </CardHeader>
         <CardContent>
-          {isLoading && (
-            <div className="flex items-center justify-center py-12">
-              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-            </div>
-          )}
+          <RunHistoryFilters value={filters} onChange={handleFiltersChange} />
+
+          {isLoading && <Loading label="Loading runs…" />}
           {error && (
             <p className="text-destructive text-sm py-4">
               Failed to load runs. Please try again.
@@ -88,7 +96,9 @@ export default function RunHistoryPage() {
           )}
           {!isLoading && !error && (!runs || runs.length === 0) && (
             <p className="text-muted-foreground text-sm py-8 text-center">
-              No runs yet. Start a run from the Run model page.
+              {hasActiveFilters
+                ? "No runs match your filters. Try adjusting or clearing them."
+                : "No runs yet. Start a run from the Run model page."}
             </p>
           )}
           {!isLoading && !error && runs && runs.length > 0 && (

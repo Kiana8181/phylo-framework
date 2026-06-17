@@ -10,52 +10,81 @@
     "trees": {
       "type": "array",
       "description": "List of Newick trees (GCtree-ranked when ok=true; may be unranked DNAPARS fallback when ok=false for debugging).",
-      "items": { "type": "string" }
+      "items": {
+        "type": "string"
+      }
     },
     "figures": {
       "description": "Rendered tree images and related figures, base64-encoded data URLs grouped by kind.",
-      "type": ["object", "null"],
+      "type": [
+        "object",
+        "null"
+      ],
       "properties": {
         "phylogeny": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         },
         "abundance_rank": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         },
         "tree_stats": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         },
         "method_charts": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         },
         "other_outputs": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         }
       },
       "additionalProperties": {
         "type": "array",
-        "items": { "type": "string" }
+        "items": {
+          "type": "string"
+        }
       }
     },
     "annotations": {
       "type": "array",
       "description": "Optional per-tip annotations (currently unused, kept for schema compatibility).",
-      "items": { "type": "object" }
+      "items": {
+        "type": "object"
+      }
     },
     "node_abundances": {
-      "type": ["object", "null"],
+      "type": [
+        "object",
+        "null"
+      ],
       "description": "Optional node abundance mapping keyed by Newick node label.",
-      "additionalProperties": { "type": "number" }
+      "additionalProperties": {
+        "type": "number"
+      }
     },
     "label_to_sequence_id": {
-      "type": ["object", "null"],
+      "type": [
+        "object",
+        "null"
+      ],
       "description": "Optional mapping from tree labels to source sequence IDs.",
-      "additionalProperties": { "type": "string" }
+      "additionalProperties": {
+        "type": "string"
+      }
     },
     "clones": {
       "type": "object",
@@ -63,14 +92,21 @@
       "properties": {
         "clone_id": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         },
         "seqs": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         }
       },
-      "required": ["clone_id", "seqs"]
+      "required": [
+        "clone_id",
+        "seqs"
+      ]
     },
     "stats": {
       "type": "object",
@@ -83,10 +119,18 @@
       "items": {
         "type": "object",
         "properties": {
-          "step": { "type": "string" },
-          "ok": { "type": "boolean" },
-          "cmd": { "type": "string" },
-          "out": { "type": "string" }
+          "step": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "cmd": {
+            "type": "string"
+          },
+          "out": {
+            "type": "string"
+          }
         },
         "additionalProperties": true
       }
@@ -95,7 +139,15 @@
       "type": "array",
       "description": "Validation and scientific warnings (strings or structured objects).",
       "items": {
-        "oneOf": [{ "type": "string" }, { "type": "object", "additionalProperties": true }]
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "additionalProperties": true
+          }
+        ]
       }
     },
     "render_meta": {
@@ -108,34 +160,98 @@
       "description": "Tree model label for compatibility with other methods (e.g. phylogeny)."
     },
     "artifact_zip_b64": {
-      "type": "string",
-      "description": "Base64-encoded ZIP of all artifacts (outfile, outtree, cfg, logs, *.p, *.nk, *.svg, etc.)."
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Deprecated. Legacy base64-encoded ZIP. New services emit artifact_files (paths) and leave this null."
+    },
+    "artifact_files": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "description": "List of artifact file descriptors uploaded directly to object storage by the method service. Each entry carries the object key in the artifact bucket plus content metadata for the API worker to register.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "object_key": {
+            "type": "string",
+            "description": "Object key inside the artifact bucket (e.g. artifacts/<run_id>/<job_id>/<filename>)."
+          },
+          "filename": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "content_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "previewable": {
+            "type": "boolean"
+          },
+          "tree_index": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "checksum_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      }
     },
     "artifact_name": {
-      "type": "string",
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "Suggested filename for the artifacts ZIP."
     },
     "error": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "Human-readable error message if ok=false, or null otherwise."
     },
     "render": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "Preferred default render mode for the front-end (e.g. 'phylogeny')."
     }
   },
   "required": [
     "ok",
     "trees",
-    "figures",
     "annotations",
     "clones",
     "stats",
     "logs",
     "warnings",
     "render_meta",
-    "tree_model",
-    "artifact_zip_b64",
-    "artifact_name"
+    "tree_model"
   ]
 }

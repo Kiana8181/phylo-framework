@@ -723,6 +723,15 @@ RESULT_SCHEMA_JSON <- read_json_or(RESULT_SCHEMA_PATH, list())
 SPEC_JSON          <- read_json_or(SPEC_JSON_PATH, list())
 UI_JSON            <- read_json_or(UI_JSON_PATH, list())
 ROUTES_JSON        <- read_json_or(ROUTES_JSON_PATH, list(spec = "/spec", run = "/run"))
+ROUTES_JSON        <- modifyList(
+  list(
+    spec = "/spec", run = "/run", jobs = "/jobs",
+    jobStatus = "/jobs/{job_id}/status",
+    jobResult = "/jobs/{job_id}/result",
+    jobCancel = "/jobs/{job_id}/cancel"
+  ),
+  ROUTES_JSON
+)
 
 DEFAULT_ACCEPTS <- c(
   "text/csv",
@@ -1105,24 +1114,23 @@ run_handler_impl <- function(req, res) {
     )
     plot_files <- plot_files[grepl("clone_", basename(plot_files), fixed = TRUE)]
 
-    png_data <- list()
-    pdf_data <- list()
+    # Collect figure file PATHS (no base64 round-trip). materialize_artifacts
+    # in the job runner copies these into the run's artifact dir; the API
+    # worker uploads them to object storage. The files already live on disk
+    # in out_dir — no need to load them into RAM here.
+    png_paths <- list()
+    pdf_paths <- list()
     for (cid in clone_ids) {
       prefix <- paste0("clone_", cid, ".")
       candidates <- plot_files[startsWith(basename(plot_files), prefix)]
-      png_data[[cid]] <- NULL
-      pdf_data[[cid]] <- NULL
       if (!length(candidates)) next
-      f <- candidates[[1]]
-      sz <- file.info(f)$size
-      if (is.na(sz) || sz <= 0) next
-      raw <- readBin(f, what = "raw", n = sz)
-      if (grepl("\\.png$", f, ignore.case = TRUE)) png_data[[cid]] <- jsonlite::base64_enc(raw)
-      if (grepl("\\.pdf$", f, ignore.case = TRUE)) pdf_data[[cid]] <- jsonlite::base64_enc(raw)
+      for (f in candidates) {
+        sz <- file.info(f)$size
+        if (is.na(sz) || sz <= 0) next
+        if (grepl("\\.png$", f, ignore.case = TRUE)) png_paths[[cid]] <- f
+        if (grepl("\\.pdf$", f, ignore.case = TRUE)) pdf_paths[[cid]] <- f
+      }
     }
-
-    phylogeny_png <- unname(png_data[clone_ids])
-    phylogeny_pdf <- unname(pdf_data[clone_ids])
 
     annotations <- vector("list", length(clone_ids))
     for (i in seq_along(clone_ids)) {
@@ -1260,7 +1268,10 @@ run_handler_impl <- function(req, res) {
 
     add_log("brepphylo.summarise", TRUE, sprintf("Built %d trees for %d clones.", length(trees), length(clone_ids)))
 
-    artifacts_zip_b64 <- NULL
+    # Build the artifact bundle zip on disk — no base64 anywhere. The path
+    # is then registered into artifact_files for materialize_artifacts to
+    # copy into the run's artifact dir.
+    bundle_zip_path <- NULL
     all_files <- list.files(out_dir, recursive = TRUE, full.names = TRUE)
     if (length(all_files)) {
       exclude_basenames <- unique(c(
@@ -1280,23 +1291,61 @@ run_handler_impl <- function(req, res) {
         if (length(rel_paths)) {
           utils::zip(zipfile = zip_path, files = rel_paths)
           sz <- file.info(zip_path)$size
-          if (!is.na(sz) && sz > 0) {
-            zip_raw <- readBin(zip_path, what = "raw", n = sz)
-            artifacts_zip_b64 <- jsonlite::base64_enc(zip_raw)
-          }
+          if (!is.na(sz) && sz > 0) bundle_zip_path <- zip_path
         }
       }
+    }
+
+    # Assemble artifact_files: per-clone PNG and PDF figures (one entry per
+    # file that actually exists) plus the bundle zip.
+    artifact_files <- list()
+    for (i in seq_along(clone_ids)) {
+      cid <- clone_ids[[i]]
+      p <- png_paths[[cid]]
+      if (!is.null(p) && file.exists(p)) {
+        artifact_files[[length(artifact_files) + 1L]] <- list(
+          path = p,
+          filename = sprintf("phylogeny_%d.png", i),
+          kind = "image",
+          role = "phylogeny",
+          content_type = "image/png",
+          previewable = TRUE,
+          tree_index = i - 1L
+        )
+      }
+      d <- pdf_paths[[cid]]
+      if (!is.null(d) && file.exists(d)) {
+        artifact_files[[length(artifact_files) + 1L]] <- list(
+          path = d,
+          filename = sprintf("phylogeny_%d.pdf", i),
+          kind = "other",
+          role = "phylogeny_pdf",
+          content_type = "application/pdf",
+          previewable = FALSE,
+          tree_index = i - 1L
+        )
+      }
+    }
+    if (!is.null(bundle_zip_path) && file.exists(bundle_zip_path)) {
+      artifact_files[[length(artifact_files) + 1L]] <- list(
+        path = bundle_zip_path,
+        filename = "brepphylo_artifacts.zip",
+        kind = "zip",
+        role = "clone_bundle_zip",
+        content_type = "application/zip",
+        previewable = FALSE
+      )
     }
 
     list(
       ok = TRUE,
       trees = unname(trees),
-      figures = list(phylogeny = phylogeny_png, phylogeny_pdf = phylogeny_pdf),
+      figures = NULL,
       annotations = annotations,
       clones = clones_meta,
       analysis = analysis,
       diagnostics = diagnostics,
-      artifact_zip_b64 = list(clone_bundle_zip = artifacts_zip_b64),
+      artifact_files = artifact_files,
       stats = stats,
       warnings = unname(as.list(warnings)),
       logs = logs,
@@ -1314,6 +1363,20 @@ run_handler_impl <- function(req, res) {
 }
 
 STRICT_CONTRACT <- tolower(Sys.getenv("STRICT_CONTRACT_ROUTES", "true")) %in% c("1", "true", "yes")
+
+# ---------------------------------------------------------------------------
+# Async job execution (/jobs contract) - per-job child Rscript process.
+# ---------------------------------------------------------------------------
+source_job_manager <- function() {
+  for (base in c("/srv", getwd())) {
+    p <- file.path(base, "job_manager.R")
+    if (file.exists(p)) { source(p, local = FALSE); return(invisible(TRUE)) }
+  }
+  stop("job_manager.R not found")
+}
+source_job_manager()
+JOB_MGR <- job_manager_new("brepphylo")
+to_plumber_path <- function(p) gsub("\\{job_id\\}", "<job_id>", p, perl = TRUE)
 
 #* @plumber
 function(pr) {
@@ -1334,6 +1397,39 @@ function(pr) {
       brepphylo_version = as.character(utils::packageVersion("BrepPhylo"))
     )
   })
+
+  # Async jobs
+  pr$handle("POST", ROUTES_JSON$jobs, serializer = SER, function(req, res) {
+    body_raw <- req$postBody
+    if (is.raw(body_raw)) body_raw <- rawToChar(body_raw)
+    body <- tryCatch(jsonlite::fromJSON(body_raw, simplifyVector = FALSE), error = function(e) NULL)
+    if (is.null(body) || !is.list(body)) { res$status <- 400; return(list(ok = FALSE, error = "JSON body required")) }
+    job_id <- tryCatch(
+      job_manager_submit(JOB_MGR, body$file_path %||% NULL, body$params %||% list(), body$run_id %||% NULL),
+      error = function(e) e
+    )
+    if (inherits(job_id, "error")) { res$status <- 500; return(list(ok = FALSE, error = conditionMessage(job_id))) }
+    list(ok = TRUE, job_id = job_id, status = "QUEUED")
+  })
+  pr$handle("GET", to_plumber_path(ROUTES_JSON$jobStatus), serializer = SER, function(req, res, job_id) {
+    st <- job_manager_status(JOB_MGR, job_id)
+    if (is.null(st)) { res$status <- 404; return(list(ok = FALSE, error = "Job not found")) }
+    st
+  })
+  pr$handle("GET", to_plumber_path(ROUTES_JSON$jobResult), serializer = plumber::serializer_content_type("application/json"),
+    function(req, res, job_id) {
+      r <- job_manager_result(JOB_MGR, job_id)
+      if (r$code == 404) { res$status <- 404; return('{"ok":false,"error":"Job not found"}') }
+      if (r$code == 409) { res$status <- 409; return('{"ok":false,"error":"Job not finished"}') }
+      readChar(r$path, file.info(r$path)$size, useBytes = TRUE)
+    })
+  cancel_fn <- function(req, res, job_id) {
+    st <- job_manager_cancel(JOB_MGR, job_id)
+    if (is.null(st)) { res$status <- 404; return(list(ok = FALSE, error = "Job not found")) }
+    st
+  }
+  pr$handle("POST", to_plumber_path(ROUTES_JSON$jobCancel), serializer = SER, cancel_fn)
+  pr$handle("DELETE", to_plumber_path(ROUTES_JSON$jobCancel), serializer = SER, cancel_fn)
 
   pr_set_error(pr, function(req, res, err) {
     res$status <- 500
