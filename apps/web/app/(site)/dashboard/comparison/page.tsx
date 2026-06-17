@@ -15,18 +15,16 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import LineageSVG from "@/components/LineageSVG";
-import TreeSVG from "@/components/TreeSVG";
-import { Switch } from "@/components/ui/switch";
 import SequenceTraceInfoIcon from "@/components/sequence-trace/SequenceTraceInfoIcon";
 import { RunsApi } from "@/features/runs/api";
 import { useRunStatus } from "@/features/runs/hooks";
 import { useContractSpec, useMethods } from "@/features/methods/hooks";
 import type { RunSummary, LineagePlot, RunTreeListItem } from "@phylo/contracts";
-import { Maximize2, Search, Plus, X } from "lucide-react";
+import { Maximize2, Search, Plus, X, Crosshair } from "lucide-react";
 import { Spinner } from "@/components/ui/loading";
 import CompareExpandDialog, { type CompareExpandTreeRef } from "@/components/comparison/CompareExpandDialog";
 import RunAutocomplete from "@/components/comparison/RunAutocomplete";
-import RunParamsDropdown from "@/components/runs/RunParamsDropdown";
+import RunParamsPanel from "@/components/runs/RunParamsPanel";
 
 function datasetLabel(datasetName?: string | null, datasetFiles?: string[] | null): string {
   if (datasetName && datasetName.trim()) return datasetName;
@@ -74,12 +72,6 @@ type ColumnRun = {
   datasetName?: string | null;
   datasetFiles?: string[];
   trees: RunTreeListItem[];
-};
-
-type SameDatasetRef = {
-  id: string;
-  methodId?: string;
-  datasetName?: string | null;
 };
 
 type ComparisonPanelState = {
@@ -130,14 +122,13 @@ function displayFieldsFromAttrs(nodeAttributes: Record<string, Record<string, un
 function ComparisonColumn({
   title,
   run,
-  sameDatasetRuns,
   treeIndex,
   onTreeIndexChange,
   highlightText,
+  markMatches,
+  focusSignal,
   displayIdField,
   onDisplayIdFieldChange,
-  showLabels,
-  onShowLabelsChange,
   isLoading,
   error,
   placeholder,
@@ -146,14 +137,13 @@ function ComparisonColumn({
 }: {
   title: string;
   run: ColumnRun | null;
-  sameDatasetRuns?: SameDatasetRef[];
   treeIndex: number;
   onTreeIndexChange: (i: number) => void;
   highlightText: string;
+  markMatches?: boolean;
+  focusSignal?: number;
   displayIdField: string;
   onDisplayIdFieldChange: (v: string) => void;
-  showLabels: boolean;
-  onShowLabelsChange: (v: boolean) => void;
   isLoading?: boolean;
   error?: string | null;
   placeholder: React.ReactNode;
@@ -171,17 +161,8 @@ function ComparisonColumn({
   const nodeAttributes = payload?.node_attributes ?? undefined;
   const newickText = payload?.original_newick ?? payload?.newick ?? "";
   const hasLineage = tree?.hasLineagePlot ?? false;
-  const hasNewick = Boolean(newickText?.trim());
   const showLineage = hasLineage && (lineagePlot ?? payloadLoading);
   const displayFields = displayFieldsFromAttrs(nodeAttributes as Record<string, Record<string, unknown>> | undefined);
-  const [activeTab, setActiveTab] = useState<"lineage" | "phylogeny">("lineage");
-  useEffect(() => {
-    if (!showLineage && hasNewick) setActiveTab("phylogeny");
-  }, [showLineage, hasNewick]);
-  const phyloAnnotations = useMemo(() => {
-    if (!nodeAttributes) return [];
-    return Object.entries(nodeAttributes).map(([label, attrs]) => ({ label, ...(attrs ?? {}) }));
-  }, [nodeAttributes]);
   const { contractSpec } = useContractSpec(run?.methodId);
   const runDatasetLabel = datasetLabel(run?.datasetName, run?.datasetFiles);
 
@@ -240,20 +221,18 @@ function ComparisonColumn({
             {run.methodId} · {run.status}
           </p>
         </div>
-        <RunParamsDropdown
+        <RunParamsPanel
           methodKey={run.methodId}
           runId={run.runId}
           runParams={run.params}
           contractSpec={contractSpec}
           datasetName={run.datasetName}
           datasetFiles={run.datasetFiles}
-          sameDatasetRuns={sameDatasetRuns}
-          dense
         />
       </CardHeader>
       <CardContent className="space-y-3 flex-1 flex flex-col min-h-0">
         {run.trees.length > 0 && (
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Label className="text-xs shrink-0">Tree</Label>
             <Select value={String(treeIndex)} onValueChange={(v) => onTreeIndexChange(Number(v))}>
               <SelectTrigger className="w-[140px]">
@@ -267,82 +246,44 @@ function ComparisonColumn({
                 ))}
               </SelectContent>
             </Select>
+            {displayFields.length > 0 && (
+              <Select value={displayIdField} onValueChange={onDisplayIdFieldChange}>
+                <SelectTrigger className="ml-auto h-8 w-[130px] text-xs">
+                  <SelectValue placeholder="ID field" />
+                </SelectTrigger>
+                <SelectContent>
+                  {displayFields.map((f) => (
+                    <SelectItem key={f} value={f}>
+                      {f}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
           </div>
         )}
-        {payloadLoading && !lineagePlot && !newickText && (
+        {payloadLoading && !lineagePlot && (
           <div className="flex items-center gap-2 rounded border p-4 text-sm text-muted-foreground">
             <Spinner className="shrink-0" />
             Loading tree…
           </div>
         )}
-        {(showLineage || hasNewick) && (
-          <>
-            <div className="flex flex-wrap items-center gap-2 border-b pb-2">
-              {showLineage && (
-                <button
-                  type="button"
-                  className={`rounded px-2 py-1 text-xs border ${activeTab === "lineage" ? "bg-muted font-medium" : ""}`}
-                  onClick={() => setActiveTab("lineage")}
-                >
-                  Lineage
-                </button>
-              )}
-              {hasNewick && (
-                <button
-                  type="button"
-                  className={`rounded px-2 py-1 text-xs border ${activeTab === "phylogeny" ? "bg-muted font-medium" : ""}`}
-                  onClick={() => setActiveTab("phylogeny")}
-                >
-                  Phylogeny
-                </button>
-              )}
-              <div className="ml-auto flex items-center gap-2">
-                <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <Switch checked={showLabels} onCheckedChange={onShowLabelsChange} aria-label="Show labels" />
-                  Labels
-                </label>
-                {displayFields.length > 0 && (
-                  <Select value={displayIdField} onValueChange={onDisplayIdFieldChange}>
-                    <SelectTrigger className="w-[130px] h-8 text-xs">
-                      <SelectValue placeholder="ID field" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {displayFields.map((f) => (
-                        <SelectItem key={f} value={f}>
-                          {f}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
-              </div>
-            </div>
-            <div className="flex-1 min-h-[380px] overflow-auto rounded border bg-background">
-              {activeTab === "lineage" && showLineage && lineagePlot && (
-                <LineageSVG
-                  lineagePlot={lineagePlot}
-                  nodeAttributes={nodeAttributes}
-                  displayIdField={displayIdField || undefined}
-                  showLabels={showLabels}
-                  filename={`comparison-${run.runId}-${treeId}`}
-                  newickText={newickText || undefined}
-                  highlightText={highlightText || undefined}
-                />
-              )}
-              {activeTab === "phylogeny" && hasNewick && (
-                <TreeSVG
-                  newick={newickText}
-                  annotations={phyloAnnotations}
-                  showLabels={showLabels}
-                  displayIdField={displayIdField || undefined}
-                  highlightText={highlightText || undefined}
-                />
-              )}
-            </div>
-          </>
+        {showLineage && lineagePlot && (
+          <div className="flex-1 min-h-[380px] overflow-auto rounded border bg-background">
+            <LineageSVG
+              lineagePlot={lineagePlot}
+              nodeAttributes={nodeAttributes}
+              displayIdField={displayIdField || undefined}
+              filename={`comparison-${run.runId}-${treeId}`}
+              newickText={newickText || undefined}
+              highlightText={highlightText || undefined}
+              markMatches={markMatches}
+              focusSignal={focusSignal}
+            />
+          </div>
         )}
-        {run.trees.length > 0 && !hasLineage && !hasNewick && !payloadLoading && (
-          <p className="text-sm text-muted-foreground">No lineage plot or Newick for this tree.</p>
+        {run.trees.length > 0 && !hasLineage && !payloadLoading && (
+          <p className="text-sm text-muted-foreground">No lineage plot for this tree.</p>
         )}
         {run.trees.length === 0 && !isLoading && (
           <p className="text-sm text-muted-foreground">No trees in this run.</p>
@@ -362,8 +303,9 @@ export default function ComparisonPage() {
   const [comparisonPanels, setComparisonPanels] = useState<ComparisonPanelState[]>([]);
   const [baseTreeIndex, setBaseTreeIndex] = useState(0);
   const [highlightSequence, setHighlightSequence] = useState("");
+  const [markMatches, setMarkMatches] = useState(false);
+  const [focusSignal, setFocusSignal] = useState(0);
   const [displayIdField, setDisplayIdField] = useState("sequence_id");
-  const [showLabels, setShowLabels] = useState(true);
   const [expandOpen, setExpandOpen] = useState(false);
   const nextPanelIdRef = useRef(1);
 
@@ -465,16 +407,14 @@ export default function ComparisonPage() {
     if (baseRun) {
       refs.push({
         panelId: "base",
-        title: "Base",
         runId: baseRun.runId,
         treeIndex: baseTreeIndex,
       });
     }
-    comparisonPanels.forEach((panel, index) => {
+    comparisonPanels.forEach((panel) => {
       if (!panel.runId) return;
       refs.push({
         panelId: panel.panelId,
-        title: `Sequence Trace ${index + 1}`,
         runId: panel.runId,
         treeIndex: panel.treeIndex,
       });
@@ -527,19 +467,56 @@ export default function ComparisonPage() {
         <CardHeader className="pb-2">
           <CardTitle className="text-sm font-medium flex items-center gap-2">
             <Search className="h-4 w-4" />
-            Search / highlight in trees
+            Locate a sequence
           </CardTitle>
           <p className="text-xs text-muted-foreground font-normal mt-1">
-            Type a sequence_id or part of a label — matching nodes are highlighted across all visible trees.
+            Enter a sequence_id (or part of a label) and click <strong>Show me</strong> — an arrow marks it,
+            and each tree scrolls to the match. Matching nodes also turn red as you type.
           </p>
         </CardHeader>
         <CardContent>
-          <Input
-            placeholder="e.g. sequence_id or label text…"
-            value={highlightSequence}
-            onChange={(e) => setHighlightSequence(e.target.value)}
-            className="max-w-md"
-          />
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              placeholder="e.g. sequence_id or label text…"
+              value={highlightSequence}
+              onChange={(e) => {
+                setHighlightSequence(e.target.value);
+                // Editing clears stale arrows until "Show me" is pressed again.
+                setMarkMatches(false);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && highlightSequence.trim()) {
+                  setMarkMatches(true);
+                  setFocusSignal((n) => n + 1);
+                }
+              }}
+              className="max-w-md"
+            />
+            <Button
+              type="button"
+              disabled={!highlightSequence.trim()}
+              onClick={() => {
+                setMarkMatches(true);
+                setFocusSignal((n) => n + 1);
+              }}
+              className="gap-1.5"
+            >
+              <Crosshair className="h-4 w-4" />
+              Show me
+            </Button>
+            {(highlightSequence || markMatches) && (
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => {
+                  setHighlightSequence("");
+                  setMarkMatches(false);
+                }}
+              >
+                Clear
+              </Button>
+            )}
+          </div>
         </CardContent>
       </Card>
 
@@ -617,18 +594,13 @@ export default function ComparisonPage() {
           <ComparisonColumn
             title="Base"
             run={baseRun}
-            sameDatasetRuns={(sameDatasetList ?? []).map((candidate) => ({
-              id: candidate.id,
-              methodId: candidate.method_id,
-              datasetName: candidate.dataset_name,
-            }))}
             treeIndex={baseTreeIndex}
             onTreeIndexChange={setBaseTreeIndex}
             highlightText={highlightSequence}
+            markMatches={markMatches}
+            focusSignal={focusSignal}
             displayIdField={displayIdField}
             onDisplayIdFieldChange={setDisplayIdField}
-            showLabels={showLabels}
-            onShowLabelsChange={setShowLabels}
             isLoading={baseStatusLoading || (baseDone && baseTreesLoading)}
             error={
               is404
@@ -655,10 +627,10 @@ export default function ComparisonPage() {
               treeIndex={panel.treeIndex}
               onTreeIndexChange={(nextTreeIndex) => setComparisonTreeIndex(panel.panelId, nextTreeIndex)}
               highlightText={highlightSequence}
+              markMatches={markMatches}
+              focusSignal={focusSignal}
               displayIdField={displayIdField}
               onDisplayIdFieldChange={setDisplayIdField}
-              showLabels={showLabels}
-              onShowLabelsChange={setShowLabels}
               methodNameById={methodNameById}
             />
           ))}
@@ -671,7 +643,7 @@ export default function ComparisonPage() {
         trees={expandTrees}
         highlightText={highlightSequence}
         displayIdField={displayIdField}
-        showLabels={showLabels}
+        methodNameById={methodNameById}
       />
     </main>
   );
@@ -682,20 +654,20 @@ function RunLineageBlock({
   treeIndex,
   onTreeIndexChange,
   highlightText,
+  markMatches,
+  focusSignal,
   displayIdField,
   onDisplayIdFieldChange,
-  showLabels,
-  onShowLabelsChange,
   isLoading,
 }: {
   run: ColumnRun | null;
   treeIndex: number;
   onTreeIndexChange: (i: number) => void;
   highlightText: string;
+  markMatches?: boolean;
+  focusSignal?: number;
   displayIdField: string;
   onDisplayIdFieldChange: (v: string) => void;
-  showLabels: boolean;
-  onShowLabelsChange: (v: boolean) => void;
   isLoading?: boolean;
 }) {
   const tree = run?.trees?.[treeIndex];
@@ -710,27 +682,18 @@ function RunLineageBlock({
   const nodeAttributes = payload?.node_attributes ?? undefined;
   const newickText = payload?.original_newick ?? payload?.newick ?? "";
   const hasLineage = tree?.hasLineagePlot ?? false;
-  const hasNewick = Boolean(newickText?.trim());
   const showLineage = hasLineage && (lineagePlot ?? payloadLoading);
-  const [activeTab, setActiveTab] = useState<"lineage" | "phylogeny">("lineage");
-  useEffect(() => {
-    if (!showLineage && hasNewick) setActiveTab("phylogeny");
-  }, [showLineage, hasNewick]);
   const displayFields = useMemo(
     () => displayFieldsFromAttrs(nodeAttributes as Record<string, Record<string, unknown>> | undefined),
     [nodeAttributes]
   );
-  const phyloAnnotations = useMemo(() => {
-    if (!nodeAttributes) return [];
-    return Object.entries(nodeAttributes).map(([label, attrs]) => ({ label, ...(attrs ?? {}) }));
-  }, [nodeAttributes]);
 
   if (!run) return null;
 
   return (
     <div className="space-y-3">
       {run.trees.length > 0 && (
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Label className="text-xs shrink-0">Tree</Label>
           <Select value={String(treeIndex)} onValueChange={(v) => onTreeIndexChange(Number(v))}>
             <SelectTrigger className="w-[140px]">
@@ -744,82 +707,44 @@ function RunLineageBlock({
               ))}
             </SelectContent>
           </Select>
+          {displayFields.length > 0 && (
+            <Select value={displayIdField} onValueChange={onDisplayIdFieldChange}>
+              <SelectTrigger className="ml-auto h-8 w-[130px] text-xs">
+                <SelectValue placeholder="ID field" />
+              </SelectTrigger>
+              <SelectContent>
+                {displayFields.map((f) => (
+                  <SelectItem key={f} value={f}>
+                    {f}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
         </div>
       )}
-      {payloadLoading && !lineagePlot && !newickText && (
+      {payloadLoading && !lineagePlot && (
         <div className="flex items-center gap-2 rounded border p-4 text-sm text-muted-foreground">
           <Spinner className="shrink-0" />
           Loading tree…
         </div>
       )}
-      {(showLineage || hasNewick) && (
-        <>
-          <div className="flex flex-wrap items-center gap-2 border-b pb-2">
-            {showLineage && (
-              <button
-                type="button"
-                className={`rounded px-2 py-1 text-xs border ${activeTab === "lineage" ? "bg-muted font-medium" : ""}`}
-                onClick={() => setActiveTab("lineage")}
-              >
-                Lineage
-              </button>
-            )}
-            {hasNewick && (
-              <button
-                type="button"
-                className={`rounded px-2 py-1 text-xs border ${activeTab === "phylogeny" ? "bg-muted font-medium" : ""}`}
-                onClick={() => setActiveTab("phylogeny")}
-              >
-                Phylogeny
-              </button>
-            )}
-            <div className="ml-auto flex items-center gap-2">
-              <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <Switch checked={showLabels} onCheckedChange={onShowLabelsChange} aria-label="Show labels" />
-                Labels
-              </label>
-              {displayFields.length > 0 && (
-                <Select value={displayIdField} onValueChange={onDisplayIdFieldChange}>
-                  <SelectTrigger className="w-[130px] h-8 text-xs">
-                    <SelectValue placeholder="ID field" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {displayFields.map((f) => (
-                      <SelectItem key={f} value={f}>
-                        {f}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
-            </div>
-          </div>
-          <div className="min-h-[380px] overflow-auto rounded border bg-background">
-            {activeTab === "lineage" && showLineage && lineagePlot && (
-              <LineageSVG
-                lineagePlot={lineagePlot}
-                nodeAttributes={nodeAttributes}
-                displayIdField={displayIdField || undefined}
-                showLabels={showLabels}
-                filename={`comparison-${run.runId}-${treeId}`}
-                newickText={newickText || undefined}
-                highlightText={highlightText || undefined}
-              />
-            )}
-            {activeTab === "phylogeny" && hasNewick && (
-              <TreeSVG
-                newick={newickText}
-                annotations={phyloAnnotations}
-                showLabels={showLabels}
-                displayIdField={displayIdField || undefined}
-                highlightText={highlightText || undefined}
-              />
-            )}
-          </div>
-        </>
+      {showLineage && lineagePlot && (
+        <div className="min-h-[380px] overflow-auto rounded border bg-background">
+          <LineageSVG
+            lineagePlot={lineagePlot}
+            nodeAttributes={nodeAttributes}
+            displayIdField={displayIdField || undefined}
+            filename={`comparison-${run.runId}-${treeId}`}
+            newickText={newickText || undefined}
+            highlightText={highlightText || undefined}
+            markMatches={markMatches}
+            focusSignal={focusSignal}
+          />
+        </div>
       )}
-      {run.trees.length > 0 && !hasLineage && !hasNewick && !payloadLoading && (
-        <p className="text-sm text-muted-foreground">No lineage plot or Newick for this tree.</p>
+      {run.trees.length > 0 && !hasLineage && !payloadLoading && (
+        <p className="text-sm text-muted-foreground">No lineage plot for this tree.</p>
       )}
       {run.trees.length === 0 && !isLoading && (
         <p className="text-sm text-muted-foreground">No trees in this run.</p>
@@ -838,10 +763,10 @@ function ComparisonSlot({
   treeIndex,
   onTreeIndexChange,
   highlightText,
+  markMatches,
+  focusSignal,
   displayIdField,
   onDisplayIdFieldChange,
-  showLabels,
-  onShowLabelsChange,
   methodNameById,
 }: {
   index: number;
@@ -853,10 +778,10 @@ function ComparisonSlot({
   treeIndex: number;
   onTreeIndexChange: (i: number) => void;
   highlightText: string;
+  markMatches?: boolean;
+  focusSignal?: number;
   displayIdField: string;
   onDisplayIdFieldChange: (v: string) => void;
-  showLabels: boolean;
-  onShowLabelsChange: (v: boolean) => void;
   methodNameById: Map<string, string>;
 }) {
   const { data: status } = useRunStatus(runId || undefined);
@@ -922,19 +847,13 @@ function ComparisonSlot({
               <p className="text-xs text-muted-foreground">
                 {run.methodId} · {run.status}
               </p>
-              <RunParamsDropdown
+              <RunParamsPanel
                 methodKey={run.methodId}
                 runId={run.runId}
                 runParams={run.params}
                 contractSpec={contractSpec}
                 datasetName={run.datasetName}
                 datasetFiles={run.datasetFiles}
-                sameDatasetRuns={sameDatasetList.map((candidate) => ({
-                  id: candidate.id,
-                  methodId: candidate.method_id,
-                  datasetName: candidate.dataset_name,
-                }))}
-                dense
               />
             </div>
             <RunLineageBlock
@@ -942,10 +861,10 @@ function ComparisonSlot({
               treeIndex={treeIndex}
               onTreeIndexChange={onTreeIndexChange}
               highlightText={highlightText}
+              markMatches={markMatches}
+              focusSignal={focusSignal}
               displayIdField={displayIdField}
               onDisplayIdFieldChange={onDisplayIdFieldChange}
-              showLabels={showLabels}
-              onShowLabelsChange={onShowLabelsChange}
               isLoading={treesLoading}
             />
           </>

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { LineagePlot, LineagePlotNode, TreeNodeAttrs } from "@phylo/contracts";
 import DownloadMenu from "@/components/phylo/tree/DownloadMenu";
 import NodeDetailModal, { type NodeDetail } from "@/components/phylo/tree/NodeDetailModal";
+import MatchArrow from "@/components/phylo/tree/MatchArrow";
 
 type NodeAttrs = TreeNodeAttrs;
 
@@ -432,6 +433,10 @@ export default function LineageSVG({
   newickText,
   highlightText,
   viewportHeight,
+  markMatches = false,
+  focusSignal,
+  fitToParent = false,
+  onRequestFocus,
 }: {
   lineagePlot: LineagePlot;
   nodeAttributes?: Record<string, NodeAttrs>;
@@ -444,8 +449,17 @@ export default function LineageSVG({
   highlightText?: string | null;
   /** Override for the scrollable viewport height (e.g. fullscreen expand). */
   viewportHeight?: number | string;
+  /** Draw a "Show me" arrow above every node matching `highlightText`. */
+  markMatches?: boolean;
+  /** Bumping this focuses the first matching node (Sequence Trace). */
+  focusSignal?: number;
+  /** Render the bare svg only (no own scroll), to be driven by a zoom pane. */
+  fitToParent?: boolean;
+  /** In `fitToParent` mode, report the first match's coords instead of scrolling. */
+  onRequestFocus?: (x: number, y: number) => void;
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<NodeDetail | null>(null);
 
@@ -461,6 +475,45 @@ export default function LineageSVG({
       ),
     [displayIdField, lineagePlot, nodeAttributes, showInternalNodes, showLabels, showNodeNumbers],
   );
+
+  // Nodes matching the searched text (same predicate as the red highlight),
+  // used to scroll the first match into view on "Show me".
+  const needle = highlightText?.trim() ?? "";
+  const matchedNodes = useMemo(() => {
+    if (!needle) return [] as Array<{ x: number; y: number }>;
+    const lc = needle.toLowerCase();
+    return layout.nodes
+      .filter(
+        (node) =>
+          node.title.toLowerCase().includes(lc) ||
+          node.displayLabel.toLowerCase().includes(lc) ||
+          node.label.toLowerCase().includes(lc),
+      )
+      .map((node) => ({ x: node.x, y: node.y }));
+  }, [needle, layout.nodes]);
+
+  const focusState = useRef({ matchedNodes, markMatches, fitToParent, onRequestFocus });
+  focusState.current = { matchedNodes, markMatches, fitToParent, onRequestFocus };
+  useEffect(() => {
+    if (!focusSignal) return;
+    const { matchedNodes: nodes, markMatches: mm, fitToParent: fit, onRequestFocus: req } =
+      focusState.current;
+    const first = nodes[0];
+    if (!mm || !first) return;
+    // In a zoom pane, hand the coordinate to the parent to zoom-and-center;
+    // otherwise scroll our own container so the first match is centered.
+    if (fit) {
+      req?.(first.x, first.y);
+      return;
+    }
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({
+      left: Math.max(0, first.x - el.clientWidth / 2),
+      top: Math.max(0, first.y - el.clientHeight / 2),
+      behavior: "smooth",
+    });
+  }, [focusSignal]);
 
   useEffect(() => {
     if (!layout.warnings.length) return;
@@ -544,18 +597,7 @@ export default function LineageSVG({
     );
   }
 
-  return (
-    <div className="space-y-3">
-      {!!layout.warnings.length && (
-        <div className="rounded border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
-          {layout.warnings[0]?.message}
-        </div>
-      )}
-
-      <div
-        className="w-full overflow-auto rounded border"
-        style={{ maxHeight: viewportHeight ?? VIEWPORT_MAX_HEIGHT }}
-      >
+  const svgEl = (
         <svg
           ref={svgRef}
           width={layout.svgWidth}
@@ -612,6 +654,9 @@ export default function LineageSVG({
                   >
                     <title>{node.title}</title>
                   </circle>
+                  {markMatches && matchesHighlight && (
+                    <MatchArrow x={node.x} y={node.y} gap={node.radius + 6} />
+                  )}
                   {((showLabels && node.isLeaf) || (showInternalNodes && !node.isLeaf)) && (
                     <g>
                       <line
@@ -629,7 +674,8 @@ export default function LineageSVG({
                         y={node.y}
                         dominantBaseline="middle"
                         fontSize={LABEL_FONT_SIZE}
-                        fill="currentColor"
+                        fill={matchesHighlight ? "#dc2626" : "currentColor"}
+                        fontWeight={matchesHighlight ? "bold" : undefined}
                       >
                         {splitByHighlight(
                           truncateLabel(node.displayLabel, layout.maxLabelChars),
@@ -652,6 +698,34 @@ export default function LineageSVG({
             })}
           </g>
         </svg>
+  );
+
+  const modal = <NodeDetailModal detail={selectedNode} onClose={() => setSelectedNode(null)} />;
+
+  // Zoom-pane mode: render the bare svg so TreeZoomPane controls fit/zoom/pan.
+  if (fitToParent) {
+    return (
+      <>
+        {svgEl}
+        {modal}
+      </>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {!!layout.warnings.length && (
+        <div className="rounded border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
+          {layout.warnings[0]?.message}
+        </div>
+      )}
+
+      <div
+        ref={scrollRef}
+        className="w-full overflow-auto rounded border"
+        style={{ maxHeight: viewportHeight ?? VIEWPORT_MAX_HEIGHT }}
+      >
+        {svgEl}
       </div>
 
       <DownloadMenu
@@ -667,7 +741,7 @@ export default function LineageSVG({
         ]}
       />
 
-      <NodeDetailModal detail={selectedNode} onClose={() => setSelectedNode(null)} />
+      {modal}
     </div>
   );
 }

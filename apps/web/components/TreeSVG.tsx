@@ -1,9 +1,10 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { parseNewick, NewickNode } from "@/lib/newick";
 import DownloadMenu from "@/components/phylo/tree/DownloadMenu";
 import NodeDetailModal, { type NodeDetail } from "@/components/phylo/tree/NodeDetailModal";
+import MatchArrow from "@/components/phylo/tree/MatchArrow";
 
 type Anno = { label: string } & Record<string, any>;
 
@@ -28,6 +29,10 @@ type Props = {
   sizeBy?: string | null;
   /** Override for the scrollable viewport height (e.g. fullscreen expand). */
   viewportHeight?: number | string;
+  /** Draw a "Show me" arrow above every tip matching `highlightText`. */
+  markMatches?: boolean;
+  /** Bumping this scrolls the first matching tip into view (Sequence Trace). */
+  focusSignal?: number;
 };
 
 type LNode = NewickNode & { parent?: LNode; x?: number; y?: number };
@@ -252,8 +257,11 @@ export default function TreeSVG({
   showNodeNumbers = false,
   sizeBy = null,
   viewportHeight,
+  markMatches = false,
+  focusSignal,
 }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const [selectedNode, setSelectedNode] = useState<NodeDetail | null>(null);
 
   const coloringEnabled = !!colorBy;
@@ -392,6 +400,46 @@ export default function TreeSVG({
     return { root, edges, leafNodes, internalNodes, margin, labelX };
   }, [newick, width, computedHeight, fontSize, showLabels]);
 
+  // Tips matching the searched text (same predicate as the red highlight),
+  // used to draw "Show me" arrows and to scroll the first match into view.
+  const needle = highlightText?.trim() ?? "";
+  const matchedTips = useMemo(() => {
+    if (!needle) return [] as Array<{ x: number; y: number }>;
+    const lc = needle.toLowerCase();
+    const out: Array<{ x: number; y: number }> = [];
+    for (const n of layout.leafNodes) {
+      const label = n.name ?? "";
+      const anno = resolveAnno(annoByLabel, label);
+      const title = buildTipTitle(label, anno, colorField, displayIdField || null);
+      const displayLabel = (displayIdField && String(anno?.[displayIdField] ?? "").trim()) || label;
+      if (
+        title.toLowerCase().includes(lc) ||
+        label.toLowerCase().includes(lc) ||
+        displayLabel.toLowerCase().includes(lc)
+      ) {
+        out.push({ x: n.x ?? 0, y: n.y ?? 0 });
+      }
+    }
+    return out;
+  }, [needle, layout.leafNodes, annoByLabel, colorField, displayIdField]);
+
+  // Read latest match state inside the focus effect without making it a dep,
+  // so scrolling only fires when `focusSignal` (the "Show me" click) changes.
+  const focusState = useRef({ matchedTips, markMatches });
+  focusState.current = { matchedTips, markMatches };
+  useEffect(() => {
+    if (!focusSignal) return;
+    const { matchedTips: tips, markMatches: mm } = focusState.current;
+    const el = scrollRef.current;
+    const first = tips[0];
+    if (!mm || !el || !first) return;
+    el.scrollTo({
+      left: Math.max(0, first.x - el.clientWidth / 2),
+      top: Math.max(0, first.y - el.clientHeight / 2),
+      behavior: "smooth",
+    });
+  }, [focusSignal]);
+
   function downloadSVG() {
     const svg = svgRef.current;
     if (!svg) return;
@@ -444,6 +492,7 @@ export default function TreeSVG({
   return (
     <div className="space-y-3">
       <div
+        ref={scrollRef}
         className="w-full overflow-auto rounded border"
         style={{
           height: viewportHeight ?? TREE_VIEWPORT_HEIGHT,
@@ -514,6 +563,10 @@ export default function TreeSVG({
           })}
         </g>
 
+        {/* "Show me" arrows over matching tips */}
+        {markMatches &&
+          matchedTips.map((m, i) => <MatchArrow key={`tip-arrow-${i}`} x={m.x} y={m.y} />)}
+
         {showInternalNodes &&
           layout.internalNodes.map((n, i) => (
             <g key={`internal-${i}`}>
@@ -549,6 +602,13 @@ export default function TreeSVG({
               const title = buildTipTitle(label, anno, colorField, displayIdField || null);
               const displayLabel = (displayIdField && String(anno?.[displayIdField] ?? "").trim()) || label;
               const labelParts = splitByHighlight(displayLabel, highlightText ?? "");
+              const needle = highlightText?.trim();
+              const labelMatches = Boolean(
+                needle &&
+                  (title.toLowerCase().includes(needle.toLowerCase()) ||
+                    label.toLowerCase().includes(needle.toLowerCase()) ||
+                    displayLabel.toLowerCase().includes(needle.toLowerCase()))
+              );
               return (
                 <g key={i}>
                   <line
@@ -561,7 +621,13 @@ export default function TreeSVG({
                     opacity={0.4}
                     vectorEffect="non-scaling-stroke"
                   />
-                  <text x={Math.round(layout.labelX)} y={n.y!} dominantBaseline="middle">
+                  <text
+                    x={Math.round(layout.labelX)}
+                    y={n.y!}
+                    dominantBaseline="middle"
+                    fill={labelMatches ? "#dc2626" : undefined}
+                    fontWeight={labelMatches ? "bold" : undefined}
+                  >
                     {labelParts.map((seg, j) =>
                       seg.highlight ? (
                         <tspan key={j} fill="#dc2626" fontWeight="bold">
