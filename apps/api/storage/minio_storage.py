@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import BinaryIO, Optional
+import asyncio
+from typing import AsyncIterator, BinaryIO, Optional
 from urllib.parse import urljoin
 
 from minio import Minio
@@ -85,10 +86,30 @@ class MinIOStorage(StorageInterface):
         except S3Error as e:
             raise Exception(f"Failed to upload to MinIO: {e}")
 
+    async def upload_file(
+        self,
+        local_path: str,
+        file_path: str,
+        content_type: Optional[str] = None,
+    ) -> str:
+        """Stream-upload a file from disk to MinIO via fput_object (no full read into memory)."""
+        key = file_path.lstrip("/")
+        try:
+            await asyncio.to_thread(
+                self.client.fput_object,
+                self.bucket_name,
+                key,
+                local_path,
+                content_type=content_type or "application/octet-stream",
+            )
+            return key
+        except S3Error as e:
+            raise Exception(f"Failed to upload to MinIO: {e}")
+
     async def download(self, file_path: str) -> bytes:
         """Download file from MinIO."""
         key = file_path.lstrip("/")
-        
+
         try:
             response = self.client.get_object(self.bucket_name, key)
             data = response.read()
@@ -99,6 +120,29 @@ class MinIOStorage(StorageInterface):
             if e.code == 'NoSuchKey':
                 raise FileNotFoundError(f"File not found: {file_path}")
             raise Exception(f"Failed to download from MinIO: {e}")
+
+    async def stream_download(
+        self,
+        file_path: str,
+        chunk_size: int = 1024 * 1024,
+    ) -> AsyncIterator[bytes]:
+        """Stream a MinIO object in chunks without buffering the whole object."""
+        key = file_path.lstrip("/")
+        try:
+            response = await asyncio.to_thread(self.client.get_object, self.bucket_name, key)
+        except S3Error as e:
+            if e.code == "NoSuchKey":
+                raise FileNotFoundError(f"File not found: {file_path}")
+            raise Exception(f"Failed to download from MinIO: {e}")
+        try:
+            while True:
+                chunk = await asyncio.to_thread(response.read, chunk_size)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            response.close()
+            response.release_conn()
 
     async def delete(self, file_path: str) -> bool:
         """Delete file from MinIO."""
@@ -143,6 +187,27 @@ class MinIOStorage(StorageInterface):
         except S3Error:
             return False
 
+    async def move(self, src_path: str, dst_path: str) -> str:
+        """Move within MinIO via server-side copy + remove."""
+        from minio.commonconfig import CopySource
+
+        src_key = src_path.lstrip("/")
+        dst_key = dst_path.lstrip("/")
+        try:
+            self.client.copy_object(
+                self.bucket_name,
+                dst_key,
+                CopySource(self.bucket_name, src_key),
+            )
+            self.client.remove_object(self.bucket_name, src_key)
+            return dst_key
+        except S3Error as e:
+            raise Exception(f"Failed to move object in MinIO: {e}")
+
     def get_storage_type(self) -> str:
         """Get storage type."""
         return "minio"
+
+    @property
+    def bucket(self) -> Optional[str]:
+        return self.bucket_name

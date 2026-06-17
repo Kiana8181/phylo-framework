@@ -11,7 +11,8 @@ import {
 import { Progress } from "@/components/ui/progress";
 import { useDeleteFile, useFilesList } from "@/features/files/hooks";
 import { notify } from "@/lib/notify";
-import { Loader2, Trash2 } from "lucide-react";
+import { Trash2 } from "lucide-react";
+import { Loading, Spinner } from "@/components/ui/loading";
 import { useState } from "react";
 
 function formatDate(iso: string | null) {
@@ -89,11 +90,7 @@ export default function FileManagementPage() {
           <CardDescription>Files associated with your runs.</CardDescription>
         </CardHeader>
         <CardContent>
-          {isLoading && (
-            <div className="flex items-center justify-center py-12">
-              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-            </div>
-          )}
+          {isLoading && <Loading label="Loading files…" />}
           {error && (
             <p className="text-destructive text-sm py-4">
               Failed to load files. Please try again.
@@ -140,7 +137,7 @@ export default function FileManagementPage() {
                           disabled={deletingId === file.id || deleteFile.isPending}
                         >
                           {deletingId === file.id ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
+                            <Spinner />
                           ) : (
                             <Trash2 className="h-4 w-4" />
                           )}

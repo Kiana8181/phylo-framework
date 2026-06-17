@@ -9,7 +9,7 @@ MethodId = Literal["dowser", "brepphylo", "clonaltree", "gctree"]
 DOWSER_ACCEPTS = {"tsv", "csv", "rda", "rds"}
 BREPPHYLO_ACCEPTS = {"tsv", "csv"}
 CLONALTREE_ACCEPTS = {"tsv"}
-GCTREE_ACCEPTS = {"fasta", "fa", "fna", "p"}
+GCTREE_ACCEPTS = {"fasta", "fa", "fna", "p", "zip"}
 
 NATIVE_ACCEPTS_BY_METHOD: dict[MethodId, set[str]] = {
     "dowser": DOWSER_ACCEPTS,

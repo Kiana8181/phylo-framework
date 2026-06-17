@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import BinaryIO, Optional
+from typing import AsyncIterator, BinaryIO, Optional
 from uuid import UUID
 
 
@@ -86,6 +86,64 @@ class StorageInterface(ABC):
         pass
 
     @abstractmethod
+    async def move(self, src_path: str, dst_path: str) -> str:
+        """
+        Move/rename an object within storage.
+
+        For object stores (S3/MinIO) this may be implemented as copy + delete.
+
+        Args:
+            src_path: Source storage path/key
+            dst_path: Destination storage path/key
+
+        Returns:
+            The destination storage path/key
+        """
+        pass
+
+    @abstractmethod
     def get_storage_type(self) -> str:
         """Get the storage type identifier (e.g., 'local', 's3', 'minio')."""
         pass
+
+    @property
+    def bucket(self) -> Optional[str]:
+        """Bucket/container name for object stores, or None for local filesystem."""
+        return None
+
+    async def stream_download(
+        self,
+        file_path: str,
+        chunk_size: int = 1024 * 1024,
+    ) -> AsyncIterator[bytes]:
+        """
+        Stream a file from storage in chunks without loading it fully into memory.
+
+        The default implementation falls back to ``download`` (full read) and
+        re-chunks; object-store backends override this with true streaming.
+
+        Raises:
+            FileNotFoundError: if the object does not exist.
+        """
+        data = await self.download(file_path)
+        for offset in range(0, len(data), chunk_size):
+            yield data[offset:offset + chunk_size]
+
+    async def upload_file(
+        self,
+        local_path: str,
+        file_path: str,
+        content_type: Optional[str] = None,
+    ) -> str:
+        """
+        Upload a file from a local filesystem path to storage.
+
+        The default implementation reads the file into memory and calls
+        ``upload``; backends that support streaming uploads override this.
+
+        Returns:
+            Storage path/key of the uploaded file.
+        """
+        with open(local_path, "rb") as f:
+            data = f.read()
+        return await self.upload(data, file_path, content_type=content_type)

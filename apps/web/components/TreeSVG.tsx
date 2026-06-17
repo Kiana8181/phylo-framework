@@ -1,7 +1,10 @@
 "use client";
 
-import { useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { parseNewick, NewickNode } from "@/lib/newick";
+import DownloadMenu from "@/components/phylo/tree/DownloadMenu";
+import NodeDetailModal, { type NodeDetail } from "@/components/phylo/tree/NodeDetailModal";
+import MatchArrow from "@/components/phylo/tree/MatchArrow";
 
 type Anno = { label: string } & Record<string, any>;
 
@@ -20,6 +23,16 @@ type Props = {
   displayIdField?: string | null;
   /** When set, tip nodes whose label/tooltip contains this text get highlighted. */
   highlightText?: string | null;
+  showInternalNodes?: boolean;
+  showNodeNumbers?: boolean;
+  /** Numeric annotation field used to scale tip circle radius. */
+  sizeBy?: string | null;
+  /** Override for the scrollable viewport height (e.g. fullscreen expand). */
+  viewportHeight?: number | string;
+  /** Draw a "Show me" arrow above every tip matching `highlightText`. */
+  markMatches?: boolean;
+  /** Bumping this scrolls the first matching tip into view (Sequence Trace). */
+  focusSignal?: number;
 };
 
 type LNode = NewickNode & { parent?: LNode; x?: number; y?: number };
@@ -127,6 +140,26 @@ function buildTipTitle(
   return lines.join("\n");
 }
 
+/** Structured field rows for the node-detail modal (clicking a tip). */
+function buildTipRows(
+  label: string,
+  anno: Anno | undefined,
+  displayField: string | null,
+): NodeDetail {
+  const title = (displayField && String(anno?.[displayField] ?? "").trim()) || label;
+  const rows: NodeDetail["rows"] = [{ key: "label", value: label }];
+  if (anno) {
+    const seq = String(anno.sequence_id ?? "").trim();
+    if (seq) rows.push({ key: "sequence_id", value: seq });
+    const skip = new Set<string>(["label", "sequence_id", "tooltip"]);
+    for (const k of Object.keys(anno).filter((k) => !skip.has(k)).sort((a, b) => a.localeCompare(b, "en"))) {
+      const v = String(anno[k] ?? "").trim();
+      if (v) rows.push({ key: k, value: v });
+    }
+  }
+  return { title, rows };
+}
+
 function splitByHighlight(
   text: string,
   highlight: string
@@ -167,6 +200,45 @@ function isBlackColor(value: string): boolean {
   return false;
 }
 
+function buildAnnoLookup(annotations?: Anno[]): Record<string, Anno> {
+  const m: Record<string, Anno> = {};
+  (annotations ?? []).forEach((a) => {
+    if (!a) return;
+    const keys = [a.final_tip_label, a.sequence_id, a.label].filter(
+      (k): k is string => typeof k === "string" && k.trim().length > 0,
+    );
+    for (const key of keys) {
+      m[key.trim()] = a;
+    }
+  });
+  return m;
+}
+
+function resolveAnno(lookup: Record<string, Anno>, tipName: string): Anno | undefined {
+  return lookup[tipName];
+}
+
+function buildTipSizeScale(
+  annotations: Anno[] | undefined,
+  field: string | null | undefined,
+  minRadius = 2.5,
+  maxRadius = 10,
+) {
+  if (!field || !annotations?.length) return null;
+  const vals = annotations
+    .map((row) => Number(row[field]))
+    .filter((v) => Number.isFinite(v) && v > 0);
+  if (!vals.length) return null;
+  const min = Math.min(...vals);
+  const max = Math.max(...vals);
+  return (anno: Anno | undefined) => {
+    const v = Number(anno?.[field]);
+    if (!Number.isFinite(v) || v <= 0) return minRadius;
+    if (min === max) return (minRadius + maxRadius) / 2;
+    return minRadius + ((v - min) / (max - min)) * (maxRadius - minRadius);
+  };
+}
+
 export default function TreeSVG({
   newick,
   width = 900,
@@ -181,20 +253,26 @@ export default function TreeSVG({
   unknownValue,
   displayIdField,
   highlightText,
+  showInternalNodes = false,
+  showNodeNumbers = false,
+  sizeBy = null,
+  viewportHeight,
+  markMatches = false,
+  focusSignal,
 }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [selectedNode, setSelectedNode] = useState<NodeDetail | null>(null);
 
   const coloringEnabled = !!colorBy;
   const colorField = colorBy || null;
   const unknown = (unknownValue && unknownValue.trim()) || "unknown";
 
-  const annoByLabel = useMemo(() => {
-    const m: Record<string, Anno> = {};
-    (annotations ?? []).forEach((a) => {
-      if (a?.label) m[a.label] = a;
-    });
-    return m;
-  }, [annotations]);
+  const annoByLabel = useMemo(() => buildAnnoLookup(annotations), [annotations]);
+  const tipSizeScale = useMemo(
+    () => buildTipSizeScale(annotations, sizeBy),
+    [annotations, sizeBy],
+  );
 
   const colors = useMemo(() => {
     if (!coloringEnabled) return {};
@@ -307,16 +385,60 @@ export default function TreeSVG({
     walkEdges(root);
 
     const leafNodes: LNode[] = [];
+    const internalNodes: LNode[] = [];
     (function collect(n: LNode) {
       if (!n.children || !n.children.length) leafNodes.push(n);
-      else n.children.forEach((c) => collect(c as LNode));
+      else {
+        internalNodes.push(n);
+        n.children.forEach((c) => collect(c as LNode));
+      }
     })(root);
 
     const plotRightX = width - margin.right;
     const labelX = plotRightX + labelPad;
 
-    return { root, edges, leafNodes, margin, labelX };
+    return { root, edges, leafNodes, internalNodes, margin, labelX };
   }, [newick, width, computedHeight, fontSize, showLabels]);
+
+  // Tips matching the searched text (same predicate as the red highlight),
+  // used to draw "Show me" arrows and to scroll the first match into view.
+  const needle = highlightText?.trim() ?? "";
+  const matchedTips = useMemo(() => {
+    if (!needle) return [] as Array<{ x: number; y: number }>;
+    const lc = needle.toLowerCase();
+    const out: Array<{ x: number; y: number }> = [];
+    for (const n of layout.leafNodes) {
+      const label = n.name ?? "";
+      const anno = resolveAnno(annoByLabel, label);
+      const title = buildTipTitle(label, anno, colorField, displayIdField || null);
+      const displayLabel = (displayIdField && String(anno?.[displayIdField] ?? "").trim()) || label;
+      if (
+        title.toLowerCase().includes(lc) ||
+        label.toLowerCase().includes(lc) ||
+        displayLabel.toLowerCase().includes(lc)
+      ) {
+        out.push({ x: n.x ?? 0, y: n.y ?? 0 });
+      }
+    }
+    return out;
+  }, [needle, layout.leafNodes, annoByLabel, colorField, displayIdField]);
+
+  // Read latest match state inside the focus effect without making it a dep,
+  // so scrolling only fires when `focusSignal` (the "Show me" click) changes.
+  const focusState = useRef({ matchedTips, markMatches });
+  focusState.current = { matchedTips, markMatches };
+  useEffect(() => {
+    if (!focusSignal) return;
+    const { matchedTips: tips, markMatches: mm } = focusState.current;
+    const el = scrollRef.current;
+    const first = tips[0];
+    if (!mm || !el || !first) return;
+    el.scrollTo({
+      left: Math.max(0, first.x - el.clientWidth / 2),
+      top: Math.max(0, first.y - el.clientHeight / 2),
+      behavior: "smooth",
+    });
+  }, [focusSignal]);
 
   function downloadSVG() {
     const svg = svgRef.current;
@@ -370,8 +492,12 @@ export default function TreeSVG({
   return (
     <div className="space-y-3">
       <div
+        ref={scrollRef}
         className="w-full overflow-auto rounded border"
-        style={{ height: TREE_VIEWPORT_HEIGHT, maxHeight: TREE_VIEWPORT_HEIGHT }}
+        style={{
+          height: viewportHeight ?? TREE_VIEWPORT_HEIGHT,
+          maxHeight: viewportHeight ?? TREE_VIEWPORT_HEIGHT,
+        }}
       >
         <svg
           ref={svgRef}
@@ -392,7 +518,7 @@ export default function TreeSVG({
         <g>
           {layout.leafNodes.map((n, i) => {
             const label = n.name ?? "";
-            const anno = annoByLabel[label];
+            const anno = resolveAnno(annoByLabel, label);
             const defaultLeafFill = "var(--foreground)";
 
             let fill = defaultLeafFill;
@@ -417,17 +543,19 @@ export default function TreeSVG({
             const tipFill = matchesHighlight ? "#dc2626" : fill;
             const tipStroke = matchesHighlight ? "#b91c1c" : undefined;
             const tipStrokeWidth = matchesHighlight ? 2 : 0;
+            const tipRadius = tipSizeScale ? tipSizeScale(anno) : 3;
 
             return (
               <circle
                 key={i}
                 cx={n.x!}
                 cy={n.y!}
-                r={3}
+                r={tipRadius}
                 fill={tipFill}
                 stroke={tipStroke}
                 strokeWidth={tipStrokeWidth}
                 style={{ cursor: "pointer" }}
+                onClick={() => setSelectedNode(buildTipRows(label, anno, displayIdField || null))}
               >
                 <title>{title}</title>
               </circle>
@@ -435,15 +563,52 @@ export default function TreeSVG({
           })}
         </g>
 
+        {/* "Show me" arrows over matching tips */}
+        {markMatches &&
+          matchedTips.map((m, i) => <MatchArrow key={`tip-arrow-${i}`} x={m.x} y={m.y} />)}
+
+        {showInternalNodes &&
+          layout.internalNodes.map((n, i) => (
+            <g key={`internal-${i}`}>
+              <circle
+                cx={n.x!}
+                cy={n.y!}
+                r={2.5}
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={1.2}
+                opacity={0.75}
+              />
+              {(showNodeNumbers || showInternalNodes) && (
+                <text
+                  x={(n.x ?? 0) + 6}
+                  y={(n.y ?? 0) - 6}
+                  fontSize={9}
+                  fill="currentColor"
+                  opacity={0.8}
+                >
+                  {showNodeNumbers ? `#${i + 1}` : ""}
+                </text>
+              )}
+            </g>
+          ))}
+
         {/* labels */}
         {showLabels && (
           <g fontSize={fontSize} fill="currentColor">
             {layout.leafNodes.map((n, i) => {
               const label = n.name ?? "";
-              const anno = annoByLabel[label];
+              const anno = resolveAnno(annoByLabel, label);
               const title = buildTipTitle(label, anno, colorField, displayIdField || null);
               const displayLabel = (displayIdField && String(anno?.[displayIdField] ?? "").trim()) || label;
               const labelParts = splitByHighlight(displayLabel, highlightText ?? "");
+              const needle = highlightText?.trim();
+              const labelMatches = Boolean(
+                needle &&
+                  (title.toLowerCase().includes(needle.toLowerCase()) ||
+                    label.toLowerCase().includes(needle.toLowerCase()) ||
+                    displayLabel.toLowerCase().includes(needle.toLowerCase()))
+              );
               return (
                 <g key={i}>
                   <line
@@ -456,7 +621,13 @@ export default function TreeSVG({
                     opacity={0.4}
                     vectorEffect="non-scaling-stroke"
                   />
-                  <text x={Math.round(layout.labelX)} y={n.y!} dominantBaseline="middle">
+                  <text
+                    x={Math.round(layout.labelX)}
+                    y={n.y!}
+                    dominantBaseline="middle"
+                    fill={labelMatches ? "#dc2626" : undefined}
+                    fontWeight={labelMatches ? "bold" : undefined}
+                  >
                     {labelParts.map((seg, j) =>
                       seg.highlight ? (
                         <tspan key={j} fill="#dc2626" fontWeight="bold">
@@ -476,17 +647,16 @@ export default function TreeSVG({
         </svg>
       </div>
 
-      <div className="mt-3 flex flex-wrap gap-2">
-        <button onClick={downloadPNG} className="rounded border px-3 py-1 text-sm">
-          Download PNG
-        </button>
-        <button onClick={downloadSVG} className="rounded border px-3 py-1 text-sm">
-          Download SVG
-        </button>
-        <button onClick={downloadNewick} className="rounded border px-3 py-1 text-sm">
-          Download Newick
-        </button>
-      </div>
+      <DownloadMenu
+        className="mt-3"
+        formats={[
+          { label: "PNG image", description: "Raster image of the current view", onSelect: downloadPNG },
+          { label: "SVG image", description: "Scalable vector graphic", onSelect: downloadSVG },
+          { label: "Newick", description: "Tree topology (.nwk)", onSelect: downloadNewick },
+        ]}
+      />
+
+      <NodeDetailModal detail={selectedNode} onClose={() => setSelectedNode(null)} />
     </div>
   );
 }

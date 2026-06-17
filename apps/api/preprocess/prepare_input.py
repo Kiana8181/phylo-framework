@@ -5,11 +5,23 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from apps.api.preprocess.column_requirements import (
+    CLONALTREE_ALIGNMENT_REQUIRED_KEYS,
+    CLONALTREE_BASE_REQUIRED_KEYS,
+    CLONALTREE_REFINEMENT_REQUIRED_KEYS,
+    DOWSER_HL_REQUIRED_KEYS,
+    DOWSER_REGION_REQUIRED_KEYS,
+    DOWSER_REQUIRED_KEYS,
+    REQUIRED_KEYS_BY_METHOD,
+)
 from apps.api.preprocess.converters import (
     ConversionError,
     convert_csv_to_tsv,
     convert_table_to_aligned_fasta,
     convert_tsv_to_csv,
+    normalize_table_delimiter,
+    rename_table_columns,
+    _table_delimiter,
 )
 from apps.api.preprocess.method_capabilities import (
     describe_safe_paths,
@@ -22,6 +34,8 @@ from apps.api.preprocess.method_capabilities import (
 
 VALID_METHODS: set[str] = {"dowser", "brepphylo", "clonaltree", "gctree"}
 TABULAR_EXTENSIONS = {"csv", "tsv"}
+MAPPING_METHODS = {"dowser", "clonaltree", "gctree"}
+CANONICAL_SEQUENCE_ID_KEY = "sequence_id"
 GCTREE_ALIGNED_COLUMN_DEFAULT = "sequence_alignment"
 GCTREE_ALIGNED_COLUMN_KEYS = (
     "aligned_seq_column",
@@ -76,6 +90,71 @@ class PreparedInput:
         return payload
 
 
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return False
+
+
+def _do_mapping(params: dict[str, Any]) -> bool:
+    return _truthy(params.get("doMapping"))
+
+
+def _uses_clonaltree_refinement(params: dict[str, Any]) -> bool:
+    if "use_refinement" not in params:
+        return True
+    return _truthy(params.get("use_refinement"))
+
+
+def active_required_keys(method_id: str, params: dict[str, Any]) -> list[str]:
+    method = method_id.lower().strip()
+    if method == "clonaltree":
+        required = list(CLONALTREE_BASE_REQUIRED_KEYS)
+        if _uses_clonaltree_refinement(params):
+            required.extend(CLONALTREE_REFINEMENT_REQUIRED_KEYS)
+        required.extend(CLONALTREE_ALIGNMENT_REQUIRED_KEYS)
+        return required
+    if method == "dowser":
+        required = list(DOWSER_REQUIRED_KEYS)
+        chain_mode = str(params.get("chain_mode") or "H").strip().upper()
+        if chain_mode == "HL":
+            required.extend(DOWSER_HL_REQUIRED_KEYS)
+        if _truthy(params.get("use_regions")):
+            required.extend(DOWSER_REGION_REQUIRED_KEYS)
+        return required
+    return list(REQUIRED_KEYS_BY_METHOD.get(method, []))
+
+
+def _get_column_map(params: dict[str, Any]) -> dict[str, str]:
+    raw = params.get("column_map")
+    if not isinstance(raw, dict):
+        return {}
+
+    out: dict[str, str] = {}
+    for key, value in raw.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            continue
+        clean_key = key.strip()
+        clean_value = value.strip()
+        if clean_key and clean_value:
+            out[clean_key] = clean_value
+    return out
+
+
+def should_apply_column_mapping(method_id: str, input_ext: str, params: dict[str, Any]) -> bool:
+    method = method_id.lower().strip()
+    normalized_ext = normalize_extension(input_ext)
+    if method not in MAPPING_METHODS:
+        return False
+    if normalized_ext not in TABULAR_EXTENSIONS:
+        return False
+    return _do_mapping(params)
+
+
 def _string_param(params: dict[str, Any], keys: tuple[str, ...]) -> str | None:
     for key in keys:
         value = params.get(key)
@@ -100,7 +179,13 @@ def _gctree_id_column(params: dict[str, Any]) -> str | None:
 
 
 def _table_stats(path: Path, ext: str) -> dict[str, int]:
-    delimiter = "," if ext == "csv" else "\t"
+    hint: Literal["csv", "tsv"] | None = (
+        "csv" if ext == "csv" else "tsv" if ext == "tsv" else None
+    )
+    try:
+        delimiter = _table_delimiter(path, delimiter=hint)
+    except ConversionError:
+        delimiter = "," if ext == "csv" else "\t"
     with path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.reader(handle, delimiter=delimiter)
         rows = list(reader)
@@ -126,6 +211,86 @@ def _unsupported_input_error(method_id: str, input_ext: str) -> PreprocessError:
     )
 
 
+def _join_readable(items: list[str], *, limit: int = 12) -> str:
+    if not items:
+        return ""
+    if len(items) <= limit:
+        return ", ".join(items)
+    remainder = len(items) - limit
+    return f"{', '.join(items[:limit])}, and {remainder} more"
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if str(item).strip()]
+
+
+def _canonical_keys_for_source(column_map: dict[str, str], source_column: str) -> list[str]:
+    return [canonical for canonical, source in column_map.items() if source == source_column]
+
+
+def _column_mapping_step_message(
+    exc: ConversionError,
+    *,
+    column_map: dict[str, str],
+    step: str,
+) -> str:
+    details = exc.details or {}
+
+    if exc.code == "COLUMN_NOT_FOUND":
+        requested = details.get("requested_column")
+        if isinstance(requested, str) and requested.strip():
+            canonical_keys = _canonical_keys_for_source(column_map, requested.strip())
+            if canonical_keys:
+                return (
+                    f"Column mapping at step '{step}' could not find source column "
+                    f"'{requested}' (mapped from {_join_readable(canonical_keys)})."
+                )
+            return (
+                f"Column mapping at step '{step}' could not find column "
+                f"'{requested}' in the input table."
+            )
+
+    if exc.code == "AMBIGUOUS_COLUMN":
+        duplicated = _string_list(details.get("duplicated_headers"))
+        if duplicated:
+            return (
+                f"Column mapping at step '{step}' would create duplicate headers: "
+                f"{_join_readable(duplicated)}."
+            )
+
+        source_column = details.get("source_column")
+        canonical_keys = _string_list(details.get("canonical_keys"))
+        if isinstance(source_column, str) and source_column.strip() and canonical_keys:
+            return (
+                f"Column mapping at step '{step}' maps multiple fields to the same source column "
+                f"'{source_column}': {_join_readable(canonical_keys)}."
+            )
+
+        requested = details.get("requested_column")
+        matches = _string_list(details.get("matches"))
+        if isinstance(requested, str) and requested.strip() and matches:
+            return (
+                f"Column mapping at step '{step}' is ambiguous for '{requested}': "
+                f"matches multiple headers ({_join_readable(matches)})."
+            )
+
+    if exc.code in INVALID_FILE_CONVERTER_CODES:
+        return f"Column mapping at step '{step}' failed while reading the input table: {exc.message}"
+
+    return f"Column mapping at step '{step}' failed: {exc.message}"
+
+
+def _missing_mapping_message(missing: list[str], *, step: str) -> str:
+    if missing:
+        return (
+            f"Input is missing required columns after column mapping at step '{step}': "
+            f"{_join_readable(missing)}."
+        )
+    return f"Input is missing one or more required columns after column mapping at step '{step}'."
+
+
 def _conversion_error(
     method_id: str,
     input_ext: str,
@@ -134,6 +299,7 @@ def _conversion_error(
     *,
     code: str = "CONVERSION_FAILED",
     step: str | None = None,
+    extra_details: dict[str, Any] | None = None,
 ) -> PreprocessError:
     details: dict[str, Any] = {
         "method_id": method_id,
@@ -146,7 +312,45 @@ def _conversion_error(
     }
     if converter_error is not None:
         details["converter_error"] = converter_error.to_dict()
+    if extra_details:
+        details.update(extra_details)
     return PreprocessError(code=code, message=message, details=details)
+
+
+def _missing_mapping_error(
+    *,
+    method_id: str,
+    input_ext: str,
+    required_keys: list[str],
+    column_map: dict[str, str],
+    converter_error: ConversionError,
+    step: str,
+) -> PreprocessError:
+    missing = _string_list(converter_error.details.get("missing_required_keys"))
+    input_columns = _string_list(converter_error.details.get("available_columns"))
+    resolved_map = converter_error.details.get("resolved_map")
+    resolved = resolved_map if isinstance(resolved_map, dict) else {}
+    example_mapping = {key: f"<column for {key}>" for key in required_keys}
+    return PreprocessError(
+        code="MISSING_COLUMN_MAPPING",
+        message=_missing_mapping_message(missing, step=step),
+        details={
+            "method_id": method_id,
+            "input_ext": input_ext,
+            "step": step,
+            "required_keys": required_keys,
+            "missing_keys": missing,
+            "input_columns": input_columns,
+            "resolved_map": resolved,
+            "column_map": column_map,
+            "example_column_map": example_mapping,
+            "converter_error": converter_error.to_dict(),
+            "next_actions": [
+                "Map the missing source columns to their required canonical names.",
+                "Or rename your input headers to match the required canonical names and retry.",
+            ],
+        },
+    )
 
 
 def prepare_input_for_method(
@@ -192,29 +396,164 @@ def prepare_input_for_method(
     stats: dict[str, Any] = {"method_id": method, "input_ext": normalized_ext}
     warnings: list[dict[str, Any]] = []
     applied_steps: list[dict[str, Any]] = []
+    current_path = uploaded_path
+    current_ext = normalized_ext
+    step_offset = 0
+    mapping_applied = False
 
-    if is_native_accept(method, normalized_ext):  # type: ignore[arg-type]
-        if normalized_ext in TABULAR_EXTENSIONS:
+    # Always sanitize tabular uploads before any other step: rewrite with the
+    # canonical delimiter for the extension, strip a leading UTF-8 BOM, and
+    # drop fully-blank padding rows that Excel often appends. Without this,
+    # semicolon-CSV exports reach Dowser as a single concatenated column,
+    # BOM-prefixed headers silently miss required-column checks, and
+    # empty `;;;;;;...` rows trip validators downstream.
+    if current_ext in TABULAR_EXTENSIONS:
+        delimiter_hint: Literal["csv", "tsv"] = (
+            "csv" if current_ext == "csv" else "tsv"
+        )
+        step_offset += 1
+        step_name = "normalize_table_delimiter"
+        output_path = work_dir / f"{step_offset:02d}_{step_name}.{current_ext}"
+        try:
+            norm_stats = normalize_table_delimiter(
+                current_path,
+                output_path,
+                delimiter=delimiter_hint,
+            )
+        except ConversionError as exc:
+            mapped_code = (
+                "INVALID_FILE"
+                if exc.code in INVALID_FILE_CONVERTER_CODES
+                else "CONVERSION_FAILED"
+            )
+            raise _conversion_error(
+                method_id=method,
+                input_ext=current_ext,
+                message=(
+                    f"Failed to normalize input table at step "
+                    f"'{step_name}': {exc.message}"
+                ),
+                converter_error=exc,
+                code=mapped_code,
+                step=step_name,
+            ) from exc
+        stats[f"step_{step_offset}_table"] = {
+            "rows": norm_stats.get("rows", 0),
+            "cols": norm_stats.get("cols", 0),
+            "input_delimiter": norm_stats.get("input_delimiter"),
+            "output_delimiter": norm_stats.get("output_delimiter"),
+            "blank_rows_dropped": norm_stats.get("blank_rows_dropped", 0),
+        }
+        blank_dropped = int(norm_stats.get("blank_rows_dropped") or 0)
+        if blank_dropped:
+            warnings.append(
+                {
+                    "code": "BLANK_ROWS_DROPPED",
+                    "message": (
+                        f"Dropped {blank_dropped} fully-blank padding row(s) "
+                        "from the input table during normalization."
+                    ),
+                }
+            )
+        applied_steps.append(
+            {
+                "step": step_name,
+                "from": current_ext,
+                "to": current_ext,
+                "input_path": str(current_path),
+                "output_path": str(output_path),
+            }
+        )
+        current_path = output_path
+
+    if should_apply_column_mapping(method, current_ext, params):
+        required_keys = active_required_keys(method, params)
+        if current_ext not in TABULAR_EXTENSIONS:
+            raise _conversion_error(
+                method_id=method,
+                input_ext=current_ext,
+                message="Column mapping is only supported for CSV/TSV tabular inputs.",
+                code="UNSUPPORTED_INPUT",
+                step="rename_table_columns",
+            )
+
+        step_offset += 1
+        step_name = "rename_table_columns"
+        output_path = work_dir / f"{step_offset:02d}_{step_name}.{current_ext}"
+        step_report: dict[str, Any] = {
+            "step": step_name,
+            "from": current_ext,
+            "to": current_ext,
+        }
+        column_map = _get_column_map(params)
+        delimiter: Literal["csv", "tsv"] = "csv" if current_ext == "csv" else "tsv"
+
+        try:
+            rename_stats = rename_table_columns(
+                current_path,
+                output_path,
+                delimiter=delimiter,
+                normalize_headers=True,
+                column_map=column_map,
+                required_keys=required_keys,
+            )
+            stats[f"step_{step_offset}_table"] = {
+                "rows": rename_stats.get("rows", 0),
+                "cols": rename_stats.get("cols", 0),
+                "resolved_map": rename_stats.get("resolved_map", {}),
+            }
+            for warning in rename_stats.get("warnings", []):
+                warnings.append({"code": "TABLE_RENAME_WARNING", "message": str(warning)})
+        except ConversionError as exc:
+            if exc.code == "MISSING_REQUIRED_MAPPING":
+                raise _missing_mapping_error(
+                    method_id=method,
+                    input_ext=current_ext,
+                    required_keys=required_keys,
+                    column_map=column_map,
+                    converter_error=exc,
+                    step=step_name,
+                ) from exc
+
+            mapped_code = "INVALID_FILE" if exc.code in INVALID_FILE_CONVERTER_CODES else "CONVERSION_FAILED"
+            raise _conversion_error(
+                method_id=method,
+                input_ext=current_ext,
+                message=_column_mapping_step_message(exc, column_map=column_map, step=step_name),
+                converter_error=exc,
+                code=mapped_code,
+                step=step_name,
+                extra_details={
+                    "column_map": column_map,
+                    "input_columns": _string_list(exc.details.get("available_columns")),
+                },
+            ) from exc
+
+        step_report["input_path"] = str(current_path)
+        step_report["output_path"] = str(output_path)
+        applied_steps.append(step_report)
+        current_path = output_path
+        mapping_applied = True
+
+    if is_native_accept(method, current_ext):  # type: ignore[arg-type]
+        if current_ext in TABULAR_EXTENSIONS:
             try:
-                stats["input_table"] = _table_stats(uploaded_path, normalized_ext)
+                stats["input_table"] = _table_stats(current_path, current_ext)
             except Exception:
                 pass
         return PreparedInput(
-            final_path=uploaded_path,
-            final_ext=normalized_ext,
+            final_path=current_path,
+            final_ext=current_ext,
             applied_steps=applied_steps,
             warnings=warnings,
             stats=stats,
         )
 
-    chain = safe_conversion_chain(method, normalized_ext)  # type: ignore[arg-type]
+    chain = safe_conversion_chain(method, current_ext)  # type: ignore[arg-type]
     if not chain:
-        raise _unsupported_input_error(method, normalized_ext)
+        raise _unsupported_input_error(method, current_ext)
 
-    current_path = uploaded_path
-    current_ext = normalized_ext
-
-    for index, step in enumerate(chain, start=1):
+    for index, step in enumerate(chain, start=step_offset + 1):
         step_name = str(step["step"])
         target_ext = normalize_extension(str(step["to"]))
         step_report: dict[str, Any] = {
@@ -240,8 +579,12 @@ def prepare_input_for_method(
                 else:
                     delimiter = None
 
-                aligned_seq_column = _gctree_aligned_seq_column(params)
-                id_column = _gctree_id_column(params)
+                if method == "gctree" and mapping_applied and current_ext in TABULAR_EXTENSIONS:
+                    aligned_seq_column = GCTREE_ALIGNED_COLUMN_DEFAULT
+                    id_column = CANONICAL_SEQUENCE_ID_KEY
+                else:
+                    aligned_seq_column = _gctree_aligned_seq_column(params)
+                    id_column = _gctree_id_column(params)
                 conversion_stats = convert_table_to_aligned_fasta(
                     current_path,
                     output_path,

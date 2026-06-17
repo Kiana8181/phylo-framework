@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { authApi } from "@/features/auth/api";
 import { notify } from "@/lib/notify";
+import { getApiErrorMessage } from "@/lib/http/errors";
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState("");
@@ -22,14 +23,7 @@ export default function ForgotPasswordPage() {
       setDone(true);
       notify.success(res.message);
     } catch (err: unknown) {
-      const data = (err as { response?: { data?: unknown } })?.response?.data;
-      const message =
-        (typeof data === "object" && data !== null && "detail" in data)
-          ? String((data as { detail: unknown }).detail)
-          : err instanceof Error
-            ? err.message
-            : "Something went wrong";
-      notify.error("Request failed", message);
+      notify.error("Request failed", getApiErrorMessage(err));
     } finally {
       setSubmitting(false);
     }
