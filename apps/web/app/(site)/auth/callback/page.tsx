@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { setTokens } from "@/lib/auth/storage";
 import { authApi } from "@/features/auth/api";
 import { notify } from "@/lib/notify";
+import { getApiErrorMessage } from "@/lib/http/errors";
 
 function AuthCallbackContent() {
   const searchParams = useSearchParams();
@@ -24,9 +25,9 @@ function AuthCallbackContent() {
         setStatus("ok");
         window.location.href = "/dashboard";
       })
-      .catch(() => {
+      .catch((err) => {
         setStatus("error");
-        notify.error("Google sign-in failed");
+        notify.error("Google sign-in failed", getApiErrorMessage(err));
       });
   }, [searchParams]);
 

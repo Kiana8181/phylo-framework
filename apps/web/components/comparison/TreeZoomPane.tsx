@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { Minus, Plus, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -13,6 +13,13 @@ type TreeZoomPaneProps = {
   maxScale?: number;
   zoomStep?: number;
   requireModifierForWheelZoom?: boolean;
+};
+
+/** Imperative controls for focusing/zooming the pane on a tree coordinate. */
+export type TreeZoomPaneHandle = {
+  /** Center `(svgX, svgY)` (SVG user units) in the viewport at `scale`. */
+  focusOnPoint: (svgX: number, svgY: number, scale: number) => void;
+  fitToView: () => void;
 };
 
 type Transform = {
@@ -60,7 +67,7 @@ function getSvgSize(target: SVGSVGElement): { width: number; height: number } | 
   return null;
 }
 
-export default function TreeZoomPane({
+const TreeZoomPane = forwardRef<TreeZoomPaneHandle, TreeZoomPaneProps>(function TreeZoomPane({
   children,
   className,
   fitKey,
@@ -68,7 +75,7 @@ export default function TreeZoomPane({
   maxScale = 4,
   zoomStep = 1.2,
   requireModifierForWheelZoom = true,
-}: TreeZoomPaneProps) {
+}: TreeZoomPaneProps, ref) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const transformRef = useRef<Transform>({ ...DEFAULT_TRANSFORM });
   const dragRef = useRef<DragState | null>(null);
@@ -167,6 +174,26 @@ export default function TreeZoomPane({
   const resetTransform = useCallback(() => {
     fitToView();
   }, [fitToView]);
+
+  const focusOnPoint = useCallback(
+    (svgX: number, svgY: number, requestedScale: number) => {
+      const target = getZoomTarget();
+      if (!target) return;
+      const host = (target.parentElement as HTMLElement | null) ?? viewportRef.current;
+      if (!host) return;
+      const s = clamp(requestedScale, minScale, maxScale);
+      transformRef.current = {
+        scale: s,
+        x: host.clientWidth / 2 - svgX * s,
+        y: host.clientHeight / 2 - svgY * s,
+      };
+      applyTransform();
+      setZoomPercent(Math.round(s * 100));
+    },
+    [applyTransform, getZoomTarget, maxScale, minScale],
+  );
+
+  useImperativeHandle(ref, () => ({ focusOnPoint, fitToView }), [focusOnPoint, fitToView]);
 
   useEffect(() => {
     applyTransform();
@@ -343,7 +370,7 @@ export default function TreeZoomPane({
         }}
       >
         <div
-          className="h-full w-full overflow-auto"
+          className="h-full w-full overflow-hidden"
           style={isPanning ? { pointerEvents: "none" } : undefined}
         >
           {children}
@@ -351,4 +378,6 @@ export default function TreeZoomPane({
       </div>
     </div>
   );
-}
+});
+
+export default TreeZoomPane;

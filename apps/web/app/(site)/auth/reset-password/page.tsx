@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { authApi } from "@/features/auth/api";
 import { notify } from "@/lib/notify";
+import { getApiErrorMessage } from "@/lib/http/errors";
 
 function ResetPasswordPageContent() {
   const router = useRouter();
@@ -43,14 +44,7 @@ function ResetPasswordPageContent() {
       notify.success("Password reset. You can now log in.");
       setTimeout(() => router.replace("/auth"), 1500);
     } catch (err: unknown) {
-      const data = (err as { response?: { data?: unknown } })?.response?.data;
-      const message =
-        (typeof data === "object" && data !== null && "detail" in data)
-          ? String((data as { detail: unknown }).detail)
-          : err instanceof Error
-            ? err.message
-            : "Something went wrong";
-      notify.error("Reset failed", message);
+      notify.error("Reset failed", getApiErrorMessage(err));
     } finally {
       setSubmitting(false);
     }

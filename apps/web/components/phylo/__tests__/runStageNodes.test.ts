@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeNodes, sanitizeLabel } from "../runStageNodes";
+import { computeNodes } from "../runStageNodes";
 
 describe("computeNodes", () => {
   it("marks earlier stages done, current active, later pending", () => {
@@ -56,15 +56,16 @@ describe("computeNodes", () => {
     expect(queued?.state).toBe("done");
     expect(running?.state).toBe("active");
   });
-});
 
-describe("sanitizeLabel", () => {
-  it("removes characters that would break Mermaid syntax", () => {
-    expect(sanitizeLabel('Build "trees" <x> {y} |z|')).toBe("Build trees x y z");
-  });
-
-  it("collapses whitespace and truncates long labels", () => {
-    const long = "a".repeat(80);
-    expect(sanitizeLabel(long).length).toBe(40);
+  it("collapses instant setup stages onto the single Preparing node", () => {
+    // The backend reports several instant stages; all map to one display node.
+    for (const stage of ["STAGING_INPUT", "PREPROCESSING", "SUBMITTING_METHOD_JOB"]) {
+      const nodes = computeNodes("gctree", "RUNNING", stage);
+      const preparing = nodes.find((n) => n.id === "PREPARING");
+      expect(preparing?.state).toBe("active");
+      // No separate node leaks in for the collapsed backend stage id.
+      expect(nodes.some((n) => n.id === stage)).toBe(false);
+      expect(nodes.find((n) => n.id === "QUEUED")?.state).toBe("done");
+    }
   });
 });

@@ -1,4 +1,15 @@
-export type MethodInfo = { id: string; name: string; version: string };
+export type MethodInfo = {
+  id: string;
+  name: string;
+  version: string;
+  tagline?: string;
+  category?: string;
+  summary?: string;
+  capabilities?: string[];
+  inputFormats?: string[];
+  externalDocUrl?: string;
+  externalDocLabel?: string;
+};
 
 export type MethodSpec = {
   id: string;
@@ -64,6 +75,7 @@ export type RunStatus = {
   params?: RunParams;
   dataset_name?: string | null;
   dataset_files?: string[];
+  input_file_id?: string | null;
   started_at?: string | null;
   finished_at?: string | null;
   error?: {
@@ -88,22 +100,9 @@ export type UploadedFileResponse = {
   storage_url?: string | null;
 };
 
-export type UploadSessionStatus =
-  | "INITIATED"
-  | "UPLOADING"
-  | "COMPLETED"
-  | "CANCELLED"
-  | "ERROR";
+export type UploadSessionStatus = "INITIATED" | "UPLOADING" | "COMPLETED" | "CANCELLED" | "ERROR";
 
-export type ArtifactKind =
-  | "image"
-  | "newick"
-  | "table"
-  | "fasta"
-  | "json"
-  | "log"
-  | "zip"
-  | "other";
+export type ArtifactKind = "image" | "newick" | "table" | "fasta" | "json" | "log" | "zip" | "other";
 
 /** A generated run output stored in object storage. Binaries are fetched
  *  lazily via download_url / preview_url — never embedded as base64. */
@@ -622,9 +621,8 @@ export type RunResult = {
   params?: RunParams;
   dataset_name?: string | null;
   dataset_files?: string[];
-  /** Lightweight dataset descriptor incl. deletion state (for run history). */
+  input_file_id?: string | null;
   dataset?: RunDatasetDescriptor | null;
-  /** Number of downloadable artifacts; fetch them via /runs/{id}/artifacts. */
   artifact_count?: number;
   started_at?: string | null;
   finished_at?: string | null;
