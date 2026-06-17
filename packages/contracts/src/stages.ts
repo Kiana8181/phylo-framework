@@ -9,13 +9,29 @@ export type StageNode = {
   id: string;
   /** Human-readable label (e.g. "Building trees"). */
   label: string;
+  /** Backend stage ids that fold into this display node. The several
+   *  near-instant setup stages collapse into one perceivable step so the
+   *  user doesn't see flicker between stages they never experience. */
+  aliases?: string[];
 };
 
 // Outer orchestration stages owned by the API/worker (common to all methods).
 const QUEUED: StageNode = { id: "QUEUED", label: "Queued" };
-const STAGING_INPUT: StageNode = { id: "STAGING_INPUT", label: "Staging input" };
-const PREPROCESSING: StageNode = { id: "PREPROCESSING", label: "Preprocessing" };
-const SUBMITTING_METHOD_JOB: StageNode = { id: "SUBMITTING_METHOD_JOB", label: "Submitting job" };
+// All the instant setup stages the user never perceives individually collapse
+// into one "Preparing input" step (covers API staging + method-side setup).
+const PREPARING: StageNode = {
+  id: "PREPARING",
+  label: "Preparing input",
+  aliases: [
+    "STAGING_INPUT",
+    "PREPROCESSING",
+    "SUBMITTING_METHOD_JOB",
+    "VALIDATING_REQUEST",
+    "READING_INPUT",
+    "PREPARING_INPUT",
+    "FORMATTING_CLONES",
+  ],
+};
 const RUNNING_METHOD: StageNode = { id: "RUNNING_METHOD", label: "Running method" };
 const FETCHING_RESULT: StageNode = { id: "FETCHING_RESULT", label: "Fetching result" };
 const COMPLETED: StageNode = { id: "COMPLETED", label: "Completed" };
@@ -27,9 +43,7 @@ export const CANCELLING_STAGE = "CANCELLING";
 // Common outer sequence (default for any method without specific metadata).
 export const COMMON_STAGES: StageNode[] = [
   QUEUED,
-  STAGING_INPUT,
-  PREPROCESSING,
-  SUBMITTING_METHOD_JOB,
+  PREPARING,
   RUNNING_METHOD,
   FETCHING_RESULT,
   COMPLETED,
@@ -39,9 +53,7 @@ export const COMMON_STAGES: StageNode[] = [
 // but the diagram shows the meaningful method steps when available.
 const R_METHOD_STAGES: StageNode[] = [
   QUEUED,
-  STAGING_INPUT,
-  PREPROCESSING,
-  SUBMITTING_METHOD_JOB,
+  PREPARING,
   { id: "BUILDING_TREES", label: "Building trees" },
   { id: "RUNNING_ANALYSIS", label: "Running analysis" },
   { id: "RENDERING_EXPORTS", label: "Rendering exports" },
@@ -52,9 +64,7 @@ const R_METHOD_STAGES: StageNode[] = [
 // Python services (GCtree, ClonalTree).
 const PYTHON_METHOD_STAGES: StageNode[] = [
   QUEUED,
-  STAGING_INPUT,
-  PREPROCESSING,
-  SUBMITTING_METHOD_JOB,
+  PREPARING,
   { id: "BUILDING_TREES", label: "Building trees" },
   { id: "RENDERING_EXPORTS", label: "Rendering exports" },
   FETCHING_RESULT,
@@ -79,9 +89,10 @@ export function humanizeStage(stageId?: string | null): string {
   if (!stageId) return "";
   const known: Record<string, string> = {
     QUEUED: "Queued",
-    STAGING_INPUT: "Staging input",
-    PREPROCESSING: "Preprocessing",
-    SUBMITTING_METHOD_JOB: "Submitting job",
+    PREPARING: "Preparing input",
+    STAGING_INPUT: "Preparing input",
+    PREPROCESSING: "Preparing input",
+    SUBMITTING_METHOD_JOB: "Preparing input",
     RUNNING_METHOD: "Running method",
     VALIDATING_REQUEST: "Validating request",
     READING_INPUT: "Reading input",

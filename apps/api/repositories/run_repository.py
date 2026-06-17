@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import Optional, List
 from uuid import UUID
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 
-from sqlalchemy import and_, case, exists, func, or_, select, update
+from sqlalchemy import String, and_, case, cast, exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.database.models import Run, RunStatus, ACTIVE_RUN_STATUSES
@@ -58,14 +58,31 @@ class RunRepository(BaseRepository[Run]):
         user_id: UUID,
         skip: int = 0,
         limit: int = 100,
+        *,
+        run_id: Optional[str] = None,
+        dataset: Optional[str] = None,
+        status: Optional[RunStatus] = None,
+        method_id: Optional[str] = None,
+        created_on: Optional[date] = None,
     ) -> List[Run]:
-        """Get all runs for a user."""
+        """Get a user's runs, optionally filtered (all filters ANDed with the
+        per-user scope). `run_id`/`dataset` are case-insensitive substring
+        matches; `created_on` matches runs created on that calendar day."""
+        stmt = select(Run).where(Run.user_id == user_id)
+
+        if run_id:
+            stmt = stmt.where(cast(Run.id, String).ilike(f"%{run_id.strip()}%"))
+        if dataset:
+            stmt = stmt.where(Run.dataset_name.ilike(f"%{dataset.strip()}%"))
+        if status is not None:
+            stmt = stmt.where(Run.status == status)
+        if method_id:
+            stmt = stmt.where(Run.method_id == method_id)
+        if created_on is not None:
+            stmt = stmt.where(func.date(Run.created_at) == created_on)
+
         result = await self.session.execute(
-            select(Run)
-            .where(Run.user_id == user_id)
-            .order_by(Run.created_at.desc())
-            .offset(skip)
-            .limit(limit)
+            stmt.order_by(Run.created_at.desc()).offset(skip).limit(limit)
         )
         return list(result.scalars().all())
 

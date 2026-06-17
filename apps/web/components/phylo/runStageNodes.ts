@@ -12,14 +12,12 @@ import {
 
 export type RenderNode = StageNode & { state: StageState };
 
-/** Strip characters that could break Mermaid node-label syntax. */
-export function sanitizeLabel(label: string): string {
-  return label
-    .replace(/["`<>{}|]/g, " ")
-    .replace(/[\r\n]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 40);
+/** Index of the display node that owns a backend stage id — matching either the
+ *  node id directly or one of its collapse `aliases`. Returns -1 if none. */
+function ownerIndex(sequence: StageNode[], stageId: string): number {
+  return sequence.findIndex(
+    (node) => node.id === stageId || (node.aliases?.includes(stageId) ?? false),
+  );
 }
 
 /**
@@ -32,7 +30,6 @@ export function computeNodes(
   stage: string | null | undefined,
 ): RenderNode[] {
   const sequence = [...stageSequenceForMethod(methodId)];
-  const ids = sequence.map((n) => n.id);
 
   const isTerminal = (s?: string | null) =>
     !!s && (TERMINAL_STAGES as readonly string[]).includes(s);
@@ -51,19 +48,18 @@ export function computeNodes(
     activeStage &&
     !isTerminal(activeStage) &&
     activeStage !== CANCELLING_STAGE &&
-    !ids.includes(activeStage)
+    ownerIndex(sequence, activeStage) < 0
   ) {
-    const afterSubmit = ids.indexOf("SUBMITTING_METHOD_JOB");
-    const insertAt = afterSubmit >= 0 ? afterSubmit + 1 : Math.max(0, sequence.length - 1);
+    const afterPreparing = sequence.findIndex((n) => n.id === "PREPARING");
+    const insertAt = afterPreparing >= 0 ? afterPreparing + 1 : Math.max(0, sequence.length - 1);
     sequence.splice(insertAt, 0, {
       id: activeStage,
       label: humanizeStage(activeStage),
     });
-    ids.splice(insertAt, 0, activeStage);
   }
 
-  let activeIndex = activeStage ? ids.indexOf(activeStage) : -1;
-  if (done) activeIndex = ids.indexOf("COMPLETED");
+  let activeIndex = activeStage ? ownerIndex(sequence, activeStage) : -1;
+  if (done) activeIndex = sequence.findIndex((n) => n.id === "COMPLETED");
 
   const nodes: RenderNode[] = sequence.map((node, i) => {
     let state: StageState = "pending";

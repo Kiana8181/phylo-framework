@@ -108,5 +108,26 @@
     "isotype_column":     "e.g. subclass, c_call, isotype",
 
     "algorithm":          "Default: ClustalOmega"
+  },
+
+  "validation": {
+    "requiredWhen": [
+      {
+        "field": "germline_set_text",
+        "when": { "species": "custom" },
+        "message": "Custom germline set is required when species is 'custom'."
+      },
+      {
+        "field": "isotype_column",
+        "when": { "enable_csr_analysis": true },
+        "message": "Isotype/subclass column is required when CSR analysis is enabled."
+      }
+    ],
+    "mutuallyExclusive": [
+      {
+        "fields": ["which_clones", "ignore_clones"],
+        "message": "Restrict to clone IDs and Ignore clone IDs are mutually exclusive."
+      }
+    ]
   }
 }
