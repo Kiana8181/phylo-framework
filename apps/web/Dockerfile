@@ -43,6 +43,8 @@ RUN npm -w web run build
 FROM node:20-bookworm-slim AS runtime
 WORKDIR /srv
 ENV NODE_ENV=production
+ENV HOSTNAME=0.0.0.0
+ENV PORT=3000
 EXPOSE 3000
 
 # Copy standalone server with minimal node_modules produced by Next
