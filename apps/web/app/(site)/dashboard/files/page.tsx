@@ -1,5 +1,6 @@
 "use client";
 
+import ConfirmDialog from "@/components/common/ConfirmDialog";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -12,8 +13,13 @@ import { Progress } from "@/components/ui/progress";
 import { useDeleteFile, useFilesList } from "@/features/files/hooks";
 import { notify } from "@/lib/notify";
 import { Trash2 } from "lucide-react";
-import { Loading, Spinner } from "@/components/ui/loading";
+import { Loading } from "@/components/ui/loading";
 import { useState } from "react";
+
+type PendingDelete = {
+  id: string;
+  name: string;
+};
 
 function formatDate(iso: string | null) {
   if (!iso) return "—";
@@ -39,23 +45,21 @@ function formatQuota(bytes: number): string {
 export default function FileManagementPage() {
   const { data, isLoading, error } = useFilesList();
   const deleteFile = useDeleteFile();
-  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
 
   const files = data?.files ?? [];
   const totalBytesUsed = data?.total_bytes_used ?? 0;
   const quotaBytes = data?.quota_bytes ?? 0;
   const quotaPct = quotaBytes > 0 ? Math.min(100, (totalBytesUsed / quotaBytes) * 100) : 0;
 
-  const handleDelete = async (id: string, name: string) => {
-    if (!confirm(`Delete "${name}"? This cannot be undone.`)) return;
-    setDeletingId(id);
+  const handleConfirmDelete = async () => {
+    if (!pendingDelete) return;
     try {
-      await deleteFile.mutateAsync(id);
-      notify.success("File deleted");
+      await deleteFile.mutateAsync(pendingDelete.id);
+      notify.success("Dataset deleted");
+      setPendingDelete(null);
     } catch (e: unknown) {
       notify.error("Delete failed", (e as Error)?.message ?? "Unknown error");
-    } finally {
-      setDeletingId(null);
     }
   };
 
@@ -133,14 +137,16 @@ export default function FileManagementPage() {
                           variant="outline"
                           size="sm"
                           className="text-destructive hover:text-destructive"
-                          onClick={() => handleDelete(file.id, file.original_filename)}
-                          disabled={deletingId === file.id || deleteFile.isPending}
+                          onClick={() =>
+                            setPendingDelete({
+                              id: file.id,
+                              name: file.original_filename,
+                            })
+                          }
+                          disabled={deleteFile.isPending}
+                          aria-label={`Delete ${file.original_filename}`}
                         >
-                          {deletingId === file.id ? (
-                            <Spinner />
-                          ) : (
-                            <Trash2 className="h-4 w-4" />
-                          )}
+                          <Trash2 className="h-4 w-4" />
                         </Button>
                       </td>
                     </tr>
@@ -151,6 +157,28 @@ export default function FileManagementPage() {
           )}
         </CardContent>
       </Card>
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        onOpenChange={(open) => {
+          if (!open && !deleteFile.isPending) setPendingDelete(null);
+        }}
+        title="Delete dataset?"
+        description={
+          pendingDelete ? (
+            <>
+              <span className="font-medium text-foreground">{pendingDelete.name}</span> will be
+              permanently removed. Past runs that used this dataset will keep their results, but
+              you won&apos;t be able to rerun them with this file.
+            </>
+          ) : null
+        }
+        confirmLabel="Delete dataset"
+        cancelLabel="Cancel"
+        destructive
+        pending={deleteFile.isPending}
+        onConfirm={handleConfirmDelete}
+      />
     </main>
   );
 }
