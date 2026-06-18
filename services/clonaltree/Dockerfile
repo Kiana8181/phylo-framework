@@ -17,6 +17,7 @@ RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
       ca-certificates \
+      curl \
       git \
       build-essential \
       make \
@@ -35,7 +36,8 @@ RUN set -eux; \
           if [ "$arch" = "arm64" ] || [ "$arch" = "aarch64" ]; then \
             export CFLAGS="-D__arm64__"; \
           fi; \
-          bash build_linux.bash \
+          bash build_linux.bash; \
+          test -x ../bin/muscle \
         ); \
         install -m 0755 /tmp/muscle-src/bin/muscle /usr/local/bin/muscle; \
         rm -rf /tmp/muscle-src; \
