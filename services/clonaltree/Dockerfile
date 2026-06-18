@@ -16,31 +16,25 @@ ARG MUSCLE_VERSION=5.3
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
-      curl \
-      ca-certificates; \
+      ca-certificates \
+      git \
+      build-essential \
+      make \
+      g++ \
+      python3; \
     arch="${TARGETARCH:-$(dpkg --print-architecture)}"; \
     case "$arch" in \
-      amd64|x86_64) \
-        muscle_asset="muscle-linux-x86.v${MUSCLE_VERSION}"; \
-        curl -fsSL -o /usr/local/bin/muscle \
-          "https://github.com/rcedgar/muscle/releases/download/v${MUSCLE_VERSION}/${muscle_asset}"; \
-        chmod 0755 /usr/local/bin/muscle; \
-        ;; \
-      arm64|aarch64) \
-        # Upstream Linux arm64 binaries are broken in v5.2/v5.3.
-        # Build from source and force arm64 macro because upstream checks
-        # __arm64__ (not __aarch64__) when setting BITS.
-        apt-get install -y --no-install-recommends \
-          git \
-          build-essential \
-          make \
-          g++ \
-          python3; \
+      amd64|x86_64|arm64|aarch64) \
+        # Build MUSCLE from source on all Linux arches. Prebuilt v5.3 linux
+        # binaries pass -version but can fail -align on some amd64 hosts (AVX
+        # / CPU quirks); arm64 prebuilts are also known-broken upstream.
         git clone --branch "v${MUSCLE_VERSION}" --depth 1 \
           https://github.com/rcedgar/muscle.git /tmp/muscle-src; \
         ( \
           cd /tmp/muscle-src/src; \
-          export CFLAGS="-D__arm64__"; \
+          if [ "$arch" = "arm64" ] || [ "$arch" = "aarch64" ]; then \
+            export CFLAGS="-D__arm64__"; \
+          fi; \
           bash build_linux.bash \
         ); \
         install -m 0755 /tmp/muscle-src/bin/muscle /usr/local/bin/muscle; \
@@ -56,7 +50,10 @@ RUN set -eux; \
       cat /tmp/muscle.version.txt >&2; \
       exit 1; \
     }; \
-    rm -rf /var/lib/apt/lists/* /tmp/muscle.version.txt
+    printf '>a\nACDEF\n>b\nACDEFG\n' >/tmp/muscle-smoke.fa; \
+    muscle -align /tmp/muscle-smoke.fa -output /tmp/muscle-smoke.aln -amino; \
+    test -s /tmp/muscle-smoke.aln; \
+    rm -rf /var/lib/apt/lists/* /tmp/muscle.version.txt /tmp/muscle-smoke.fa /tmp/muscle-smoke.aln
 
 WORKDIR /srv/clonaltree
 
