@@ -128,7 +128,10 @@ def _read_table(
         if len(row) != expected_cols:
             raise ConversionError(
                 code="ROW_WIDTH_MISMATCH",
-                message="Input table has inconsistent row widths.",
+                message=(
+                    f"Input table has inconsistent row widths: row {row_number} "
+                    f"has {len(row)} column(s) but the header has {expected_cols}."
+                ),
                 details={
                     "input_path": str(input_path),
                     "row_number": row_number,
