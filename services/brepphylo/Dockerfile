@@ -36,9 +36,11 @@ RUN set -eux; \
     rm -rf /var/cache/dnf
 
 RUN DOWNLOAD_STATIC_LIBV8=1 R -q -e "install.packages( \
-    c('plumber', 'jsonlite', 'httpuv', 'swagger', 'jsonvalidate', 'httr', 'ape', 'igraph', 'remotes'), \
+    c('plumber', 'promises', 'later', 'jsonlite', 'httpuv', 'swagger', 'jsonvalidate', 'httr', 'ape', 'igraph', 'remotes'), \
     repos = 'https://cloud.r-project.org' \
-    )" \
+    ); \
+    stopifnot(all(c('promises', 'plumber') %in% rownames(installed.packages()))); \
+    invisible(library(plumber))" \
     && R -q -e "install.packages('BiocManager', repos = 'https://cloud.r-project.org'); \
     BiocManager::install(c('Biostrings','msa','GenomicRanges','GenomicAlignments'), ask = FALSE)"
 
