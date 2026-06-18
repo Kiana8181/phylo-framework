@@ -51,12 +51,12 @@ RUN set -eux; \
     rm -rf /var/cache/dnf
 
 RUN DOWNLOAD_STATIC_LIBV8=1 R -q -e "install.packages( \
-    c('plumber', 'jsonlite', 'httpuv', 'swagger', 'jsonvalidate', 'httr', 'ape', 'phangorn', 'remotes'), \
+    c('promises', 'later', 'webutils', 'sodium', 'plumber', 'jsonlite', 'httpuv', 'swagger', 'jsonvalidate', 'httr', 'ape', 'phangorn', 'remotes'), \
     repos = 'https://cloud.r-project.org' \
     ); \
     install.packages('BiocManager', repos = 'https://cloud.r-project.org'); \
     BiocManager::install(c('Biostrings', 'ggtree'), ask = FALSE); \
-    stopifnot('jsonvalidate' %in% rownames(installed.packages()))"
+    stopifnot(all(c('promises', 'plumber', 'jsonvalidate') %in% rownames(installed.packages())))"
 
 RUN R -q -e "install.packages(c('paws.storage', 'digest'), repos = 'https://cloud.r-project.org'); \
     stopifnot(all(c('paws.storage', 'digest') %in% rownames(installed.packages())))"
