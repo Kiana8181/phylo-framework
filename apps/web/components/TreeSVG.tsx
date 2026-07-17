@@ -1,12 +1,21 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { parseNewick, NewickNode } from "@/lib/newick";
 import DownloadMenu from "@/components/phylo/tree/DownloadMenu";
 import NodeDetailModal, { type NodeDetail } from "@/components/phylo/tree/NodeDetailModal";
 import MatchArrow from "@/components/phylo/tree/MatchArrow";
+import {
+  fromNewick,
+  layoutTree,
+  sanitizeNewick,
+  buildTipTitle,
+  buildTipRows,
+  resolveTipDisplayLabel,
+  splitByHighlight,
+  type PhyloAnnotation,
+} from "@/components/phylo/tree/core";
 
-type Anno = { label: string } & Record<string, any>;
+type Anno = PhyloAnnotation;
 
 type Props = {
   newick: string;
@@ -35,26 +44,13 @@ type Props = {
   focusSignal?: number;
 };
 
-type LNode = NewickNode & { parent?: LNode; x?: number; y?: number };
-
 const TREE_VIEWPORT_HEIGHT = 520;
 
-/** ---- Helpers ---- */
-
-function sanitizeNewick(s: string): string {
-  let x = s.trim();
-  x = x.replace(/^\[\d+\]\s*"/, "");
-  x = x.replace(/"\s*$/, "");
-  if (!x.endsWith(";")) x += ";";
-  return x;
-}
-
-function estimateTextWidth(label: string, fontSize: number) {
-  return Math.ceil(fontSize * 0.6 * (label?.length ?? 0));
-}
+/** ---- Colour-by-field helpers ----
+ * These stay local for Phase 1; Phase 4 moves them into core/colorScale.ts and
+ * adds continuous/categorical detection, an explicit domain, and a legend. */
 
 const GOLDEN_ANGLE = 137.50776405003785;
-
 const SAT_BANDS = [74, 62, 82, 55] as const;
 const LIG_BANDS = [45, 58, 36, 66] as const;
 
@@ -62,7 +58,6 @@ function colorByIndex(k: number): string {
   const hue = (k * GOLDEN_ANGLE) % 360;
   const sat = SAT_BANDS[k % SAT_BANDS.length];
   const lig = LIG_BANDS[Math.floor(k / SAT_BANDS.length) % LIG_BANDS.length];
-
   return `hsl(${hue.toFixed(3)}, ${sat}%, ${lig}%)`;
 }
 
@@ -76,7 +71,7 @@ function buildColorMapDistinct(
 
   const set = new Set<string>();
   for (const a of list) {
-    const v = (a as any)?.[field];
+    const v = a?.[field];
     if (typeof v === "string") {
       const vv = v.trim();
       if (vv && vv !== "Germline" && vv !== unknownValue) {
@@ -93,94 +88,6 @@ function buildColorMapDistinct(
   map["Germline"] = "#000000";
   map[unknownValue] = "#000000";
   return map;
-}
-
-function buildTipTitle(
-  label: string,
-  anno: Anno | undefined,
-  colorField: string | null,
-  displayField: string | null,
-): string {
-  if (typeof anno?.tooltip === "string" && anno.tooltip.trim()) {
-    return anno.tooltip.trim();
-  }
-
-  const lines: string[] = [];
-
-  // 1) display label / selected identity field
-  const displayValue = (displayField && String((anno as any)?.[displayField] ?? "").trim()) || label;
-  if (displayValue) lines.push(displayValue);
-
-  if (!anno) return lines.join("\n");
-
-  // 2) sequence_id (if present and not duplicate of label)
-  const seqId = String(anno.sequence_id ?? "").trim();
-  if (seqId && seqId !== displayValue) lines.push(`sequence_id: ${seqId}`);
-
-  // 3) colorBy field (if set)
-  if (colorField) {
-    const cval = String(anno[colorField] ?? "").trim();
-    if (cval) lines.push(`${colorField}: ${cval}`);
-  }
-
-  // 4) all remaining fields (sorted), excluding label + sequence_id + colorField
-  const skip = new Set<string>(["label", "sequence_id", "tooltip"]);
-  if (displayField) skip.add(displayField);
-  if (colorField) skip.add(colorField);
-
-  const extras = Object.keys(anno)
-    .filter((k) => !skip.has(k))
-    .sort((a, b) => a.localeCompare(b, "en"));
-
-  for (const k of extras) {
-    const v = String(anno[k] ?? "").trim();
-    if (v) lines.push(`${k}: ${v}`);
-  }
-
-  return lines.join("\n");
-}
-
-/** Structured field rows for the node-detail modal (clicking a tip). */
-function buildTipRows(
-  label: string,
-  anno: Anno | undefined,
-  displayField: string | null,
-): NodeDetail {
-  const title = (displayField && String(anno?.[displayField] ?? "").trim()) || label;
-  const rows: NodeDetail["rows"] = [{ key: "label", value: label }];
-  if (anno) {
-    const seq = String(anno.sequence_id ?? "").trim();
-    if (seq) rows.push({ key: "sequence_id", value: seq });
-    const skip = new Set<string>(["label", "sequence_id", "tooltip"]);
-    for (const k of Object.keys(anno).filter((k) => !skip.has(k)).sort((a, b) => a.localeCompare(b, "en"))) {
-      const v = String(anno[k] ?? "").trim();
-      if (v) rows.push({ key: k, value: v });
-    }
-  }
-  return { title, rows };
-}
-
-function splitByHighlight(
-  text: string,
-  highlight: string
-): Array<{ text: string; highlight: boolean }> {
-  if (!highlight?.trim()) return [{ text, highlight: false }];
-  const needle = highlight.trim();
-  const lower = text.toLowerCase();
-  const needleLower = needle.toLowerCase();
-  const parts: Array<{ text: string; highlight: boolean }> = [];
-  let start = 0;
-  while (true) {
-    const i = lower.indexOf(needleLower, start);
-    if (i === -1) {
-      if (start < text.length) parts.push({ text: text.slice(start), highlight: false });
-      break;
-    }
-    if (i > start) parts.push({ text: text.slice(start, i), highlight: false });
-    parts.push({ text: text.slice(i, i + needle.length), highlight: true });
-    start = i + needle.length;
-  }
-  return parts.length ? parts : [{ text, highlight: false }];
 }
 
 function isBlackColor(value: string): boolean {
@@ -200,49 +107,8 @@ function isBlackColor(value: string): boolean {
   return false;
 }
 
-function buildAnnoLookup(annotations?: Anno[]): Record<string, Anno> {
-  const m: Record<string, Anno> = {};
-  (annotations ?? []).forEach((a) => {
-    if (!a) return;
-    const keys = [a.final_tip_label, a.sequence_id, a.label].filter(
-      (k): k is string => typeof k === "string" && k.trim().length > 0,
-    );
-    for (const key of keys) {
-      m[key.trim()] = a;
-    }
-  });
-  return m;
-}
-
-function resolveAnno(lookup: Record<string, Anno>, tipName: string): Anno | undefined {
-  return lookup[tipName];
-}
-
-function buildTipSizeScale(
-  annotations: Anno[] | undefined,
-  field: string | null | undefined,
-  minRadius = 2.5,
-  maxRadius = 10,
-) {
-  if (!field || !annotations?.length) return null;
-  const vals = annotations
-    .map((row) => Number(row[field]))
-    .filter((v) => Number.isFinite(v) && v > 0);
-  if (!vals.length) return null;
-  const min = Math.min(...vals);
-  const max = Math.max(...vals);
-  return (anno: Anno | undefined) => {
-    const v = Number(anno?.[field]);
-    if (!Number.isFinite(v) || v <= 0) return minRadius;
-    if (min === max) return (minRadius + maxRadius) / 2;
-    return minRadius + ((v - min) / (max - min)) * (maxRadius - minRadius);
-  };
-}
-
 export default function TreeSVG({
   newick,
-  width = 900,
-  height = 520,
   filename = "tree",
   fontSize = 12,
   strokeWidth = 1,
@@ -268,137 +134,32 @@ export default function TreeSVG({
   const colorField = colorBy || null;
   const unknown = (unknownValue && unknownValue.trim()) || "unknown";
 
-  const annoByLabel = useMemo(() => buildAnnoLookup(annotations), [annotations]);
-  const tipSizeScale = useMemo(
-    () => buildTipSizeScale(annotations, sizeBy),
-    [annotations, sizeBy],
-  );
-
   const colors = useMemo(() => {
-    if (!coloringEnabled) return {};
+    if (!coloringEnabled) return {} as Record<string, string>;
     if (colorMap && Object.keys(colorMap).length) {
-      return {
-        ...colorMap,
-        Germline: "#000000",
-        [unknown]: "#000000",
-      };
+      return { ...colorMap, Germline: "#000000", [unknown]: "#000000" };
     }
     return buildColorMapDistinct(annotations, colorField, unknown);
   }, [coloringEnabled, colorMap, annotations, colorField, unknown]);
 
-  const leafCount = useMemo(() => {
-    try {
-      const root = parseNewick(sanitizeNewick(newick)) as LNode;
-      let cnt = 0;
-      (function walk(n: LNode) {
-        if (!n.children || n.children.length === 0) cnt += 1;
-        else n.children.forEach((c) => walk(c as LNode));
-      })(root);
-      return cnt;
-    } catch {
-      return 0;
-    }
-  }, [newick]);
+  // Renderer-agnostic model + client-side layout (shared with the lineage view).
+  const model = useMemo(
+    () => fromNewick(newick, { annotations, sizeByField: sizeBy }),
+    [newick, annotations, sizeBy],
+  );
 
-  const tipGap = 14;
-  const minBody = Math.max(0, (leafCount - 1) * tipGap);
-  const computedHeight = Math.max(height, 20 + minBody + 20);
+  const layout = useMemo(
+    () =>
+      layoutTree(model, {
+        showLabels,
+        showInternalNodes,
+        displayLabelOf: (n) => resolveTipDisplayLabel(n.label, n.attrs, displayIdField),
+      }),
+    [model, showLabels, showInternalNodes, displayIdField],
+  );
 
-  const layout = useMemo(() => {
-    const input = sanitizeNewick(newick);
-    const root = parseNewick(input) as LNode;
-
-    const tmpLeaves: LNode[] = [];
-    (function collectLeaves(n: LNode) {
-      if (!n.children || n.children.length === 0) tmpLeaves.push(n);
-      else n.children.forEach((c) => collectLeaves(c as LNode));
-    })(root);
-
-    const longestLabelLen =
-      tmpLeaves.length === 0 ? 0 : Math.max(...tmpLeaves.map((n) => (n.name ?? "").length));
-    const labelPad = 10;
-    const labelArea =
-      showLabels && longestLabelLen
-        ? Math.max(160, estimateTextWidth("W".repeat(longestLabelLen), fontSize) + 18)
-        : 20;
-
-    const margin = { top: 20, right: labelArea, bottom: 20, left: 20 };
-    const innerW = Math.max(1, width - margin.left - margin.right);
-    const innerH = Math.max(1, computedHeight - margin.top - margin.bottom);
-
-    const yStep = tmpLeaves.length > 1 ? innerH / (tmpLeaves.length - 1) : 0;
-    tmpLeaves.forEach((leaf, i) => (leaf.y = margin.top + i * yStep));
-
-    function pathLen(n: LNode): number {
-      const len = n.length ?? 0;
-      if (!n.children || n.children.length === 0) return len;
-      return len + Math.max(...n.children.map((c) => pathLen(c as LNode)));
-    }
-    const maxDepth = pathLen(root) || 1;
-    const scaleX = innerW / maxDepth;
-
-    function assignXY(n: LNode, parent?: LNode) {
-      n.parent = parent;
-      const parentX = parent?.x ?? margin.left;
-      n.x = parentX + (n.length ?? 0) * scaleX;
-
-      if (n.children && n.children.length) {
-        n.children.forEach((c) => assignXY(c as LNode, n));
-        const ys = n.children.map((c) => (c as LNode).y ?? 0);
-        n.y = ys.reduce((a, b) => a + b, 0) / ys.length;
-      } else if (typeof n.y !== "number") {
-        n.y = margin.top;
-      }
-    }
-    assignXY(root, undefined);
-
-    function minX(n: LNode): number {
-      let v = n.x ?? 0;
-      (n.children ?? []).forEach((c) => {
-        const m = minX(c as LNode);
-        if (m < v) v = m;
-      });
-      return v;
-    }
-    const dx = margin.left - minX(root);
-    if (dx !== 0) {
-      (function shift(n: LNode) {
-        n.x = (n.x ?? 0) + dx;
-        n.children?.forEach((c) => shift(c as LNode));
-      })(root);
-    }
-
-    const edges: Array<{ x1: number; y1: number; x2: number; y2: number }> = [];
-    function walkEdges(n: LNode) {
-      if (!n.children || !n.children.length) return;
-      const ys = n.children.map((c) => (c as LNode).y ?? 0);
-      const yMin = Math.min(...ys);
-      const yMax = Math.max(...ys);
-      const x = n.x ?? 0;
-      edges.push({ x1: x, y1: yMin, x2: x, y2: yMax });
-      n.children.forEach((c) => {
-        const cc = c as LNode;
-        edges.push({ x1: x, y1: cc.y!, x2: cc.x!, y2: cc.y! });
-        walkEdges(cc);
-      });
-    }
-    walkEdges(root);
-
-    const leafNodes: LNode[] = [];
-    const internalNodes: LNode[] = [];
-    (function collect(n: LNode) {
-      if (!n.children || !n.children.length) leafNodes.push(n);
-      else {
-        internalNodes.push(n);
-        n.children.forEach((c) => collect(c as LNode));
-      }
-    })(root);
-
-    const plotRightX = width - margin.right;
-    const labelX = plotRightX + labelPad;
-
-    return { root, edges, leafNodes, internalNodes, margin, labelX };
-  }, [newick, width, computedHeight, fontSize, showLabels]);
+  const leaves = useMemo(() => layout.nodes.filter((n) => n.isLeaf), [layout.nodes]);
+  const internals = useMemo(() => layout.nodes.filter((n) => !n.isLeaf), [layout.nodes]);
 
   // Tips matching the searched text (same predicate as the red highlight),
   // used to draw "Show me" arrows and to scroll the first match into view.
@@ -407,21 +168,21 @@ export default function TreeSVG({
     if (!needle) return [] as Array<{ x: number; y: number }>;
     const lc = needle.toLowerCase();
     const out: Array<{ x: number; y: number }> = [];
-    for (const n of layout.leafNodes) {
-      const label = n.name ?? "";
-      const anno = resolveAnno(annoByLabel, label);
+    for (const n of leaves) {
+      const label = n.node.label;
+      const anno = n.node.attrs;
       const title = buildTipTitle(label, anno, colorField, displayIdField || null);
-      const displayLabel = (displayIdField && String(anno?.[displayIdField] ?? "").trim()) || label;
+      const displayLabel = resolveTipDisplayLabel(label, anno, displayIdField);
       if (
         title.toLowerCase().includes(lc) ||
         label.toLowerCase().includes(lc) ||
         displayLabel.toLowerCase().includes(lc)
       ) {
-        out.push({ x: n.x ?? 0, y: n.y ?? 0 });
+        out.push({ x: n.xPixel, y: n.y });
       }
     }
     return out;
-  }, [needle, layout.leafNodes, annoByLabel, colorField, displayIdField]);
+  }, [needle, leaves, colorField, displayIdField]);
 
   // Read latest match state inside the focus effect without making it a dep,
   // so scrolling only fires when `focusSignal` (the "Show me" click) changes.
@@ -439,6 +200,13 @@ export default function TreeSVG({
       behavior: "smooth",
     });
   }, [focusSignal]);
+
+  useEffect(() => {
+    if (!layout.warnings.length) return;
+    for (const warning of layout.warnings) {
+      console.warn("[TreeSVG]", { code: warning.code, message: warning.message });
+    }
+  }, [layout.warnings]);
 
   function downloadSVG() {
     const svg = svgRef.current;
@@ -462,12 +230,12 @@ export default function TreeSVG({
     const img = new Image();
     img.onload = () => {
       const canvas = document.createElement("canvas");
-      canvas.width = width;
-      canvas.height = computedHeight;
+      canvas.width = layout.width;
+      canvas.height = layout.height;
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
       ctx.fillStyle = "white";
-      ctx.fillRect(0, 0, width, computedHeight);
+      ctx.fillRect(0, 0, layout.width, layout.height);
       ctx.drawImage(img, 0, 0);
       const png = canvas.toDataURL("image/png");
       const a = document.createElement("a");
@@ -501,149 +269,141 @@ export default function TreeSVG({
       >
         <svg
           ref={svgRef}
-          width={width}
-          height={computedHeight}
+          width={layout.width}
+          height={layout.height}
           data-tree-zoom-target="true"
           className="block bg-background text-foreground"
           role="img"
         >
-        {/* branches */}
-        <g stroke="currentColor" strokeWidth={strokeWidth} vectorEffect="non-scaling-stroke">
-          {layout.edges.map((e, i) => (
-            <line key={i} x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2} />
-          ))}
-        </g>
+          {/* branches */}
+          <g stroke="currentColor" strokeWidth={strokeWidth} fill="none" vectorEffect="non-scaling-stroke">
+            {layout.edges.map((e) => (
+              <path key={e.key} d={`M ${e.sx} ${e.sy} L ${e.sx} ${e.ty} L ${e.tx} ${e.ty}`} />
+            ))}
+          </g>
 
-        {/* tips */}
-        <g>
-          {layout.leafNodes.map((n, i) => {
-            const label = n.name ?? "";
-            const anno = resolveAnno(annoByLabel, label);
-            const defaultLeafFill = "var(--foreground)";
+          {/* tips */}
+          <g>
+            {leaves.map((n) => {
+              const label = n.node.label;
+              const anno = n.node.attrs;
+              const defaultLeafFill = "var(--foreground)";
 
-            let fill = defaultLeafFill;
-            if (coloringEnabled && colorField) {
-              const call = (anno?.[colorField] as string) || "";
-              if (call && call !== "Germline" && call !== unknown) {
-                const resolved = colors[call] ?? defaultLeafFill;
-                fill = isBlackColor(resolved) ? defaultLeafFill : resolved;
+              let fill = defaultLeafFill;
+              if (coloringEnabled && colorField) {
+                const call = (anno?.[colorField] as string) || "";
+                if (call && call !== "Germline" && call !== unknown) {
+                  const resolved = colors[call] ?? defaultLeafFill;
+                  fill = isBlackColor(resolved) ? defaultLeafFill : resolved;
+                }
               }
-            }
 
-            const title = buildTipTitle(label, anno, colorField, displayIdField || null);
-            const displayLabel =
-              (displayIdField && String(anno?.[displayIdField] ?? "").trim()) || label;
-            const needle = highlightText?.trim();
-            const matchesHighlight = Boolean(
-              needle &&
-                (title.toLowerCase().includes(needle.toLowerCase()) ||
-                  label.toLowerCase().includes(needle.toLowerCase()) ||
-                  displayLabel.toLowerCase().includes(needle.toLowerCase()))
-            );
-            const tipFill = matchesHighlight ? "#dc2626" : fill;
-            const tipStroke = matchesHighlight ? "#b91c1c" : undefined;
-            const tipStrokeWidth = matchesHighlight ? 2 : 0;
-            const tipRadius = tipSizeScale ? tipSizeScale(anno) : 3;
-
-            return (
-              <circle
-                key={i}
-                cx={n.x!}
-                cy={n.y!}
-                r={tipRadius}
-                fill={tipFill}
-                stroke={tipStroke}
-                strokeWidth={tipStrokeWidth}
-                style={{ cursor: "pointer" }}
-                onClick={() => setSelectedNode(buildTipRows(label, anno, displayIdField || null))}
-              >
-                <title>{title}</title>
-              </circle>
-            );
-          })}
-        </g>
-
-        {/* "Show me" arrows over matching tips */}
-        {markMatches &&
-          matchedTips.map((m, i) => <MatchArrow key={`tip-arrow-${i}`} x={m.x} y={m.y} />)}
-
-        {showInternalNodes &&
-          layout.internalNodes.map((n, i) => (
-            <g key={`internal-${i}`}>
-              <circle
-                cx={n.x!}
-                cy={n.y!}
-                r={2.5}
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={1.2}
-                opacity={0.75}
-              />
-              {(showNodeNumbers || showInternalNodes) && (
-                <text
-                  x={(n.x ?? 0) + 6}
-                  y={(n.y ?? 0) - 6}
-                  fontSize={9}
-                  fill="currentColor"
-                  opacity={0.8}
-                >
-                  {showNodeNumbers ? `#${i + 1}` : ""}
-                </text>
-              )}
-            </g>
-          ))}
-
-        {/* labels */}
-        {showLabels && (
-          <g fontSize={fontSize} fill="currentColor">
-            {layout.leafNodes.map((n, i) => {
-              const label = n.name ?? "";
-              const anno = resolveAnno(annoByLabel, label);
               const title = buildTipTitle(label, anno, colorField, displayIdField || null);
-              const displayLabel = (displayIdField && String(anno?.[displayIdField] ?? "").trim()) || label;
-              const labelParts = splitByHighlight(displayLabel, highlightText ?? "");
-              const needle = highlightText?.trim();
-              const labelMatches = Boolean(
-                needle &&
-                  (title.toLowerCase().includes(needle.toLowerCase()) ||
-                    label.toLowerCase().includes(needle.toLowerCase()) ||
-                    displayLabel.toLowerCase().includes(needle.toLowerCase()))
+              const needleLc = highlightText?.trim();
+              const displayLabel = resolveTipDisplayLabel(label, anno, displayIdField);
+              const matchesHighlight = Boolean(
+                needleLc &&
+                  (title.toLowerCase().includes(needleLc.toLowerCase()) ||
+                    label.toLowerCase().includes(needleLc.toLowerCase()) ||
+                    displayLabel.toLowerCase().includes(needleLc.toLowerCase())),
               );
+              const tipFill = matchesHighlight ? "#dc2626" : fill;
+              const tipStroke = matchesHighlight ? "#b91c1c" : undefined;
+              const tipStrokeWidth = matchesHighlight ? 2 : 0;
+
               return (
-                <g key={i}>
-                  <line
-                    x1={n.x!}
-                    y1={n.y!}
-                    x2={Math.round(layout.labelX) - 4}
-                    y2={n.y!}
-                    stroke="currentColor"
-                    strokeWidth={0.5}
-                    opacity={0.4}
-                    vectorEffect="non-scaling-stroke"
-                  />
-                  <text
-                    x={Math.round(layout.labelX)}
-                    y={n.y!}
-                    dominantBaseline="middle"
-                    fill={labelMatches ? "#dc2626" : undefined}
-                    fontWeight={labelMatches ? "bold" : undefined}
-                  >
-                    {labelParts.map((seg, j) =>
-                      seg.highlight ? (
-                        <tspan key={j} fill="#dc2626" fontWeight="bold">
-                          {seg.text}
-                        </tspan>
-                      ) : (
-                        <tspan key={j}>{seg.text}</tspan>
-                      )
-                    )}
-                    <title>{title}</title>
-                  </text>
-                </g>
+                <circle
+                  key={n.id}
+                  cx={n.xPixel}
+                  cy={n.y}
+                  r={n.radius}
+                  fill={tipFill}
+                  stroke={tipStroke}
+                  strokeWidth={tipStrokeWidth}
+                  style={{ cursor: "pointer" }}
+                  onClick={() => setSelectedNode(buildTipRows(label, anno, displayIdField || null))}
+                >
+                  <title>{title}</title>
+                </circle>
               );
             })}
           </g>
-        )}
+
+          {/* "Show me" arrows over matching tips */}
+          {markMatches &&
+            matchedTips.map((m, i) => <MatchArrow key={`tip-arrow-${i}`} x={m.x} y={m.y} />)}
+
+          {showInternalNodes &&
+            internals.map((n, i) => (
+              <g key={`internal-${n.id}`}>
+                <circle
+                  cx={n.xPixel}
+                  cy={n.y}
+                  r={2.5}
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={1.2}
+                  opacity={0.75}
+                />
+                {showNodeNumbers && (
+                  <text x={n.xPixel + 6} y={n.y - 6} fontSize={9} fill="currentColor" opacity={0.8}>
+                    {`#${i + 1}`}
+                  </text>
+                )}
+              </g>
+            ))}
+
+          {/* labels */}
+          {showLabels && (
+            <g fontSize={fontSize} fill="currentColor">
+              {leaves.map((n) => {
+                const label = n.node.label;
+                const anno = n.node.attrs;
+                const title = buildTipTitle(label, anno, colorField, displayIdField || null);
+                const displayLabel = n.displayLabel;
+                const labelParts = splitByHighlight(displayLabel, highlightText ?? "");
+                const needleLc = highlightText?.trim();
+                const labelMatches = Boolean(
+                  needleLc &&
+                    (title.toLowerCase().includes(needleLc.toLowerCase()) ||
+                      label.toLowerCase().includes(needleLc.toLowerCase()) ||
+                      displayLabel.toLowerCase().includes(needleLc.toLowerCase())),
+                );
+                return (
+                  <g key={`label-${n.id}`}>
+                    <line
+                      x1={n.xPixel}
+                      y1={n.y}
+                      x2={layout.connectorX}
+                      y2={n.y}
+                      stroke="currentColor"
+                      strokeWidth={0.5}
+                      opacity={0.4}
+                      vectorEffect="non-scaling-stroke"
+                    />
+                    <text
+                      x={layout.labelX}
+                      y={n.y}
+                      dominantBaseline="middle"
+                      fill={labelMatches ? "#dc2626" : undefined}
+                      fontWeight={labelMatches ? "bold" : undefined}
+                    >
+                      {labelParts.map((seg, j) =>
+                        seg.highlight ? (
+                          <tspan key={j} fill="#dc2626" fontWeight="bold">
+                            {seg.text}
+                          </tspan>
+                        ) : (
+                          <tspan key={j}>{seg.text}</tspan>
+                        ),
+                      )}
+                      <title>{title}</title>
+                    </text>
+                  </g>
+                );
+              })}
+            </g>
+          )}
         </svg>
       </div>
 
