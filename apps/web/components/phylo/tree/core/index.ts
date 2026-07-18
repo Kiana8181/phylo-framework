@@ -10,6 +10,14 @@ export { fromLineagePlot } from "./fromLineagePlot";
 export { fromNewick, sanitizeNewick, type FromNewickOptions } from "./fromNewick";
 export { layoutTree, type LayoutOptions } from "./layout";
 export {
+  defaultCollapsed,
+  collapseAll,
+  expandAll,
+  toggleCollapse,
+  subtreeColorSummary,
+  type ColorKey,
+} from "./collapse";
+export {
   resolveDisplayLabel,
   resolveNodeDisplayLabel,
   buildTitle,
@@ -30,5 +38,6 @@ export {
   downloadNewick,
   type NodeVisual,
   type EdgeVisual,
+  type GlyphVisual,
   type TreeSvgMeta,
 } from "./download";

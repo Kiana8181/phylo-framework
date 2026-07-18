@@ -1,8 +1,8 @@
 import type { ReactNode } from "react";
 import type { ZoomTransform } from "d3-zoom";
-import type { NodeVisual, EdgeVisual } from "@/components/phylo/tree/core";
+import type { NodeVisual, EdgeVisual, GlyphVisual } from "@/components/phylo/tree/core";
 
-/** Semantic-zoom level of detail (Phase 3). Phase 2 always renders "full". */
+/** Semantic-zoom level of detail (Phase 3), driven by `transform.k`. */
 export type LodLevel = "dots" | "nodes" | "full";
 
 export type TreeRenderProps = {
@@ -10,9 +10,11 @@ export type TreeRenderProps = {
    * before then). Shared with the export serialiser so both draw the same thing. */
   nodes: readonly NodeVisual[];
   edges: readonly EdgeVisual[];
+  /** Collapsed-subtree wedges. */
+  glyphs: readonly GlyphVisual[];
   /** Current zoom transform (applied by the parent to the wrapping `<g>`). */
   transform: ZoomTransform;
-  /** Phase 3 semantic zoom; accepted now, always "full" in Phase 2. */
+  /** Semantic-zoom level from `transform.k`. */
   lod: LodLevel;
   /** Shared label-column geometry from the layout. */
   labelX: number;
@@ -22,8 +24,8 @@ export type TreeRenderProps = {
   /** Draw "Show me" arrows over matched nodes. */
   markMatches: boolean;
   onNodeClick: (id: string) => void;
-  /** Phase 3 collapse toggle; accepted now, no-op in Phase 2. */
-  onNodeContextMenu: (id: string) => void;
+  /** Collapse/expand toggle (right-click, chevron, glyph click, Space, long-press). */
+  onToggleCollapse: (id: string) => void;
 };
 
 /**

@@ -69,6 +69,12 @@ export type LayoutNode = {
   displayLabel: string;
   /** Whether this node's label is drawn (leaf+showLabels or internal+showInternalNodes). */
   labelShown: boolean;
+  /** True when this node is a collapsed-subtree root (drawn as a triangle glyph). */
+  isCollapsed: boolean;
+  /** Far x (pixels) of the collapsed wedge = subtreeMaxX through the shared kx. */
+  glyphFarXPixel?: number;
+  /** Half-height (pixels) of the collapsed wedge. */
+  glyphHalfHeight?: number;
   node: TreeNodeModel;
 };
 

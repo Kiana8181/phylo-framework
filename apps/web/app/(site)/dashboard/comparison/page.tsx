@@ -14,13 +14,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import TreeView from "@/components/phylo/tree/TreeView";
+import TreeView, { type CollapseSignal } from "@/components/phylo/tree/TreeView";
 import SequenceTraceInfoIcon from "@/components/sequence-trace/SequenceTraceInfoIcon";
 import { RunsApi } from "@/features/runs/api";
 import { useRunStatus } from "@/features/runs/hooks";
 import { useContractSpec, useMethods } from "@/features/methods/hooks";
 import type { RunSummary, LineagePlot, RunTreeListItem } from "@phylo/contracts";
-import { Maximize2, Search, Plus, X, Crosshair } from "lucide-react";
+import { Maximize2, Search, Plus, X, Crosshair, ChevronsDownUp, ChevronsUpDown } from "lucide-react";
 import { Spinner } from "@/components/ui/loading";
 import CompareExpandDialog, { type CompareExpandTreeRef } from "@/components/comparison/CompareExpandDialog";
 import RunAutocomplete from "@/components/comparison/RunAutocomplete";
@@ -127,6 +127,7 @@ function ComparisonColumn({
   highlightText,
   markMatches,
   focusSignal,
+  collapseSignal,
   displayIdField,
   onDisplayIdFieldChange,
   isLoading,
@@ -142,6 +143,7 @@ function ComparisonColumn({
   highlightText: string;
   markMatches?: boolean;
   focusSignal?: number;
+  collapseSignal?: CollapseSignal;
   displayIdField: string;
   onDisplayIdFieldChange: (v: string) => void;
   isLoading?: boolean;
@@ -277,6 +279,7 @@ function ComparisonColumn({
             highlightText={highlightText || undefined}
             markMatches={markMatches}
             focusSignal={focusSignal}
+            collapseSignal={collapseSignal}
             height={420}
             className="shrink-0"
           />
@@ -304,6 +307,7 @@ export default function ComparisonPage() {
   const [highlightSequence, setHighlightSequence] = useState("");
   const [markMatches, setMarkMatches] = useState(false);
   const [focusSignal, setFocusSignal] = useState(0);
+  const [collapseSignal, setCollapseSignal] = useState<CollapseSignal>(null);
   const [displayIdField, setDisplayIdField] = useState("sequence_id");
   const [expandOpen, setExpandOpen] = useState(false);
   const nextPanelIdRef = useRef(1);
@@ -569,17 +573,39 @@ export default function ComparisonPage() {
             <h2 className="text-lg font-medium">Side-by-side Sequence Trace</h2>
             <SequenceTraceInfoIcon />
           </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="gap-1.5"
-            onClick={() => setExpandOpen(true)}
-            disabled={expandTrees.length === 0}
-          >
-            <Maximize2 className="h-4 w-4" />
-            Expand
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              onClick={() => setCollapseSignal({ type: "collapseAll", nonce: Date.now() })}
+            >
+              <ChevronsDownUp className="h-4 w-4" />
+              Collapse all
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              onClick={() => setCollapseSignal({ type: "expandAll", nonce: Date.now() })}
+            >
+              <ChevronsUpDown className="h-4 w-4" />
+              Expand all
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              onClick={() => setExpandOpen(true)}
+              disabled={expandTrees.length === 0}
+            >
+              <Maximize2 className="h-4 w-4" />
+              Expand
+            </Button>
+          </div>
         </div>
         <p className="text-sm text-muted-foreground">
           Each panel keeps its own tree selection. Choose a run in each Sequence Trace slot to view trees side-by-side.
@@ -598,6 +624,7 @@ export default function ComparisonPage() {
             highlightText={highlightSequence}
             markMatches={markMatches}
             focusSignal={focusSignal}
+            collapseSignal={collapseSignal}
             displayIdField={displayIdField}
             onDisplayIdFieldChange={setDisplayIdField}
             isLoading={baseStatusLoading || (baseDone && baseTreesLoading)}
@@ -628,6 +655,7 @@ export default function ComparisonPage() {
               highlightText={highlightSequence}
               markMatches={markMatches}
               focusSignal={focusSignal}
+              collapseSignal={collapseSignal}
               displayIdField={displayIdField}
               onDisplayIdFieldChange={setDisplayIdField}
               methodNameById={methodNameById}
@@ -643,6 +671,7 @@ export default function ComparisonPage() {
         highlightText={highlightSequence}
         displayIdField={displayIdField}
         methodNameById={methodNameById}
+        collapseSignal={collapseSignal}
       />
     </main>
   );
@@ -655,6 +684,7 @@ function RunLineageBlock({
   highlightText,
   markMatches,
   focusSignal,
+  collapseSignal,
   displayIdField,
   onDisplayIdFieldChange,
   isLoading,
@@ -665,6 +695,7 @@ function RunLineageBlock({
   highlightText: string;
   markMatches?: boolean;
   focusSignal?: number;
+  collapseSignal?: CollapseSignal;
   displayIdField: string;
   onDisplayIdFieldChange: (v: string) => void;
   isLoading?: boolean;
@@ -737,6 +768,7 @@ function RunLineageBlock({
           highlightText={highlightText || undefined}
           markMatches={markMatches}
           focusSignal={focusSignal}
+          collapseSignal={collapseSignal}
           height={420}
         />
       )}
@@ -762,6 +794,7 @@ function ComparisonSlot({
   highlightText,
   markMatches,
   focusSignal,
+  collapseSignal,
   displayIdField,
   onDisplayIdFieldChange,
   methodNameById,
@@ -777,6 +810,7 @@ function ComparisonSlot({
   highlightText: string;
   markMatches?: boolean;
   focusSignal?: number;
+  collapseSignal?: CollapseSignal;
   displayIdField: string;
   onDisplayIdFieldChange: (v: string) => void;
   methodNameById: Map<string, string>;
@@ -860,6 +894,7 @@ function ComparisonSlot({
               highlightText={highlightText}
               markMatches={markMatches}
               focusSignal={focusSignal}
+              collapseSignal={collapseSignal}
               displayIdField={displayIdField}
               onDisplayIdFieldChange={onDisplayIdFieldChange}
               isLoading={treesLoading}

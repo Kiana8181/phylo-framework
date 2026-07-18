@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { RunsApi } from "@/features/runs/api";
-import TreeView from "@/components/phylo/tree/TreeView";
+import TreeView, { type CollapseSignal } from "@/components/phylo/tree/TreeView";
 import SequenceTraceInfoIcon from "@/components/sequence-trace/SequenceTraceInfoIcon";
 
 export type CompareExpandTreeRef = {
@@ -26,6 +26,8 @@ type CompareExpandDialogProps = {
   highlightText: string;
   displayIdField: string;
   methodNameById: Map<string, string>;
+  /** Broadcast collapse/expand-all from the page toolbar. */
+  collapseSignal?: CollapseSignal;
 };
 
 type ExpandTreeTileProps = {
@@ -35,6 +37,7 @@ type ExpandTreeTileProps = {
   displayIdField: string;
   markMatches: boolean;
   focusSignal: number;
+  collapseSignal?: CollapseSignal;
   methodNameById: Map<string, string>;
 };
 
@@ -76,6 +79,7 @@ const ExpandTreeTile = memo(function ExpandTreeTile({
   displayIdField,
   markMatches,
   focusSignal,
+  collapseSignal,
   methodNameById,
 }: ExpandTreeTileProps) {
   const { data: status, isLoading: statusLoading } = useRunStatus(treeRef.runId, open);
@@ -140,6 +144,7 @@ const ExpandTreeTile = memo(function ExpandTreeTile({
               highlightText={highlightText || undefined}
               markMatches={markMatches}
               focusSignal={focusSignal}
+              collapseSignal={collapseSignal}
               height="100%"
             />
           </div>
@@ -162,6 +167,7 @@ export default function CompareExpandDialog({
   highlightText,
   displayIdField,
   methodNameById,
+  collapseSignal,
 }: CompareExpandDialogProps) {
   const [query, setQuery] = useState(highlightText);
   const [mark, setMark] = useState(false);
@@ -265,6 +271,7 @@ export default function CompareExpandDialog({
                   displayIdField={displayIdField}
                   markMatches={mark}
                   focusSignal={focus}
+                  collapseSignal={collapseSignal}
                   methodNameById={methodNameById}
                 />
               ))}

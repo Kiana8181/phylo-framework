@@ -1,7 +1,7 @@
 "use client";
 
 import { API_ROUTES } from "@phylo/contracts";
-import TreeView from "@/components/phylo/tree/TreeView";
+import TreeView, { type CollapseSignal } from "@/components/phylo/tree/TreeView";
 import TreeSkeleton from "@/components/phylo/tree/TreeSkeleton";
 import ArtifactImage from "@/components/phylo/ArtifactImage";
 import { Loading } from "@/components/ui/loading";
@@ -21,6 +21,7 @@ export type TreeViewportProps = {
   sizeByField: string;
   lineageDownloadName: string;
   lineageNewick: string;
+  collapseSignal?: CollapseSignal;
   /** Height for the interactive tree pane (fullscreen expand passes e.g. "78vh"). */
   viewportHeight?: number | string;
 };
@@ -43,6 +44,7 @@ export default function TreeViewport({
   sizeByField,
   lineageDownloadName,
   lineageNewick,
+  collapseSignal,
   viewportHeight,
 }: TreeViewportProps) {
   return (
@@ -77,6 +79,7 @@ export default function TreeViewport({
           displayIdField={displayIdField || undefined}
           sizeBy={sizeByField || undefined}
           filename={current.id || `tree-${idx + 1}`}
+          collapseSignal={collapseSignal}
           height={viewportHeight}
         />
       )}
@@ -99,6 +102,7 @@ export default function TreeViewport({
           showNodeNumbers={showNodeNumbers}
           filename={lineageDownloadName}
           newickText={lineageNewick}
+          collapseSignal={collapseSignal}
           height={viewportHeight}
         />
       )}

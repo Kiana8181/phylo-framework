@@ -21,6 +21,8 @@ export type NodeVisual = {
   hollow: boolean;
   /** Matched by the Sequence-Trace search predicate. */
   isMatch: boolean;
+  /** Expanded internal node with children → shows a collapse chevron (render hint). */
+  isCollapsible: boolean;
   labelShown: boolean;
   /** Already truncated to the label column width. */
   labelText: string;
@@ -30,6 +32,21 @@ export type NodeVisual = {
 
 /** A precomputed elbow edge path (`M sx sy L sx ty L tx ty`). */
 export type EdgeVisual = { key: string; d: string };
+
+/** A collapsed-subtree wedge (triangle), apex at the node, base at `farX`. */
+export type GlyphVisual = {
+  id: string;
+  apexX: number;
+  y: number;
+  farX: number;
+  halfHeight: number;
+  fill: string;
+  /** Aggregate of multiple distinct colour values → hatched/translucent. */
+  striped: boolean;
+  isMatch: boolean;
+  /** e.g. "n=12  Σ=340" (already composed); null when labels are off. */
+  labelText: string | null;
+};
 
 export type TreeSvgMeta = {
   width: number;
@@ -67,6 +84,7 @@ export function serializeTreeSvg(
   nodes: readonly NodeVisual[],
   edges: readonly EdgeVisual[],
   meta: TreeSvgMeta,
+  glyphs: readonly GlyphVisual[] = [],
 ): string {
   const parts: string[] = [];
   parts.push(
@@ -80,6 +98,20 @@ export function serializeTreeSvg(
   );
   for (const e of edges) parts.push(`<path d="${e.d}"/>`);
   parts.push(`</g>`);
+
+  // Collapsed-subtree wedges.
+  for (const g of glyphs) {
+    const fill = exportColor(g.isMatch ? MATCH_FILL : g.fill);
+    parts.push(
+      `<path d="M ${g.apexX} ${g.y} L ${g.farX} ${g.y - g.halfHeight} L ${g.farX} ${g.y + g.halfHeight} Z" ` +
+        `fill="${fill}" fill-opacity="${g.striped ? 0.5 : 0.9}" stroke="${EXPORT_INK}" stroke-width="0.75"/>`,
+    );
+    if (g.labelText) {
+      parts.push(
+        `<text x="${g.farX + 6}" y="${g.y}" dominant-baseline="middle" font-size="${LABEL_FONT_SIZE}" fill="${EXPORT_INK}">${xmlEscape(g.labelText)}</text>`,
+      );
+    }
+  }
 
   // Nodes.
   parts.push(`<g>`);

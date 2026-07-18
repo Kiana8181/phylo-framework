@@ -110,3 +110,44 @@ describe("layoutTree x/y mapping", () => {
     expect(maxX).toBeGreaterThan(900);
   });
 });
+
+describe("layoutTree collapse", () => {
+  it("collapsing a node never changes any surviving node's xPixel", () => {
+    const model = fromLineagePlot(spread());
+    const expanded = layoutTree(model, opts);
+    const collapsed = layoutTree(model, { ...opts, collapsed: new Set(["a"]) });
+    const xExpanded = new Map(expanded.nodes.map((n) => [n.id, n.xPixel]));
+    for (const n of collapsed.nodes) {
+      expect(n.xPixel).toBeCloseTo(xExpanded.get(n.id)!, 6);
+    }
+  });
+
+  it("collapsing removes descendants and exposes wedge geometry", () => {
+    const model = fromLineagePlot(spread());
+    const layout = layoutTree(model, { ...opts, collapsed: new Set(["a"]) });
+    const ids = new Set(layout.nodes.map((n) => n.id));
+    // a's descendants (a1, a2) are gone; a itself is a collapsed wedge.
+    expect(ids.has("a1")).toBe(false);
+    expect(ids.has("a2")).toBe(false);
+    const a = layout.nodes.find((n) => n.id === "a")!;
+    expect(a.isCollapsed).toBe(true);
+    expect(typeof a.glyphFarXPixel).toBe("number");
+    expect(typeof a.glyphHalfHeight).toBe("number");
+    // The wedge reaches the subtree's far x (a2 is at xSource 20, the max).
+    expect(a.glyphFarXPixel!).toBeGreaterThan(a.xPixel);
+  });
+
+  it("expandAll layout is node-for-node identical to the fully-expanded layout", () => {
+    const model = fromLineagePlot(spread());
+    const base = layoutTree(model, opts);
+    const viaEmpty = layoutTree(model, { ...opts, collapsed: new Set() });
+    expect(viaEmpty.nodes.length).toBe(base.nodes.length);
+    const byId = new Map(base.nodes.map((n) => [n.id, n]));
+    for (const n of viaEmpty.nodes) {
+      const b = byId.get(n.id)!;
+      expect(n.xPixel).toBeCloseTo(b.xPixel, 6);
+      expect(n.y).toBeCloseTo(b.y, 6);
+      expect(n.isCollapsed).toBe(false);
+    }
+  });
+});
