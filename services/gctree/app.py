@@ -1686,6 +1686,19 @@ async def run_handler(request: Request):
 
         quick = _truthy(p.get("quick") or False)
         jumble = p.get("jumble")
+        try:
+            if jumble is not None and int(jumble) > 0:
+                warnings.append(
+                    {
+                        "code": "JUMBLE_NONDETERMINISTIC",
+                        "message": (
+                            "jumble > 0 makes DNAPARS tree search non-deterministic; "
+                            "this run may not be exactly reproducible."
+                        ),
+                    }
+                )
+        except (TypeError, ValueError):
+            pass
         idlabel = _truthy(p.get("idlabel") or False)
         show_mut = _truthy(p.get("show_nucleotide_mutations") or False)
         summarize_forest = _truthy(p.get("summarize_forest") or False)
