@@ -23,6 +23,7 @@ export {
   subtreeColorSummary,
   type ColorKey,
 } from "./collapse";
+export { computeTrace, deriveTraceCollapsed, type TraceResult } from "./trace";
 export {
   resolveDisplayLabel,
   resolveNodeDisplayLabel,

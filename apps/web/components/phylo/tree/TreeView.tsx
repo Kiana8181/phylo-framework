@@ -32,7 +32,8 @@ import {
   expandAll,
   toggleCollapse,
   subtreeColorSummary,
-  FOCUS_SCALE,
+  computeTrace,
+  deriveTraceCollapsed,
   LOD_DETAIL_K,
   type NodeVisual,
   type EdgeVisual,
@@ -148,21 +149,6 @@ export default function TreeView({
     setCollapsed((prev) => toggleCollapse(prev, id));
   };
 
-  const layout = useMemo(
-    () =>
-      layoutTree(model, {
-        collapsed,
-        showLabels,
-        // Phylogeny internals never get right-column text labels (they get a
-        // hollow ring + optional "#n"), so keep them out of the label geometry.
-        showInternalNodes: isLineage ? showInternalNodes : false,
-        displayLabelOf: isLineage
-          ? (n) => resolveNodeDisplayLabel(n, displayIdField, showInternalNodes, showNodeNumbers)
-          : (n) => resolveTipDisplayLabel(n.label, n.attrs, displayIdField ?? null),
-      }),
-    [model, collapsed, isLineage, showLabels, showInternalNodes, showNodeNumbers, displayIdField],
-  );
-
   // Colour scale — one encoding for BOTH views (abundance / categorical / continuous).
   const colorScale = useMemo(
     () =>
@@ -183,18 +169,92 @@ export default function TreeView({
 
   const needle = highlightText?.trim().toLowerCase() ?? "";
 
+  // Matched node ids (existing predicate: lineage = any node; phylogeny = leaves).
+  const matchIds = useMemo(() => {
+    const ids = new Set<string>();
+    if (!needle) return ids;
+    for (const [id, node] of model.nodes) {
+      if (isLineage) {
+        const dl = resolveNodeDisplayLabel(node, displayIdField, showInternalNodes, showNodeNumbers);
+        if (
+          buildTitle(node, displayIdField).toLowerCase().includes(needle) ||
+          dl.toLowerCase().includes(needle) ||
+          node.label.toLowerCase().includes(needle)
+        ) {
+          ids.add(id);
+        }
+      } else if (node.isLeaf) {
+        const dl = resolveTipDisplayLabel(node.label, node.attrs, displayIdField ?? null);
+        if (
+          buildTipTitle(node.label, node.attrs, colorScale.field, displayIdField ?? null)
+            .toLowerCase()
+            .includes(needle) ||
+          node.label.toLowerCase().includes(needle) ||
+          dl.toLowerCase().includes(needle)
+        ) {
+          ids.add(id);
+        }
+      }
+    }
+    return ids;
+  }, [needle, model, isLineage, displayIdField, showInternalNodes, showNodeNumbers, colorScale.field]);
+
+  // Sequence-Trace focus + context. Active only after "Show me" (markMatches). The
+  // user's collapse set is LAYERED, never mutated → clearing the search restores it.
+  const trace = useMemo(
+    () => (markMatches && matchIds.size > 0 ? computeTrace(model, matchIds) : null),
+    [markMatches, matchIds, model],
+  );
+  const effectiveCollapsed = useMemo(
+    () => (trace ? deriveTraceCollapsed(model, collapsed, trace.pathIds, trace.subtreeIds) : collapsed),
+    [trace, model, collapsed],
+  );
+  const focusIds = useMemo(() => {
+    if (!trace) return null;
+    const s = new Set(trace.pathIds);
+    for (const id of trace.subtreeIds) s.add(id);
+    return s;
+  }, [trace]);
+
+  const layout = useMemo(
+    () =>
+      layoutTree(model, {
+        collapsed: effectiveCollapsed,
+        showLabels,
+        // Phylogeny internals never get right-column text labels (they get a
+        // hollow ring + optional "#n"), so keep them out of the label geometry.
+        showInternalNodes: isLineage ? showInternalNodes : false,
+        displayLabelOf: isLineage
+          ? (n) => resolveNodeDisplayLabel(n, displayIdField, showInternalNodes, showNodeNumbers)
+          : (n) => resolveTipDisplayLabel(n.label, n.attrs, displayIdField ?? null),
+      }),
+    [model, effectiveCollapsed, isLineage, showLabels, showInternalNodes, showNodeNumbers, displayIdField],
+  );
+
   // Build the shared, layout-derived visuals once. SvgTreeRenderer AND the export
   // serialiser both consume these arrays (one source of truth for "what to draw").
-  const { visuals, edges, glyphs, detailById, matchPoints } = useMemo(() => {
+  const { visuals, edges, glyphs, detailById, focusBounds } = useMemo(() => {
     const out: NodeVisual[] = [];
     const glyphOut: GlyphVisual[] = [];
     const details = new Map<string, NodeDetail>();
-    const matches: Array<{ x: number; y: number }> = [];
     let internalCount = 0;
+    // bbox of the in-focus set (for "Show me" → fitToView).
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    const grow = (x0: number, y0: number, x1: number, y1: number) => {
+      if (x0 < minX) minX = x0;
+      if (y0 < minY) minY = y0;
+      if (x1 > maxX) maxX = x1;
+      if (y1 > maxY) maxY = y1;
+    };
+    const inFocus = (id: string) => focusIds == null || focusIds.has(id);
 
     for (const ln of layout.nodes) {
       const label = ln.node.label;
       const anno = ln.node.attrs;
+      const faded = focusIds != null && !focusIds.has(ln.id);
 
       // Collapsed subtree → a wedge glyph (expand on click), no circle.
       if (ln.isCollapsed) {
@@ -202,29 +262,33 @@ export default function TreeView({
           const c = colorScale.colorFor(node);
           return { key: c, color: c };
         });
+        const farX = ln.glyphFarXPixel ?? ln.xPixel;
+        const hh = ln.glyphHalfHeight ?? 0;
         glyphOut.push({
           id: ln.id,
           apexX: ln.xPixel,
           y: ln.y,
-          farX: ln.glyphFarXPixel ?? ln.xPixel,
-          halfHeight: ln.glyphHalfHeight ?? 0,
+          farX,
+          halfHeight: hh,
           fill: summary ? summary.modalColor : colorScale.colorFor(ln.node),
           striped: summary ? summary.multiple : false,
           isMatch: false,
+          faded,
           labelText: showLabels
             ? `n=${ln.node.subtreeLeafCount} · Σ=${ln.node.subtreeAbundanceSum}`
             : null,
         });
+        if (inFocus(ln.id)) grow(ln.xPixel, ln.y - hh, farX, ln.y + hh);
         continue;
+      }
+
+      const isMatch = matchIds.has(ln.id);
+      if (inFocus(ln.id)) {
+        grow(ln.xPixel - ln.radius, ln.y - ln.radius, ln.xPixel + ln.radius, ln.y + ln.radius);
       }
 
       if (isLineage) {
         const fill = colorScale.colorFor(ln.node);
-        const matched =
-          !!needle &&
-          (buildTitle(ln.node, displayIdField).toLowerCase().includes(needle) ||
-            ln.displayLabel.toLowerCase().includes(needle) ||
-            label.toLowerCase().includes(needle));
         out.push({
           id: ln.id,
           cx: ln.xPixel,
@@ -234,15 +298,15 @@ export default function TreeView({
           stroke: "#111827",
           strokeWidth: 1.1,
           hollow: false,
-          isMatch: matched,
+          isMatch,
           ringed: highlightColor != null && fill === highlightColor,
           isCollapsible: ln.node.childIds.length > 0,
+          faded,
           labelShown: ln.labelShown,
           labelText: truncateLabel(ln.displayLabel, layout.maxLabelChars),
           numberText: null,
         });
         details.set(ln.id, { title: ln.displayLabel || label || ln.id, rows: buildRows(ln.node) });
-        if (matched) matches.push({ x: ln.xPixel, y: ln.y });
         continue;
       }
 
@@ -250,13 +314,6 @@ export default function TreeView({
       if (ln.isLeaf) {
         const fill = colorScale.colorFor(ln.node);
         const displayLabel = resolveTipDisplayLabel(label, anno, displayIdField ?? null);
-        const matched =
-          !!needle &&
-          (buildTipTitle(label, anno, colorScale.field, displayIdField ?? null)
-            .toLowerCase()
-            .includes(needle) ||
-            label.toLowerCase().includes(needle) ||
-            displayLabel.toLowerCase().includes(needle));
         out.push({
           id: ln.id,
           cx: ln.xPixel,
@@ -266,15 +323,15 @@ export default function TreeView({
           stroke: null,
           strokeWidth: 0,
           hollow: false,
-          isMatch: matched,
+          isMatch,
           ringed: highlightColor != null && fill === highlightColor,
           isCollapsible: false,
+          faded,
           labelShown: showLabels,
           labelText: truncateLabel(displayLabel, layout.maxLabelChars),
           numberText: null,
         });
         details.set(ln.id, buildTipRows(label, anno, displayIdField ?? null));
-        if (matched) matches.push({ x: ln.xPixel, y: ln.y });
       } else {
         // Internal node. When internals are shown: hollow ring + optional number.
         // When hidden: an invisible hit target so the branch point stays
@@ -292,6 +349,7 @@ export default function TreeView({
           isMatch: false,
           ringed: false,
           isCollapsible: ln.node.childIds.length > 0,
+          faded,
           labelShown: false,
           labelText: "",
           numberText: showInternalNodes && showNodeNumbers ? `#${internalCount}` : null,
@@ -303,20 +361,23 @@ export default function TreeView({
     const edgeVisuals: EdgeVisual[] = layout.edges.map((e) => ({
       key: e.key,
       d: `M ${e.sx} ${e.sy} L ${e.sx} ${e.ty} L ${e.tx} ${e.ty}`,
+      onPath: trace != null && trace.pathIds.has(e.sourceId) && trace.pathIds.has(e.targetId),
+      faded: focusIds != null && !(focusIds.has(e.sourceId) && focusIds.has(e.targetId)),
     }));
 
-    return {
-      visuals: out,
-      edges: edgeVisuals,
-      glyphs: glyphOut,
-      detailById: details,
-      matchPoints: matches,
-    };
+    const bounds =
+      focusIds && Number.isFinite(minX)
+        ? { x: minX, y: minY, width: Math.max(1, maxX - minX), height: Math.max(1, maxY - minY) }
+        : null;
+
+    return { visuals: out, edges: edgeVisuals, glyphs: glyphOut, detailById: details, focusBounds: bounds };
   }, [
     layout,
     model,
     isLineage,
-    needle,
+    matchIds,
+    focusIds,
+    trace,
     displayIdField,
     showLabels,
     showInternalNodes,
@@ -343,19 +404,15 @@ export default function TreeView({
   const k = zoomApi.transform.k || 1;
   const lod = k < LOD_DETAIL_K ? "dots" : "full";
 
-  // "Show me" → centre/zoom on the matches (replaces scroll-to-match). Read latest
-  // state via a ref so this fires only when focusSignal (the click) changes.
-  const focusState = useRef({ matchPoints, markMatches, focusOn: zoomApi.focusOn });
-  focusState.current = { matchPoints, markMatches, focusOn: zoomApi.focusOn };
+  // "Show me" → fit to the path+subtree bbox (replaces scroll/point-zoom). Read
+  // latest state via a ref so this fires only when focusSignal (the click) changes.
+  const focusState = useRef({ focusBounds, markMatches, fitToView: zoomApi.fitToView });
+  focusState.current = { focusBounds, markMatches, fitToView: zoomApi.fitToView };
   useEffect(() => {
     if (!focusSignal) return;
-    const { matchPoints: mp, markMatches: mm, focusOn } = focusState.current;
-    if (!mm || !mp.length) return;
-    const xs = mp.map((p) => p.x);
-    const ys = mp.map((p) => p.y);
-    const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
-    const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
-    focusOn(cx, cy, FOCUS_SCALE);
+    const { focusBounds: fb, markMatches: mm, fitToView } = focusState.current;
+    if (!mm || !fb) return;
+    fitToView(fb, true);
   }, [focusSignal]);
 
   const meta = {

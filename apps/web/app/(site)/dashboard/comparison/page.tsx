@@ -20,7 +20,7 @@ import { RunsApi } from "@/features/runs/api";
 import { useRunStatus } from "@/features/runs/hooks";
 import { useContractSpec, useMethods } from "@/features/methods/hooks";
 import type { RunSummary, LineagePlot, RunTreeListItem } from "@phylo/contracts";
-import { Maximize2, Search, Plus, X, Crosshair, ChevronsDownUp, ChevronsUpDown } from "lucide-react";
+import { Maximize2, Search, Plus, X, Crosshair } from "lucide-react";
 import { Spinner } from "@/components/ui/loading";
 import CompareExpandDialog, { type CompareExpandTreeRef } from "@/components/comparison/CompareExpandDialog";
 import RunAutocomplete from "@/components/comparison/RunAutocomplete";
@@ -321,7 +321,6 @@ export default function ComparisonPage() {
   const [highlightSequence, setHighlightSequence] = useState("");
   const [markMatches, setMarkMatches] = useState(false);
   const [focusSignal, setFocusSignal] = useState(0);
-  const [collapseSignal, setCollapseSignal] = useState<CollapseSignal>(null);
   const [colorByField, setColorByField] = useState<string>("auto");
   const [colorFieldOptions, setColorFieldOptions] = useState<string[]>([]);
   // Lineage panels default to abundance; "auto" resolves to it.
@@ -491,8 +490,8 @@ export default function ComparisonPage() {
             Locate a sequence
           </CardTitle>
           <p className="text-xs text-muted-foreground font-normal mt-1">
-            Enter a sequence_id (or part of a label) and click <strong>Show me</strong> — an arrow marks it,
-            and each tree centers and zooms to the match. Matching nodes also turn red as you type.
+            Enter a sequence_id (or part of a label) — matching nodes are ringed as you type. Click{" "}
+            <strong>Show me</strong> and each tree focuses the path to the match, fading the rest.
           </p>
         </CardHeader>
         <CardContent>
@@ -617,26 +616,6 @@ export default function ComparisonPage() {
               variant="outline"
               size="sm"
               className="gap-1.5"
-              onClick={() => setCollapseSignal({ type: "collapseAll", nonce: Date.now() })}
-            >
-              <ChevronsDownUp className="h-4 w-4" />
-              Collapse all
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="gap-1.5"
-              onClick={() => setCollapseSignal({ type: "expandAll", nonce: Date.now() })}
-            >
-              <ChevronsUpDown className="h-4 w-4" />
-              Expand all
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="gap-1.5"
               onClick={() => setExpandOpen(true)}
               disabled={expandTrees.length === 0}
             >
@@ -662,7 +641,6 @@ export default function ComparisonPage() {
             highlightText={highlightSequence}
             markMatches={markMatches}
             focusSignal={focusSignal}
-            collapseSignal={collapseSignal}
             colorByField={effectiveColorField}
             onColorFields={setColorFieldOptions}
             displayIdField={displayIdField}
@@ -695,7 +673,6 @@ export default function ComparisonPage() {
               highlightText={highlightSequence}
               markMatches={markMatches}
               focusSignal={focusSignal}
-              collapseSignal={collapseSignal}
               colorByField={effectiveColorField}
               displayIdField={displayIdField}
               onDisplayIdFieldChange={setDisplayIdField}
@@ -712,7 +689,6 @@ export default function ComparisonPage() {
         highlightText={highlightSequence}
         displayIdField={displayIdField}
         methodNameById={methodNameById}
-        collapseSignal={collapseSignal}
         colorByField={effectiveColorField}
       />
     </main>

@@ -25,6 +25,8 @@ export type NodeVisual = {
   ringed: boolean;
   /** Expanded internal node with children → shows a collapse chevron (render hint). */
   isCollapsible: boolean;
+  /** Sequence-Trace context: outside the focus set → dimmed, non-interactive. */
+  faded: boolean;
   labelShown: boolean;
   /** Already truncated to the label column width. */
   labelText: string;
@@ -33,7 +35,14 @@ export type NodeVisual = {
 };
 
 /** A precomputed elbow edge path (`M sx sy L sx ty L tx ty`). */
-export type EdgeVisual = { key: string; d: string };
+export type EdgeVisual = {
+  key: string;
+  d: string;
+  /** On the root→match path → emphasised (`--tree-trace`). */
+  onPath: boolean;
+  /** Outside the focus set → dimmed. */
+  faded: boolean;
+};
 
 /** A collapsed-subtree wedge (triangle), apex at the node, base at `farX`. */
 export type GlyphVisual = {
@@ -46,6 +55,7 @@ export type GlyphVisual = {
   /** Aggregate of multiple distinct colour values → hatched/translucent. */
   striped: boolean;
   isMatch: boolean;
+  faded: boolean;
   /** e.g. "n=12  Σ=340" (already composed); null when labels are off. */
   labelText: string | null;
 };
@@ -58,7 +68,6 @@ export type TreeSvgMeta = {
   strokeWidth: number;
 };
 
-const MATCH_FILL = "#dc2626";
 // Export is rasterised/saved without the app's CSS context, so `currentColor` /
 // `var(--foreground)` would not resolve. Substitute a concrete dark ink.
 const EXPORT_INK = "#111827";
@@ -103,7 +112,7 @@ export function serializeTreeSvg(
 
   // Collapsed-subtree wedges.
   for (const g of glyphs) {
-    const fill = exportColor(g.isMatch ? MATCH_FILL : g.fill);
+    const fill = exportColor(g.fill);
     parts.push(
       `<path d="M ${g.apexX} ${g.y} L ${g.farX} ${g.y - g.halfHeight} L ${g.farX} ${g.y + g.halfHeight} Z" ` +
         `fill="${fill}" fill-opacity="${g.striped ? 0.5 : 0.9}" stroke="${EXPORT_INK}" stroke-width="0.75"/>`,
@@ -118,8 +127,8 @@ export function serializeTreeSvg(
   // Nodes.
   parts.push(`<g>`);
   for (const n of nodes) {
-    const fill = n.hollow ? "none" : exportColor(n.isMatch ? MATCH_FILL : n.fill);
-    const stroke = n.hollow ? EXPORT_INK : n.isMatch ? "#b91c1c" : n.stroke ? exportColor(n.stroke) : "none";
+    const fill = n.hollow ? "none" : exportColor(n.fill);
+    const stroke = n.hollow ? EXPORT_INK : n.stroke ? exportColor(n.stroke) : "none";
     const sw = n.hollow ? 1.2 : n.strokeWidth;
     parts.push(
       `<circle cx="${n.cx}" cy="${n.cy}" r="${n.r}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"/>`,
@@ -140,9 +149,8 @@ export function serializeTreeSvg(
       parts.push(
         `<line x1="${n.cx}" y1="${n.cy}" x2="${meta.connectorX}" y2="${n.cy}" stroke="${EXPORT_INK}" stroke-width="0.5" opacity="0.4"/>`,
       );
-      const fill = n.isMatch ? MATCH_FILL : EXPORT_INK;
       parts.push(
-        `<text x="${meta.labelX}" y="${n.cy}" dominant-baseline="middle" fill="${fill}">${xmlEscape(n.labelText)}</text>`,
+        `<text x="${meta.labelX}" y="${n.cy}" dominant-baseline="middle" fill="${EXPORT_INK}">${xmlEscape(n.labelText)}</text>`,
       );
     }
     parts.push(`</g>`);
