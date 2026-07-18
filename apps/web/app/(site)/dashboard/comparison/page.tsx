@@ -14,7 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import LineageSVG from "@/components/LineageSVG";
+import TreeView from "@/components/phylo/tree/TreeView";
 import SequenceTraceInfoIcon from "@/components/sequence-trace/SequenceTraceInfoIcon";
 import { RunsApi } from "@/features/runs/api";
 import { useRunStatus } from "@/features/runs/hooks";
@@ -269,18 +269,17 @@ function ComparisonColumn({
           </div>
         )}
         {showLineage && lineagePlot && (
-          <div className="flex-1 min-h-[380px] overflow-auto rounded border bg-background">
-            <LineageSVG
-              lineagePlot={lineagePlot}
-              nodeAttributes={nodeAttributes}
-              displayIdField={displayIdField || undefined}
-              filename={`comparison-${run.runId}-${treeId}`}
-              newickText={newickText || undefined}
-              highlightText={highlightText || undefined}
-              markMatches={markMatches}
-              focusSignal={focusSignal}
-            />
-          </div>
+          <TreeView
+            source={{ kind: "lineage", lineagePlot, nodeAttributes }}
+            displayIdField={displayIdField || undefined}
+            filename={`comparison-${run.runId}-${treeId}`}
+            newickText={newickText || undefined}
+            highlightText={highlightText || undefined}
+            markMatches={markMatches}
+            focusSignal={focusSignal}
+            height={420}
+            className="shrink-0"
+          />
         )}
         {run.trees.length > 0 && !hasLineage && !payloadLoading && (
           <p className="text-sm text-muted-foreground">No lineage plot for this tree.</p>
@@ -471,7 +470,7 @@ export default function ComparisonPage() {
           </CardTitle>
           <p className="text-xs text-muted-foreground font-normal mt-1">
             Enter a sequence_id (or part of a label) and click <strong>Show me</strong> — an arrow marks it,
-            and each tree scrolls to the match. Matching nodes also turn red as you type.
+            and each tree centers and zooms to the match. Matching nodes also turn red as you type.
           </p>
         </CardHeader>
         <CardContent>
@@ -730,18 +729,16 @@ function RunLineageBlock({
         </div>
       )}
       {showLineage && lineagePlot && (
-        <div className="min-h-[380px] overflow-auto rounded border bg-background">
-          <LineageSVG
-            lineagePlot={lineagePlot}
-            nodeAttributes={nodeAttributes}
-            displayIdField={displayIdField || undefined}
-            filename={`comparison-${run.runId}-${treeId}`}
-            newickText={newickText || undefined}
-            highlightText={highlightText || undefined}
-            markMatches={markMatches}
-            focusSignal={focusSignal}
-          />
-        </div>
+        <TreeView
+          source={{ kind: "lineage", lineagePlot, nodeAttributes }}
+          displayIdField={displayIdField || undefined}
+          filename={`comparison-${run.runId}-${treeId}`}
+          newickText={newickText || undefined}
+          highlightText={highlightText || undefined}
+          markMatches={markMatches}
+          focusSignal={focusSignal}
+          height={420}
+        />
       )}
       {run.trees.length > 0 && !hasLineage && !payloadLoading && (
         <p className="text-sm text-muted-foreground">No lineage plot for this tree.</p>

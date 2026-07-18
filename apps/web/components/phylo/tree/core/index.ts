@@ -23,3 +23,12 @@ export {
   buildTipRows,
   resolveTipDisplayLabel,
 } from "./phyloDisplay";
+export {
+  serializeTreeSvg,
+  downloadSvg,
+  downloadPng,
+  downloadNewick,
+  type NodeVisual,
+  type EdgeVisual,
+  type TreeSvgMeta,
+} from "./download";

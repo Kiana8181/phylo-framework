@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Crosshair, X } from "lucide-react";
 import { Spinner } from "@/components/ui/loading";
@@ -9,12 +9,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { RunsApi } from "@/features/runs/api";
-import LineageSVG from "@/components/LineageSVG";
-import TreeZoomPane, { type TreeZoomPaneHandle } from "@/components/comparison/TreeZoomPane";
+import TreeView from "@/components/phylo/tree/TreeView";
 import SequenceTraceInfoIcon from "@/components/sequence-trace/SequenceTraceInfoIcon";
-
-/** Zoom level applied when "Show me" centers on a matched node. */
-const FOCUS_SCALE = 2.5;
 
 export type CompareExpandTreeRef = {
   panelId: string;
@@ -108,8 +104,6 @@ const ExpandTreeTile = memo(function ExpandTreeTile({
   const methodId = status?.method_id ?? "";
   const methodTitle = (methodId && (methodNameById.get(methodId) ?? methodId)) || "—";
 
-  const zoomRef = useRef<TreeZoomPaneHandle>(null);
-
   return (
     <Card className="flex w-[min(92vw,680px)] shrink-0 flex-col">
       <CardHeader className="border-b pb-3">
@@ -138,20 +132,16 @@ const ExpandTreeTile = memo(function ExpandTreeTile({
 
         {!payloadLoading && canRenderLineage && lineagePlot && (
           <div className="h-[70vh]">
-            <TreeZoomPane ref={zoomRef} className="h-full" fitKey={`${treeRef.panelId}:${treeId}`}>
-              <LineageSVG
-                lineagePlot={lineagePlot}
-                nodeAttributes={nodeAttributes}
-                displayIdField={displayIdField || undefined}
-                filename={`comparison-expand-${treeRef.runId}-${treeId}`}
-                newickText={newickText || undefined}
-                highlightText={highlightText || undefined}
-                markMatches={markMatches}
-                focusSignal={focusSignal}
-                fitToParent
-                onRequestFocus={(x, y) => zoomRef.current?.focusOnPoint(x, y, FOCUS_SCALE)}
-              />
-            </TreeZoomPane>
+            <TreeView
+              source={{ kind: "lineage", lineagePlot, nodeAttributes }}
+              displayIdField={displayIdField || undefined}
+              filename={`comparison-expand-${treeRef.runId}-${treeId}`}
+              newickText={newickText || undefined}
+              highlightText={highlightText || undefined}
+              markMatches={markMatches}
+              focusSignal={focusSignal}
+              height="100%"
+            />
           </div>
         )}
 
