@@ -5,7 +5,13 @@ export * from "./constants";
 export { clamp, isFiniteNumber, toAbundance, logNorm, linNorm } from "./math";
 export { truncateLabel, estimateTextWidth, splitByHighlight } from "./text";
 export { nodeRadius, type RadiusScaleType } from "./nodeRadius";
-export { ABUNDANCE_PALETTE, colorForAbundance, buildAbundanceScale } from "./colorScale";
+export {
+  ABUNDANCE_PALETTE,
+  colorForAbundance,
+  buildColorScale,
+  collectColorFields,
+  type BuildColorScaleOptions,
+} from "./colorScale";
 export { fromLineagePlot } from "./fromLineagePlot";
 export { fromNewick, sanitizeNewick, type FromNewickOptions } from "./fromNewick";
 export { layoutTree, type LayoutOptions } from "./layout";

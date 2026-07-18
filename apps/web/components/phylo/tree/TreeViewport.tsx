@@ -12,7 +12,10 @@ export type TreeViewportProps = {
   current?: TreeVM;
   idx: number;
   phyloAnnotations: Array<{ label: string } & Record<string, unknown>>;
-  colorBy?: string;
+  /** Resolved colour-by field (view-aware default already applied by the caller). */
+  colorByField: string | null;
+  colorDomain?: readonly string[] | null;
+  germlineLabel?: string | null;
   unknownValue?: string;
   displayIdField: string;
   showLabels: boolean;
@@ -35,7 +38,9 @@ export default function TreeViewport({
   current,
   idx,
   phyloAnnotations,
-  colorBy,
+  colorByField,
+  colorDomain,
+  germlineLabel,
   unknownValue,
   displayIdField,
   showLabels,
@@ -74,7 +79,9 @@ export default function TreeViewport({
           showLabels={showLabels}
           showInternalNodes={showInternalNodes}
           showNodeNumbers={showNodeNumbers}
-          colorBy={colorBy}
+          colorByField={colorByField}
+          colorDomain={colorDomain}
+          germlineLabel={germlineLabel}
           unknownValue={unknownValue}
           displayIdField={displayIdField || undefined}
           sizeBy={sizeByField || undefined}
@@ -100,6 +107,10 @@ export default function TreeViewport({
           showLabels={showLabels}
           showInternalNodes={showInternalNodes}
           showNodeNumbers={showNodeNumbers}
+          colorByField={colorByField}
+          colorDomain={colorDomain}
+          germlineLabel={germlineLabel}
+          unknownValue={unknownValue}
           filename={lineageDownloadName}
           newickText={lineageNewick}
           collapseSignal={collapseSignal}
