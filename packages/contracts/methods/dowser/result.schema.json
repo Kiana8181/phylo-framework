@@ -161,6 +161,12 @@
         "tree_build": {
           "type": "string"
         },
+        "seed": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "canonical_ids": {
           "type": "string"
         }

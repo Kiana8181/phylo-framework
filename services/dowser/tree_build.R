@@ -188,11 +188,32 @@ build_get_trees_args <- function(clones, p, preflight, tmpdir, run_id) {
     args$id <- run_id %||% "dowser_run"
   }
 
+  # Forward the seed as rseed only to builders that accept it. getTrees passes
+  # `...` straight into the per-clone build function; in dowser 2.4.1 only
+  # buildRAxML / buildIgphyml take rseed (and a `...`), while buildPratchet /
+  # buildPML / buildPhylo (dnapars, dnaml) take neither — passing rseed to them
+  # would raise "unused argument". R's set.seed() in run_get_trees covers the
+  # pratchet ratchet, multi2di resolution and pml; rseed covers the external
+  # RAxML-NG (--seed) and IgPhyML (--r_seed) binaries, which ignore R's RNG.
+  if (build %in% c("raxml", "igphyml")) {
+    args$rseed <- as.integer(p$seed %||% 42L)
+  }
+
   args
 }
 
 run_get_trees <- function(clones, p, preflight, tmpdir = NULL, run_id = NULL) {
   args <- build_get_trees_args(clones, p, preflight, tmpdir, run_id)
+
+  # Seed the stochastic tree search so a stored parameter set is reproducible.
+  # L'Ecuyer-CMRG gives reproducible parallel streams when getTrees builds
+  # clones via parallel::mclapply (nproc > 1); set.seed() covers the pratchet
+  # parsimony ratchet and the ape::multi2di(random = TRUE) multifurcation
+  # resolution. Builders that ignore R's RNG are seeded via args$rseed above.
+  effective_seed <- as.integer(p$seed %||% 42L)
+  RNGkind("L'Ecuyer-CMRG")
+  set.seed(effective_seed)
+
   trees_tbl <- do.call(dowser::getTrees, args)
   list(trees_tbl = trees_tbl, build_args = args)
 }
