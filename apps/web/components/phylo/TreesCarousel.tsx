@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import TreeSettingsPanel from "@/components/phylo/tree/TreeSettingsPanel";
 import TreeViewport from "@/components/phylo/tree/TreeViewport";
 import TreeOverlay from "@/components/phylo/tree/TreeOverlay";
+import type { CollapseSignal } from "@/components/phylo/tree/TreeView";
 
 const VIEW_LABELS: Record<"method" | "phylogeny" | "lineage", string> = {
   method: "Method output",
@@ -82,6 +83,7 @@ export default function TreesCarousel({
   const [treeLoadErrors, setTreeLoadErrors] = useState<Record<string, string>>({});
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [expandOpen, setExpandOpen] = useState(false);
+  const [collapseSignal, setCollapseSignal] = useState<CollapseSignal>(null);
 
   const canPrev = idx > 0;
   const canNext = idx < Math.max(0, total - 1);
@@ -253,6 +255,7 @@ export default function TreesCarousel({
     sizeByField: TIP_SIZE_FIELD,
     lineageDownloadName,
     lineageNewick,
+    collapseSignal,
   };
 
   if (!total) {
@@ -361,6 +364,8 @@ export default function TreesCarousel({
         displayFields={displayFields}
         displayIdField={displayIdField}
         setDisplayIdField={setDisplayIdField}
+        onCollapseAll={() => setCollapseSignal({ type: "collapseAll", nonce: Date.now() })}
+        onExpandAll={() => setCollapseSignal({ type: "expandAll", nonce: Date.now() })}
       />
 
       <TreeOverlay

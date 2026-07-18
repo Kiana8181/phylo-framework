@@ -27,15 +27,26 @@ import {
   downloadSvg,
   downloadPng,
   downloadNewick,
+  defaultCollapsed,
+  collapseAll,
+  expandAll,
+  toggleCollapse,
+  subtreeColorSummary,
   FOCUS_SCALE,
+  LOD_DETAIL_K,
   type NodeVisual,
   type EdgeVisual,
+  type GlyphVisual,
   type PhyloAnnotation,
+  type TreeNodeModel,
+  type ColorKey,
 } from "@/components/phylo/tree/core";
 
 export type TreeSource =
   | { kind: "lineage"; lineagePlot: LineagePlot; nodeAttributes?: Record<string, TreeNodeAttrs> }
   | { kind: "phylogeny"; newick: string; annotations?: ReadonlyArray<PhyloAnnotation> };
+
+export type CollapseSignal = { type: "expandAll" | "collapseAll"; nonce: number } | null;
 
 export type TreeViewProps = {
   source: TreeSource;
@@ -53,6 +64,8 @@ export type TreeViewProps = {
   highlightText?: string | null;
   markMatches?: boolean;
   focusSignal?: number;
+  /** Collapse (Phase 3): bump `nonce` to expand-all / collapse-all. */
+  collapseSignal?: CollapseSignal;
   /** Chrome */
   filename?: string;
   newickText?: string | null;
@@ -63,6 +76,7 @@ export type TreeViewProps = {
 
 const DEFAULT_HEIGHT = 520;
 const PHYLO_INTERNAL_RADIUS = 2.5;
+const PHYLO_INTERNAL_HIT_RADIUS = 4; // invisible click target when internals hidden
 
 export default function TreeView({
   source,
@@ -77,6 +91,7 @@ export default function TreeView({
   highlightText,
   markMatches = false,
   focusSignal,
+  collapseSignal,
   filename = "tree",
   newickText,
   height,
@@ -104,9 +119,31 @@ export default function TreeView({
 
   const isLineage = source.kind === "lineage";
 
+  // Collapse state (a Set of ids) — never mutates the model. Reset per model.
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => defaultCollapsed(model));
+  useEffect(() => {
+    setCollapsed(defaultCollapsed(model));
+  }, [model]);
+
+  // Expand-all / Collapse-all broadcasts.
+  const lastNonce = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (!collapseSignal) return;
+    if (lastNonce.current === collapseSignal.nonce) return;
+    lastNonce.current = collapseSignal.nonce;
+    setCollapsed(collapseSignal.type === "collapseAll" ? collapseAll(model) : expandAll());
+  }, [collapseSignal, model]);
+
+  const toggle = (id: string) => {
+    const node = model.nodes.get(id);
+    if (!node || node.childIds.length === 0) return; // leaves never collapse
+    setCollapsed((prev) => toggleCollapse(prev, id));
+  };
+
   const layout = useMemo(
     () =>
       layoutTree(model, {
+        collapsed,
         showLabels,
         // Phylogeny internals never get right-column text labels (they get a
         // hollow ring + optional "#n"), so keep them out of the label geometry.
@@ -115,7 +152,7 @@ export default function TreeView({
           ? (n) => resolveNodeDisplayLabel(n, displayIdField, showInternalNodes, showNodeNumbers)
           : (n) => resolveTipDisplayLabel(n.label, n.attrs, displayIdField ?? null),
       }),
-    [model, isLineage, showLabels, showInternalNodes, showNodeNumbers, displayIdField],
+    [model, collapsed, isLineage, showLabels, showInternalNodes, showNodeNumbers, displayIdField],
   );
 
   // Phylogeny colour map (unchanged behaviour; Phase 4 unifies into core).
@@ -127,26 +164,59 @@ export default function TreeView({
     if (colorMap && Object.keys(colorMap).length) {
       return { ...colorMap, Germline: "#000000", [unknown]: "#000000" };
     }
-    return buildColorMapDistinct(
-      annotations ? [...annotations] : undefined,
-      colorField,
-      unknown,
-    );
+    return buildColorMapDistinct(annotations ? [...annotations] : undefined, colorField, unknown);
   }, [coloringEnabled, colorMap, annotations, colorField, unknown]);
 
   const needle = highlightText?.trim().toLowerCase() ?? "";
 
   // Build the shared, layout-derived visuals once. SvgTreeRenderer AND the export
-  // serialiser both consume this array (one source of truth for "what to draw").
-  const { visuals, edges, detailById, matchPoints } = useMemo(() => {
+  // serialiser both consume these arrays (one source of truth for "what to draw").
+  const { visuals, edges, glyphs, detailById, matchPoints } = useMemo(() => {
     const out: NodeVisual[] = [];
+    const glyphOut: GlyphVisual[] = [];
     const details = new Map<string, NodeDetail>();
     const matches: Array<{ x: number; y: number }> = [];
     let internalCount = 0;
 
+    // Colour bucket for a node, used to fill/annotate a collapsed wedge.
+    const keyOf = (node: TreeNodeModel): ColorKey | null => {
+      if (isLineage) {
+        const c = colorForAbundance(node.abundance, layout.abundanceMin, layout.abundanceMax);
+        return { key: c, color: c };
+      }
+      if (!node.isLeaf || !coloringEnabled || !colorField) return null;
+      const v = String(node.attrs?.[colorField] ?? "").trim();
+      if (!v || v === "Germline" || v === unknown) return null;
+      const c = phyloColors[v];
+      if (!c || isBlackColor(c)) return null;
+      return { key: v, color: c };
+    };
+
     for (const ln of layout.nodes) {
       const label = ln.node.label;
       const anno = ln.node.attrs;
+
+      // Collapsed subtree → a wedge glyph (expand on click), no circle.
+      if (ln.isCollapsed) {
+        const summary = subtreeColorSummary(model, ln.id, keyOf);
+        const ownColor = isLineage
+          ? colorForAbundance(ln.node.abundance, layout.abundanceMin, layout.abundanceMax)
+          : "var(--foreground)";
+        glyphOut.push({
+          id: ln.id,
+          apexX: ln.xPixel,
+          y: ln.y,
+          farX: ln.glyphFarXPixel ?? ln.xPixel,
+          halfHeight: ln.glyphHalfHeight ?? 0,
+          fill: summary ? summary.modalColor : ownColor,
+          striped: summary ? summary.multiple : false,
+          isMatch: false,
+          labelText: showLabels
+            ? `n=${ln.node.subtreeLeafCount} · Σ=${ln.node.subtreeAbundanceSum}`
+            : null,
+        });
+        continue;
+      }
 
       if (isLineage) {
         const matched =
@@ -164,14 +234,12 @@ export default function TreeView({
           strokeWidth: 1.1,
           hollow: false,
           isMatch: matched,
+          isCollapsible: ln.node.childIds.length > 0,
           labelShown: ln.labelShown,
           labelText: truncateLabel(ln.displayLabel, layout.maxLabelChars),
           numberText: null,
         });
-        details.set(ln.id, {
-          title: ln.displayLabel || label || ln.id,
-          rows: buildRows(ln.node),
-        });
+        details.set(ln.id, { title: ln.displayLabel || label || ln.id, rows: buildRows(ln.node) });
         if (matched) matches.push({ x: ln.xPixel, y: ln.y });
         continue;
       }
@@ -204,6 +272,7 @@ export default function TreeView({
           strokeWidth: 0,
           hollow: false,
           isMatch: matched,
+          isCollapsible: false,
           labelShown: showLabels,
           labelText: truncateLabel(displayLabel, layout.maxLabelChars),
           numberText: null,
@@ -211,24 +280,26 @@ export default function TreeView({
         details.set(ln.id, buildTipRows(label, anno, displayIdField ?? null));
         if (matched) matches.push({ x: ln.xPixel, y: ln.y });
       } else {
+        // Internal node. When internals are shown: hollow ring + optional number.
+        // When hidden: an invisible hit target so the branch point stays
+        // collapsible (a chevron marks it at full zoom).
         internalCount += 1;
-        if (showInternalNodes) {
-          out.push({
-            id: ln.id,
-            cx: ln.xPixel,
-            cy: ln.y,
-            r: PHYLO_INTERNAL_RADIUS,
-            fill: "none",
-            stroke: "currentColor",
-            strokeWidth: 1.2,
-            hollow: true,
-            isMatch: false,
-            labelShown: false,
-            labelText: "",
-            numberText: showNodeNumbers ? `#${internalCount}` : null,
-          });
-          details.set(ln.id, buildTipRows(label, anno, displayIdField ?? null));
-        }
+        out.push({
+          id: ln.id,
+          cx: ln.xPixel,
+          cy: ln.y,
+          r: showInternalNodes ? PHYLO_INTERNAL_RADIUS : PHYLO_INTERNAL_HIT_RADIUS,
+          fill: showInternalNodes ? "none" : "transparent",
+          stroke: showInternalNodes ? "currentColor" : null,
+          strokeWidth: showInternalNodes ? 1.2 : 0,
+          hollow: showInternalNodes,
+          isMatch: false,
+          isCollapsible: ln.node.childIds.length > 0,
+          labelShown: false,
+          labelText: "",
+          numberText: showInternalNodes && showNodeNumbers ? `#${internalCount}` : null,
+        });
+        details.set(ln.id, buildTipRows(label, anno, displayIdField ?? null));
       }
     }
 
@@ -237,9 +308,16 @@ export default function TreeView({
       d: `M ${e.sx} ${e.sy} L ${e.sx} ${e.ty} L ${e.tx} ${e.ty}`,
     }));
 
-    return { visuals: out, edges: edgeVisuals, detailById: details, matchPoints: matches };
+    return {
+      visuals: out,
+      edges: edgeVisuals,
+      glyphs: glyphOut,
+      detailById: details,
+      matchPoints: matches,
+    };
   }, [
     layout,
+    model,
     isLineage,
     needle,
     displayIdField,
@@ -262,9 +340,15 @@ export default function TreeView({
     contentHeight: layout.height,
     containerWidth: size.width,
     containerHeight: size.height,
-    // Re-fit only when the underlying tree changes (not on display toggles).
+    // Re-fit only when the underlying tree changes (not on display/collapse toggles).
     fitKey: model,
   });
+
+  // Two tiers: a compact "dots" overview only at extreme zoom-out, else "full".
+  // (Labels use hybrid scaling in the renderer so they stay legible at fit in
+  // small panes and never become blobs when zoomed in.)
+  const k = zoomApi.transform.k || 1;
+  const lod = k < LOD_DETAIL_K ? "dots" : "full";
 
   // "Show me" → centre/zoom on the matches (replaces scroll-to-match). Read latest
   // state via a ref so this fires only when focusSignal (the click) changes.
@@ -293,7 +377,7 @@ export default function TreeView({
 
   if (isLoading) return <TreeSkeleton height={height} />;
 
-  if (!visuals.length) {
+  if (!visuals.length && !glyphs.length) {
     return (
       <div
         className="flex items-center justify-center rounded border bg-background p-6 text-sm text-muted-foreground"
@@ -310,23 +394,20 @@ export default function TreeView({
       className={`relative w-full overflow-hidden rounded border bg-background text-foreground ${className ?? ""}`}
       style={{ height: height ?? DEFAULT_HEIGHT }}
     >
-      <svg
-        ref={setSvgEl}
-        className="absolute inset-0 h-full w-full touch-none select-none"
-        role="img"
-      >
+      <svg ref={setSvgEl} className="absolute inset-0 h-full w-full touch-none select-none" role="img">
         <g transform={zoomApi.transform.toString()}>
           <SvgTreeRenderer
             nodes={visuals}
             edges={edges}
+            glyphs={glyphs}
             transform={zoomApi.transform}
-            lod="full"
+            lod={lod}
             labelX={layout.labelX}
             connectorX={layout.connectorX}
             highlightText={highlightText ?? null}
             markMatches={markMatches}
             onNodeClick={(id) => setSelectedNode(detailById.get(id) ?? null)}
-            onNodeContextMenu={() => {}}
+            onToggleCollapse={toggle}
           />
         </g>
       </svg>
@@ -339,12 +420,17 @@ export default function TreeView({
               label: "PNG image",
               description: "Raster image of the whole tree",
               onSelect: () =>
-                downloadPng(serializeTreeSvg(visuals, edges, meta), meta.width, meta.height, `${filename}.png`),
+                downloadPng(
+                  serializeTreeSvg(visuals, edges, meta, glyphs),
+                  meta.width,
+                  meta.height,
+                  `${filename}.png`,
+                ),
             },
             {
               label: "SVG image",
               description: "Scalable vector graphic",
-              onSelect: () => downloadSvg(serializeTreeSvg(visuals, edges, meta), `${filename}.svg`),
+              onSelect: () => downloadSvg(serializeTreeSvg(visuals, edges, meta, glyphs), `${filename}.svg`),
             },
             {
               label: "Newick",

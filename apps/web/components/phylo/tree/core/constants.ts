@@ -37,8 +37,11 @@ export const DEFAULT_COLLAPSE_DEPTH = 3; // Phase 3: auto-collapse depth
 export const AUTO_COLLAPSE_MIN_NODES = 150; // Phase 3: 0 = always auto-collapse
 export const CULL_MIN_NODES = 400; // Phase 6: below this, culling costs more than it saves
 export const MINIMAP_MIN_NODES = 60; // Phase 6: below this, a minimap is noise
-export const LOD_LABELS_K = 0.6; // Phase 3: zoom below which labels hide
-export const LOD_DETAIL_K = 0.35; // Phase 3: zoom below which nodes become dots
+export const LOD_LABELS_K = 0.6; // Phase 3: zoom at/above which chevrons + node numbers show
+// Below this zoom the tree renders as a compact overview (tiny dots, no text).
+// Kept low so the narrow Sequence-Trace panels (which fit at small k) still show
+// a complete tree with labels; genuine overview "dots" only at extreme zoom-out.
+export const LOD_DETAIL_K = 0.12; // Phase 3: zoom below which nodes become dots
 export const FOCUS_SCALE = 2.5; // Phase 2: zoom applied on "Show me" (ported from CompareExpandDialog)
 export const MAX_CATEGORIES = 20; // Phase 4: categorical palette cap
 export const CONTINUOUS_MIN_DISTINCT = 8; // Phase 4: numeric-field continuous threshold

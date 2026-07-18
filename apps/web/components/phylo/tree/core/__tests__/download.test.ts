@@ -12,6 +12,7 @@ function nodes(n: number): NodeVisual[] {
     strokeWidth: 0,
     hollow: false,
     isMatch: false,
+    isCollapsible: false,
     labelShown: i % 2 === 0,
     labelText: `lbl${i}`,
     numberText: null,
@@ -47,5 +48,25 @@ describe("serializeTreeSvg (full un-culled export)", () => {
     one[0].isMatch = true;
     const svg = serializeTreeSvg(one, edges, meta);
     expect(svg).toContain("#dc2626");
+  });
+
+  it("serialises a closed wedge path for each collapsed glyph", () => {
+    const glyphs = [
+      {
+        id: "g0",
+        apexX: 24,
+        y: 40,
+        farX: 220,
+        halfHeight: 12,
+        fill: "#336699",
+        striped: true,
+        isMatch: false,
+        labelText: "n=8 · Σ=40",
+      },
+    ];
+    const svg = serializeTreeSvg(nodes(3), edges, meta, glyphs);
+    // Wedge paths close with Z (elbow edges do not); the apex/far coords appear.
+    expect(svg).toContain("M 24 40 L 220 28 L 220 52 Z");
+    expect(svg).toContain("n=8");
   });
 });

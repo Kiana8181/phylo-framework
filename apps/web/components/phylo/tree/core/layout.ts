@@ -151,27 +151,30 @@ export function layoutTree(model: TreeModel, opts: LayoutOptions): TreeLayout {
   };
   for (const id of visibleIds) resolveY(id);
 
-  // 5) Single shared affine x-map over visible nodes.
+  // 5) Single shared affine x-map over the FULL model (not just the visible set)
+  //    so collapsing far nodes never shifts any node's xPixel — the x-axis is a
+  //    scientific coordinate and must be collapse-invariant (spec §3, acceptance).
   let xSourceMin = Number.POSITIVE_INFINITY;
   let xSourceMax = Number.NEGATIVE_INFINITY;
-  for (const id of visibleIds) {
-    const x = model.nodes.get(id)!.xSource;
-    if (x < xSourceMin) xSourceMin = x;
-    if (x > xSourceMax) xSourceMax = x;
+  for (const node of model.nodes.values()) {
+    if (node.xSource < xSourceMin) xSourceMin = node.xSource;
+    if (node.xSource > xSourceMax) xSourceMax = node.xSource;
   }
   // Scale so the source x-range fills targetWidth. Guard only against a zero
   // span (single node, or all nodes at the same x) — do NOT clamp the divisor
   // to 1: branch-length trees span < 1 total, and clamping would crush them.
   const xRange = xSourceMax - xSourceMin;
   const kx = xRange > 0 ? targetWidth / xRange : 0;
-  const xPixelOf = (node: TreeNodeModel) => (node.xSource - xSourceMin) * kx + PAD;
+  const xFromSource = (xSource: number) => (xSource - xSourceMin) * kx + PAD;
+  const xPixelOf = (node: TreeNodeModel) => xFromSource(node.xSource);
 
-  // 6) Build layout nodes.
+  // 6) Build layout nodes (collapsed nodes carry their wedge geometry).
   const nodes: LayoutNode[] = visibleIds.map((id) => {
     const node = model.nodes.get(id)!;
     const displayLabel = opts.displayLabelOf(node);
     const labelShown =
       (node.isLeaf && showLabels) || (!node.isLeaf && showInternalNodes);
+    const isCollapsed = collapsed.has(id) && node.childIds.length > 0;
     return {
       id,
       xPixel: xPixelOf(node),
@@ -180,6 +183,11 @@ export function layoutTree(model: TreeModel, opts: LayoutOptions): TreeLayout {
       isLeaf: node.isLeaf,
       displayLabel,
       labelShown,
+      isCollapsed,
+      glyphFarXPixel: isCollapsed ? xFromSource(node.subtreeMaxX) : undefined,
+      glyphHalfHeight: isCollapsed
+        ? collapsedGlyphHeight(node.subtreeLeafCount) / 2
+        : undefined,
       node,
     };
   });
@@ -212,12 +220,13 @@ export function layoutTree(model: TreeModel, opts: LayoutOptions): TreeLayout {
   const labelWidth = clamp(maxChars * LABEL_CHAR_WIDTH, MIN_LABEL_AREA, MAX_LABEL_AREA);
   const maxLabelChars = Math.max(1, Math.floor(labelWidth / LABEL_CHAR_WIDTH));
 
-  // 9) Bounds.
+  // 9) Bounds (include collapsed wedges so they are never clipped).
   let plotRightX = Number.NEGATIVE_INFINITY;
   let maxY = Number.NEGATIVE_INFINITY;
   for (const n of nodes) {
-    if (n.xPixel + n.radius > plotRightX) plotRightX = n.xPixel + n.radius;
-    const ext = rowExtent(n.node);
+    const rightX = n.isCollapsed ? (n.glyphFarXPixel ?? n.xPixel) : n.xPixel + n.radius;
+    if (rightX > plotRightX) plotRightX = rightX;
+    const ext = n.isCollapsed ? (n.glyphHalfHeight ?? 0) : rowExtent(n.node);
     if (n.y + ext > maxY) maxY = n.y + ext;
   }
   const labelX = labelsOn ? plotRightX + LABEL_PAD : 0;
