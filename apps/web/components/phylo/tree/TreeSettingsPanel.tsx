@@ -42,6 +42,9 @@ export default function TreeSettingsPanel({
   displayFields,
   displayIdField,
   setDisplayIdField,
+  colorFields,
+  colorByField,
+  setColorByField,
   onExpandAll,
   onCollapseAll,
 }: {
@@ -57,6 +60,9 @@ export default function TreeSettingsPanel({
   displayFields: string[];
   displayIdField: string;
   setDisplayIdField: (v: string) => void;
+  colorFields: string[];
+  colorByField: string;
+  setColorByField: (v: string) => void;
   onExpandAll?: () => void;
   onCollapseAll?: () => void;
 }) {
@@ -112,6 +118,27 @@ export default function TreeSettingsPanel({
             </Select>
           </div>
         )}
+
+        <div className="space-y-1.5">
+          <label className="block text-sm font-medium">Colour by</label>
+          <Select value={colorByField} onValueChange={setColorByField}>
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Colour field" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="auto">Auto (by view)</SelectItem>
+              <SelectItem value="abundance">abundance</SelectItem>
+              <SelectItem value="none">none</SelectItem>
+              {colorFields
+                .filter((f) => f !== "abundance")
+                .map((f) => (
+                  <SelectItem key={f} value={f}>
+                    {f}
+                  </SelectItem>
+                ))}
+            </SelectContent>
+          </Select>
+        </div>
 
         <div className="space-y-1.5">
           <label className="block text-sm font-medium">Tip size by</label>

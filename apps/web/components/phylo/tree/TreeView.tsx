@@ -7,15 +7,15 @@ import { Button } from "@/components/ui/button";
 import NodeDetailModal, { type NodeDetail } from "@/components/phylo/tree/NodeDetailModal";
 import DownloadMenu from "@/components/phylo/tree/DownloadMenu";
 import TreeSkeleton from "@/components/phylo/tree/TreeSkeleton";
+import TreeLegend from "@/components/phylo/tree/TreeLegend";
 import SvgTreeRenderer from "@/components/phylo/tree/renderers/SvgTreeRenderer";
-import { buildColorMapDistinct, isBlackColor } from "@/components/phylo/tree/renderers/phyloColor";
 import { useContainerSize } from "@/components/phylo/tree/hooks/useContainerSize";
 import { useZoomPan } from "@/components/phylo/tree/hooks/useZoomPan";
 import {
   fromLineagePlot,
   fromNewick,
   layoutTree,
-  colorForAbundance,
+  buildColorScale,
   buildTitle,
   buildRows,
   resolveNodeDisplayLabel,
@@ -38,8 +38,7 @@ import {
   type EdgeVisual,
   type GlyphVisual,
   type PhyloAnnotation,
-  type TreeNodeModel,
-  type ColorKey,
+  type ColorScale,
 } from "@/components/phylo/tree/core";
 
 export type TreeSource =
@@ -55,10 +54,15 @@ export type TreeViewProps = {
   showLabels?: boolean;
   showInternalNodes?: boolean;
   showNodeNumbers?: boolean;
-  /** Phylogeny colour passthrough (Phase 4 replaces with colorByField + legend). */
-  colorBy?: string | null;
+  /** Colour by (Phase 4). Concrete field: "abundance" | attr key | "none" | null.
+   * Callers resolve the view-aware "auto" default before passing. */
+  colorByField?: string | null;
+  /** Cross-panel colour domain (union of values) so siblings agree. */
+  colorDomain?: readonly string[] | null;
+  /** Label whose value marks the germline/root (given its own token, excluded). */
+  germlineLabel?: string | null;
   unknownValue?: string;
-  colorMap?: Record<string, string>;
+  onColorScaleChange?: (scale: ColorScale) => void;
   sizeBy?: string | null;
   /** Sequence Trace */
   highlightText?: string | null;
@@ -77,6 +81,7 @@ export type TreeViewProps = {
 const DEFAULT_HEIGHT = 520;
 const PHYLO_INTERNAL_RADIUS = 2.5;
 const PHYLO_INTERNAL_HIT_RADIUS = 4; // invisible click target when internals hidden
+const PHYLO_INTERNAL_FILL = "transparent";
 
 export default function TreeView({
   source,
@@ -84,9 +89,11 @@ export default function TreeView({
   showLabels = true,
   showInternalNodes = false,
   showNodeNumbers = false,
-  colorBy,
+  colorByField = "abundance",
+  colorDomain,
+  germlineLabel,
   unknownValue,
-  colorMap,
+  onColorScaleChange,
   sizeBy = null,
   highlightText,
   markMatches = false,
@@ -99,6 +106,7 @@ export default function TreeView({
   className,
 }: TreeViewProps) {
   const [selectedNode, setSelectedNode] = useState<NodeDetail | null>(null);
+  const [highlightColor, setHighlightColor] = useState<string | null>(null);
 
   // Stable primitives for memo deps (caller passes a fresh `source` object each render).
   const lineagePlot = source.kind === "lineage" ? source.lineagePlot : null;
@@ -155,17 +163,23 @@ export default function TreeView({
     [model, collapsed, isLineage, showLabels, showInternalNodes, showNodeNumbers, displayIdField],
   );
 
-  // Phylogeny colour map (unchanged behaviour; Phase 4 unifies into core).
-  const coloringEnabled = !isLineage && !!colorBy;
-  const colorField = colorBy || null;
-  const unknown = (unknownValue && unknownValue.trim()) || "unknown";
-  const phyloColors = useMemo(() => {
-    if (!coloringEnabled) return {} as Record<string, string>;
-    if (colorMap && Object.keys(colorMap).length) {
-      return { ...colorMap, Germline: "#000000", [unknown]: "#000000" };
-    }
-    return buildColorMapDistinct(annotations ? [...annotations] : undefined, colorField, unknown);
-  }, [coloringEnabled, colorMap, annotations, colorField, unknown]);
+  // Colour scale — one encoding for BOTH views (abundance / categorical / continuous).
+  const colorScale = useMemo(
+    () =>
+      buildColorScale(model, colorByField ?? "none", {
+        explicitValues: colorDomain ?? null,
+        germlineLabel: germlineLabel ?? undefined,
+        unknownValue,
+      }),
+    [model, colorByField, colorDomain, germlineLabel, unknownValue],
+  );
+  useEffect(() => {
+    onColorScaleChange?.(colorScale);
+  }, [colorScale, onColorScaleChange]);
+  // Clear a legend highlight when the encoding changes.
+  useEffect(() => {
+    setHighlightColor(null);
+  }, [colorScale]);
 
   const needle = highlightText?.trim().toLowerCase() ?? "";
 
@@ -178,37 +192,23 @@ export default function TreeView({
     const matches: Array<{ x: number; y: number }> = [];
     let internalCount = 0;
 
-    // Colour bucket for a node, used to fill/annotate a collapsed wedge.
-    const keyOf = (node: TreeNodeModel): ColorKey | null => {
-      if (isLineage) {
-        const c = colorForAbundance(node.abundance, layout.abundanceMin, layout.abundanceMax);
-        return { key: c, color: c };
-      }
-      if (!node.isLeaf || !coloringEnabled || !colorField) return null;
-      const v = String(node.attrs?.[colorField] ?? "").trim();
-      if (!v || v === "Germline" || v === unknown) return null;
-      const c = phyloColors[v];
-      if (!c || isBlackColor(c)) return null;
-      return { key: v, color: c };
-    };
-
     for (const ln of layout.nodes) {
       const label = ln.node.label;
       const anno = ln.node.attrs;
 
       // Collapsed subtree → a wedge glyph (expand on click), no circle.
       if (ln.isCollapsed) {
-        const summary = subtreeColorSummary(model, ln.id, keyOf);
-        const ownColor = isLineage
-          ? colorForAbundance(ln.node.abundance, layout.abundanceMin, layout.abundanceMax)
-          : "var(--foreground)";
+        const summary = subtreeColorSummary(model, ln.id, (node) => {
+          const c = colorScale.colorFor(node);
+          return { key: c, color: c };
+        });
         glyphOut.push({
           id: ln.id,
           apexX: ln.xPixel,
           y: ln.y,
           farX: ln.glyphFarXPixel ?? ln.xPixel,
           halfHeight: ln.glyphHalfHeight ?? 0,
-          fill: summary ? summary.modalColor : ownColor,
+          fill: summary ? summary.modalColor : colorScale.colorFor(ln.node),
           striped: summary ? summary.multiple : false,
           isMatch: false,
           labelText: showLabels
@@ -219,6 +219,7 @@ export default function TreeView({
       }
 
       if (isLineage) {
+        const fill = colorScale.colorFor(ln.node);
         const matched =
           !!needle &&
           (buildTitle(ln.node, displayIdField).toLowerCase().includes(needle) ||
@@ -229,11 +230,12 @@ export default function TreeView({
           cx: ln.xPixel,
           cy: ln.y,
           r: ln.radius,
-          fill: colorForAbundance(ln.node.abundance, layout.abundanceMin, layout.abundanceMax),
+          fill,
           stroke: "#111827",
           strokeWidth: 1.1,
           hollow: false,
           isMatch: matched,
+          ringed: highlightColor != null && fill === highlightColor,
           isCollapsible: ln.node.childIds.length > 0,
           labelShown: ln.labelShown,
           labelText: truncateLabel(ln.displayLabel, layout.maxLabelChars),
@@ -246,18 +248,11 @@ export default function TreeView({
 
       // Phylogeny
       if (ln.isLeaf) {
-        let fill = "var(--foreground)";
-        if (coloringEnabled && colorField) {
-          const call = (anno?.[colorField] as string) || "";
-          if (call && call !== "Germline" && call !== unknown) {
-            const resolved = phyloColors[call] ?? "var(--foreground)";
-            fill = isBlackColor(resolved) ? "var(--foreground)" : resolved;
-          }
-        }
+        const fill = colorScale.colorFor(ln.node);
         const displayLabel = resolveTipDisplayLabel(label, anno, displayIdField ?? null);
         const matched =
           !!needle &&
-          (buildTipTitle(label, anno, colorField, displayIdField ?? null)
+          (buildTipTitle(label, anno, colorScale.field, displayIdField ?? null)
             .toLowerCase()
             .includes(needle) ||
             label.toLowerCase().includes(needle) ||
@@ -272,6 +267,7 @@ export default function TreeView({
           strokeWidth: 0,
           hollow: false,
           isMatch: matched,
+          ringed: highlightColor != null && fill === highlightColor,
           isCollapsible: false,
           labelShown: showLabels,
           labelText: truncateLabel(displayLabel, layout.maxLabelChars),
@@ -289,11 +285,12 @@ export default function TreeView({
           cx: ln.xPixel,
           cy: ln.y,
           r: showInternalNodes ? PHYLO_INTERNAL_RADIUS : PHYLO_INTERNAL_HIT_RADIUS,
-          fill: showInternalNodes ? "none" : "transparent",
+          fill: showInternalNodes ? "none" : PHYLO_INTERNAL_FILL,
           stroke: showInternalNodes ? "currentColor" : null,
           strokeWidth: showInternalNodes ? 1.2 : 0,
           hollow: showInternalNodes,
           isMatch: false,
+          ringed: false,
           isCollapsible: ln.node.childIds.length > 0,
           labelShown: false,
           labelText: "",
@@ -324,10 +321,8 @@ export default function TreeView({
     showLabels,
     showInternalNodes,
     showNodeNumbers,
-    coloringEnabled,
-    colorField,
-    unknown,
-    phyloColors,
+    colorScale,
+    highlightColor,
   ]);
 
   // Zoom / pan. The svg is held as state (via a callback ref) so the zoom
@@ -345,8 +340,6 @@ export default function TreeView({
   });
 
   // Two tiers: a compact "dots" overview only at extreme zoom-out, else "full".
-  // (Labels use hybrid scaling in the renderer so they stay legible at fit in
-  // small panes and never become blobs when zoomed in.)
   const k = zoomApi.transform.k || 1;
   const lod = k < LOD_DETAIL_K ? "dots" : "full";
 
@@ -411,6 +404,13 @@ export default function TreeView({
           />
         </g>
       </svg>
+
+      {/* Legend (top-left) */}
+      <TreeLegend
+        scale={colorScale}
+        activeColor={highlightColor}
+        onToggle={(color) => setHighlightColor((prev) => (prev === color ? null : color))}
+      />
 
       {/* Download (top-right) */}
       <div className="absolute right-3 top-3">

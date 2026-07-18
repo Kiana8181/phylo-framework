@@ -12,6 +12,7 @@ function nodes(n: number): NodeVisual[] {
     strokeWidth: 0,
     hollow: false,
     isMatch: false,
+    ringed: false,
     isCollapsible: false,
     labelShown: i % 2 === 0,
     labelText: `lbl${i}`,

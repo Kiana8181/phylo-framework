@@ -21,6 +21,8 @@ export type NodeVisual = {
   hollow: boolean;
   /** Matched by the Sequence-Trace search predicate. */
   isMatch: boolean;
+  /** Highlighted via a legend-entry click → drawn with a ring. */
+  ringed: boolean;
   /** Expanded internal node with children → shows a collapse chevron (render hint). */
   isCollapsible: boolean;
   labelShown: boolean;

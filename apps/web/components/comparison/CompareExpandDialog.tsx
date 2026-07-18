@@ -28,6 +28,8 @@ type CompareExpandDialogProps = {
   methodNameById: Map<string, string>;
   /** Broadcast collapse/expand-all from the page toolbar. */
   collapseSignal?: CollapseSignal;
+  /** Resolved colour-by field from the page toolbar. */
+  colorByField?: string;
 };
 
 type ExpandTreeTileProps = {
@@ -38,6 +40,7 @@ type ExpandTreeTileProps = {
   markMatches: boolean;
   focusSignal: number;
   collapseSignal?: CollapseSignal;
+  colorByField?: string;
   methodNameById: Map<string, string>;
 };
 
@@ -80,6 +83,7 @@ const ExpandTreeTile = memo(function ExpandTreeTile({
   markMatches,
   focusSignal,
   collapseSignal,
+  colorByField,
   methodNameById,
 }: ExpandTreeTileProps) {
   const { data: status, isLoading: statusLoading } = useRunStatus(treeRef.runId, open);
@@ -145,6 +149,8 @@ const ExpandTreeTile = memo(function ExpandTreeTile({
               markMatches={markMatches}
               focusSignal={focusSignal}
               collapseSignal={collapseSignal}
+              colorByField={colorByField}
+              germlineLabel={lineagePlot?.meta?.germlineLabel ?? null}
               height="100%"
             />
           </div>
@@ -168,6 +174,7 @@ export default function CompareExpandDialog({
   displayIdField,
   methodNameById,
   collapseSignal,
+  colorByField,
 }: CompareExpandDialogProps) {
   const [query, setQuery] = useState(highlightText);
   const [mark, setMark] = useState(false);
@@ -272,6 +279,7 @@ export default function CompareExpandDialog({
                   markMatches={mark}
                   focusSignal={focus}
                   collapseSignal={collapseSignal}
+                  colorByField={colorByField}
                   methodNameById={methodNameById}
                 />
               ))}

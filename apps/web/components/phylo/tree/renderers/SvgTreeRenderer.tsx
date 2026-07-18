@@ -166,6 +166,17 @@ export default function SvgTreeRenderer({
                 strokeWidth={strokeWidth}
                 opacity={n.hollow ? 0.75 : hovered || n.isMatch ? 1 : 0.95}
               />
+              {n.ringed && (
+                <circle
+                  cx={n.cx}
+                  cy={n.cy}
+                  r={r + 3}
+                  fill="none"
+                  stroke="var(--tree-match)"
+                  strokeWidth={3}
+                  vectorEffect="non-scaling-stroke"
+                />
+              )}
               {n.numberText && showText && (
                 <text x={n.cx + 6} y={n.cy - 6} fontSize={9 / textK} fill="currentColor" opacity={0.8}>
                   {n.numberText}

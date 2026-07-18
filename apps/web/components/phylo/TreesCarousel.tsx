@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import TreeSettingsPanel from "@/components/phylo/tree/TreeSettingsPanel";
 import TreeViewport from "@/components/phylo/tree/TreeViewport";
 import TreeOverlay from "@/components/phylo/tree/TreeOverlay";
+import { collectColorFields } from "@/components/phylo/tree/core";
 import type { CollapseSignal } from "@/components/phylo/tree/TreeView";
 
 const VIEW_LABELS: Record<"method" | "phylogeny" | "lineage", string> = {
@@ -84,6 +85,7 @@ export default function TreesCarousel({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [expandOpen, setExpandOpen] = useState(false);
   const [collapseSignal, setCollapseSignal] = useState<CollapseSignal>(null);
+  const [colorByField, setColorByField] = useState<string>("auto");
 
   const canPrev = idx > 0;
   const canNext = idx < Math.max(0, total - 1);
@@ -213,28 +215,20 @@ export default function TreesCarousel({
     }));
   }, [current?.nodeAttributes]);
 
-  const displayFields = useMemo(() => {
-    const attrs = current?.nodeAttributes ?? {};
-    const keySet = new Set<string>();
-    for (const v of Object.values(attrs)) {
-      if (!v || typeof v !== "object") continue;
-      for (const key of Object.keys(v)) {
-        if (["tooltip"].includes(key)) continue;
-        keySet.add(key);
-      }
-    }
-    for (const row of phyloAnnotations) {
-      for (const [key, value] of Object.entries(row)) {
-        if (["label", "final_tip_label"].includes(key)) continue;
-        if (value != null && value !== "") keySet.add(key);
-      }
-    }
-    const options = Array.from(keySet).sort((a, b) => a.localeCompare(b, "en"));
-    if (options.includes("sequence_id")) {
-      return ["sequence_id", ...options.filter((k) => k !== "sequence_id")];
-    }
-    return options;
-  }, [current?.nodeAttributes, phyloAnnotations]);
+  // The field-key union used for BOTH the Display-ID and Colour-by options.
+  const displayFields = useMemo(
+    () => collectColorFields(current?.nodeAttributes, phyloAnnotations),
+    [current?.nodeAttributes, phyloAnnotations],
+  );
+
+  // View-aware colour default: lineage → abundance; phylogeny → the stats field.
+  const effectiveColorField =
+    colorByField === "auto"
+      ? activeTab === "lineage"
+        ? "abundance"
+        : colorBy ?? "abundance"
+      : colorByField;
+  const germlineLabel = current?.lineagePlot?.meta?.germlineLabel ?? null;
 
   useEffect(() => {
     if (!displayFields.length) return;
@@ -246,7 +240,8 @@ export default function TreesCarousel({
     current,
     idx,
     phyloAnnotations,
-    colorBy,
+    colorByField: effectiveColorField,
+    germlineLabel,
     unknownValue,
     displayIdField,
     showLabels,
@@ -364,6 +359,9 @@ export default function TreesCarousel({
         displayFields={displayFields}
         displayIdField={displayIdField}
         setDisplayIdField={setDisplayIdField}
+        colorFields={displayFields}
+        colorByField={colorByField}
+        setColorByField={setColorByField}
         onCollapseAll={() => setCollapseSignal({ type: "collapseAll", nonce: Date.now() })}
         onExpandAll={() => setCollapseSignal({ type: "expandAll", nonce: Date.now() })}
       />

@@ -128,6 +128,8 @@ function ComparisonColumn({
   markMatches,
   focusSignal,
   collapseSignal,
+  colorByField,
+  onColorFields,
   displayIdField,
   onDisplayIdFieldChange,
   isLoading,
@@ -144,6 +146,8 @@ function ComparisonColumn({
   markMatches?: boolean;
   focusSignal?: number;
   collapseSignal?: CollapseSignal;
+  colorByField: string;
+  onColorFields?: (fields: string[]) => void;
   displayIdField: string;
   onDisplayIdFieldChange: (v: string) => void;
   isLoading?: boolean;
@@ -164,9 +168,17 @@ function ComparisonColumn({
   const newickText = payload?.original_newick ?? payload?.newick ?? "";
   const hasLineage = tree?.hasLineagePlot ?? false;
   const showLineage = hasLineage && (lineagePlot ?? payloadLoading);
-  const displayFields = displayFieldsFromAttrs(nodeAttributes as Record<string, Record<string, unknown>> | undefined);
+  const displayFields = useMemo(
+    () => displayFieldsFromAttrs(nodeAttributes as Record<string, Record<string, unknown>> | undefined),
+    [nodeAttributes],
+  );
+  // Report this (base) panel's field keys up so the global Colour-by select has options.
+  useEffect(() => {
+    onColorFields?.(displayFields);
+  }, [displayFields, onColorFields]);
   const { contractSpec } = useContractSpec(run?.methodId);
   const runDatasetLabel = datasetLabel(run?.datasetName, run?.datasetFiles);
+  const germlineLabel = lineagePlot?.meta?.germlineLabel ?? null;
 
   if (error) {
     return (
@@ -280,6 +292,8 @@ function ComparisonColumn({
             markMatches={markMatches}
             focusSignal={focusSignal}
             collapseSignal={collapseSignal}
+            colorByField={colorByField}
+            germlineLabel={germlineLabel}
             height={420}
             className="shrink-0"
           />
@@ -308,6 +322,10 @@ export default function ComparisonPage() {
   const [markMatches, setMarkMatches] = useState(false);
   const [focusSignal, setFocusSignal] = useState(0);
   const [collapseSignal, setCollapseSignal] = useState<CollapseSignal>(null);
+  const [colorByField, setColorByField] = useState<string>("auto");
+  const [colorFieldOptions, setColorFieldOptions] = useState<string[]>([]);
+  // Lineage panels default to abundance; "auto" resolves to it.
+  const effectiveColorField = colorByField === "auto" ? "abundance" : colorByField;
   const [displayIdField, setDisplayIdField] = useState("sequence_id");
   const [expandOpen, setExpandOpen] = useState(false);
   const nextPanelIdRef = useRef(1);
@@ -574,6 +592,26 @@ export default function ComparisonPage() {
             <SequenceTraceInfoIcon />
           </div>
           <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
+              <Label className="text-xs shrink-0">Colour by</Label>
+              <Select value={colorByField} onValueChange={setColorByField}>
+                <SelectTrigger className="h-8 w-[140px] text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="auto">Auto (abundance)</SelectItem>
+                  <SelectItem value="abundance">abundance</SelectItem>
+                  <SelectItem value="none">none</SelectItem>
+                  {colorFieldOptions
+                    .filter((f) => f !== "abundance")
+                    .map((f) => (
+                      <SelectItem key={f} value={f}>
+                        {f}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
             <Button
               type="button"
               variant="outline"
@@ -625,6 +663,8 @@ export default function ComparisonPage() {
             markMatches={markMatches}
             focusSignal={focusSignal}
             collapseSignal={collapseSignal}
+            colorByField={effectiveColorField}
+            onColorFields={setColorFieldOptions}
             displayIdField={displayIdField}
             onDisplayIdFieldChange={setDisplayIdField}
             isLoading={baseStatusLoading || (baseDone && baseTreesLoading)}
@@ -656,6 +696,7 @@ export default function ComparisonPage() {
               markMatches={markMatches}
               focusSignal={focusSignal}
               collapseSignal={collapseSignal}
+              colorByField={effectiveColorField}
               displayIdField={displayIdField}
               onDisplayIdFieldChange={setDisplayIdField}
               methodNameById={methodNameById}
@@ -672,6 +713,7 @@ export default function ComparisonPage() {
         displayIdField={displayIdField}
         methodNameById={methodNameById}
         collapseSignal={collapseSignal}
+        colorByField={effectiveColorField}
       />
     </main>
   );
@@ -685,6 +727,7 @@ function RunLineageBlock({
   markMatches,
   focusSignal,
   collapseSignal,
+  colorByField,
   displayIdField,
   onDisplayIdFieldChange,
   isLoading,
@@ -696,6 +739,7 @@ function RunLineageBlock({
   markMatches?: boolean;
   focusSignal?: number;
   collapseSignal?: CollapseSignal;
+  colorByField: string;
   displayIdField: string;
   onDisplayIdFieldChange: (v: string) => void;
   isLoading?: boolean;
@@ -769,6 +813,8 @@ function RunLineageBlock({
           markMatches={markMatches}
           focusSignal={focusSignal}
           collapseSignal={collapseSignal}
+          colorByField={colorByField}
+          germlineLabel={lineagePlot?.meta?.germlineLabel ?? null}
           height={420}
         />
       )}
@@ -795,6 +841,7 @@ function ComparisonSlot({
   markMatches,
   focusSignal,
   collapseSignal,
+  colorByField,
   displayIdField,
   onDisplayIdFieldChange,
   methodNameById,
@@ -811,6 +858,7 @@ function ComparisonSlot({
   markMatches?: boolean;
   focusSignal?: number;
   collapseSignal?: CollapseSignal;
+  colorByField: string;
   displayIdField: string;
   onDisplayIdFieldChange: (v: string) => void;
   methodNameById: Map<string, string>;
@@ -895,6 +943,7 @@ function ComparisonSlot({
               markMatches={markMatches}
               focusSignal={focusSignal}
               collapseSignal={collapseSignal}
+              colorByField={colorByField}
               displayIdField={displayIdField}
               onDisplayIdFieldChange={onDisplayIdFieldChange}
               isLoading={treesLoading}

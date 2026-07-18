@@ -12,13 +12,30 @@ export type LayoutWarning = {
  * owns this type because `packages/contracts` intentionally does not define it. */
 export type PhyloAnnotation = { label: string } & Record<string, unknown>;
 
-/** Colour-by scale placeholder. Phase 4 fleshes this out (categorical /
- * continuous, legend domain, etc.). Phase 1 only needs the abundance ramp. */
+export type ColorScaleKind = "continuous" | "categorical" | "none";
+
+export type ColorLegendEntry = { key: string; label: string; color: string; count: number };
+
+export type ColorLegend =
+  | { kind: "continuous"; min: number; max: number; ramp: readonly string[] }
+  | { kind: "categorical"; entries: ColorLegendEntry[] }
+  | { kind: "none" };
+
+/**
+ * Resolved colour encoding for the active "Colour by" field. `colorFor` handles
+ * everything (field resolution, numeric vs categorical, unknown, germline) so the
+ * renderer just calls it per node. Built by `buildColorScale` (core/colorScale.ts).
+ */
 export type ColorScale = {
-  kind: "abundance";
-  colorFor: (value: number) => string;
-  domainMin: number;
-  domainMax: number;
+  /** "abundance" | attr key | null (= "none"). */
+  field: string | null;
+  kind: ColorScaleKind;
+  colorFor: (node: TreeNodeModel) => string;
+  unknownColor: string;
+  germlineColor: string;
+  /** True when at least one node has no value for the field. */
+  hasUnknown: boolean;
+  legend: ColorLegend;
 };
 
 /** A single node in the renderer-agnostic tree model. Both adapters produce
