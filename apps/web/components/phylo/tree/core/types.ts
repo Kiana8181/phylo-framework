@@ -98,6 +98,8 @@ export type LayoutNode = {
 /** A rectangular-cladogram elbow edge: `M sx sy L sx ty L tx ty`. */
 export type LayoutEdge = {
   key: string;
+  sourceId: string;
+  targetId: string;
   sx: number;
   sy: number;
   tx: number;

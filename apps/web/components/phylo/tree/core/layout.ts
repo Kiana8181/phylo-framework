@@ -203,6 +203,8 @@ export function layoutTree(model: TreeModel, opts: LayoutOptions): TreeLayout {
       if (!child) continue;
       edges.push({
         key: `${parent.id}->${childId}`,
+        sourceId: parent.id,
+        targetId: childId,
         sx: parent.xPixel,
         sy: parent.y,
         tx: child.xPixel,

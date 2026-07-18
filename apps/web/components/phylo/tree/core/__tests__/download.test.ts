@@ -14,13 +14,14 @@ function nodes(n: number): NodeVisual[] {
     isMatch: false,
     ringed: false,
     isCollapsible: false,
+    faded: false,
     labelShown: i % 2 === 0,
     labelText: `lbl${i}`,
     numberText: null,
   }));
 }
 
-const edges: EdgeVisual[] = [{ key: "e0", d: "M 0 0 L 0 5 L 10 5" }];
+const edges: EdgeVisual[] = [{ key: "e0", d: "M 0 0 L 0 5 L 10 5", onPath: false, faded: false }];
 const meta = { width: 200, height: 100, labelX: 150, connectorX: 146, strokeWidth: 1 };
 
 describe("serializeTreeSvg (full un-culled export)", () => {
@@ -44,11 +45,13 @@ describe("serializeTreeSvg (full un-culled export)", () => {
     expect((svg.match(/<text/g) ?? []).length).toBe(3);
   });
 
-  it("renders matched nodes with the match fill", () => {
+  it("exports plain field colour (no interactive match/trace styling)", () => {
     const one = nodes(1);
     one[0].isMatch = true;
     const svg = serializeTreeSvg(one, edges, meta);
-    expect(svg).toContain("#dc2626");
+    // Match highlighting is interactive focus, not data — export stays plain.
+    expect(svg).not.toContain("#dc2626");
+    expect(svg).toContain("#123456");
   });
 
   it("serialises a closed wedge path for each collapsed glyph", () => {
@@ -62,6 +65,7 @@ describe("serializeTreeSvg (full un-culled export)", () => {
         fill: "#336699",
         striped: true,
         isMatch: false,
+        faded: false,
         labelText: "n=8 · Σ=40",
       },
     ];

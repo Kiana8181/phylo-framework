@@ -5,8 +5,9 @@ import MatchArrow from "@/components/phylo/tree/MatchArrow";
 import { splitByHighlight, LABEL_FONT_SIZE, LOD_LABELS_K } from "@/components/phylo/tree/core";
 import type { TreeRenderProps } from "./TreeRenderer";
 
-const MATCH_FILL = "#dc2626";
-const MATCH_STROKE = "#b91c1c";
+const RING_COLOR = "var(--tree-match)"; // legend-highlight + search-match ring
+const PATH_COLOR = "var(--tree-trace)"; // root→match path emphasis
+const FADE_OPACITY = 0.15; // Sequence-Trace context (out-of-focus)
 const DOT_SCREEN_R = 1.5; // fixed screen-radius (px) for the zoomed-out "dots" LOD
 const LONG_PRESS_MS = 500;
 const LONG_PRESS_MOVE = 8; // px of movement that cancels a long-press
@@ -86,10 +87,17 @@ export default function SvgTreeRenderer({
 
   return (
     <>
-      {/* branches */}
-      <g fill="none" stroke="currentColor" strokeWidth={1.2} opacity={0.8} vectorEffect="non-scaling-stroke">
+      {/* branches (path edges emphasised, out-of-focus edges dimmed) */}
+      <g fill="none">
         {edges.map((e) => (
-          <path key={e.key} d={e.d} />
+          <path
+            key={e.key}
+            d={e.d}
+            stroke={e.onPath ? PATH_COLOR : "currentColor"}
+            strokeWidth={e.onPath ? 2.4 : 1.2}
+            opacity={e.faded ? FADE_OPACITY : e.onPath ? 1 : 0.8}
+            vectorEffect="non-scaling-stroke"
+          />
         ))}
       </g>
 
@@ -101,14 +109,19 @@ export default function SvgTreeRenderer({
             role="button"
             aria-expanded={false}
             aria-label={`Collapsed subtree${g.labelText ? ` ${g.labelText}` : ""}`}
-            tabIndex={0}
-            style={{ cursor: "pointer", outline: "none" }}
+            tabIndex={g.faded ? -1 : 0}
+            style={{
+              cursor: g.faded ? "default" : "pointer",
+              outline: "none",
+              opacity: g.faded ? FADE_OPACITY : 1,
+              pointerEvents: g.faded ? "none" : undefined,
+            }}
             onClick={() => onToggleCollapse(g.id)}
             onKeyDown={glyphKeyDown(g.id)}
           >
             <path
               d={`M ${g.apexX} ${g.y} L ${g.farX} ${g.y - g.halfHeight} L ${g.farX} ${g.y + g.halfHeight} Z`}
-              fill={g.isMatch ? MATCH_FILL : g.fill}
+              fill={g.fill}
               fillOpacity={g.striped ? 0.5 : 0.9}
               stroke="currentColor"
               strokeWidth={0.75}
@@ -128,22 +141,24 @@ export default function SvgTreeRenderer({
         {nodes.map((n) => {
           const hovered = hoveredId === n.id;
           const r = dots ? DOT_SCREEN_R / k : n.r;
-          const fill = n.hollow ? "none" : n.isMatch ? MATCH_FILL : n.fill;
-          const stroke = n.hollow
-            ? "currentColor"
-            : n.isMatch
-              ? MATCH_STROKE
-              : hovered
-                ? "#0f172a"
-                : n.stroke ?? "none";
-          const strokeWidth = n.hollow ? 1.2 : n.isMatch ? 2.5 : hovered ? 2.6 : n.strokeWidth;
+          // Matches keep their field colour and get a ring (Phase 5), unified with
+          // the Phase-4 legend-highlight ring.
+          const ringed = n.ringed || n.isMatch;
+          const fill = n.hollow ? "none" : n.fill;
+          const stroke = n.hollow ? "currentColor" : hovered ? "#0f172a" : n.stroke ?? "none";
+          const strokeWidth = n.hollow ? 1.2 : hovered ? 2.6 : n.strokeWidth;
           return (
             <g
               key={n.id}
               role="button"
               aria-expanded={n.isCollapsible ? true : undefined}
-              tabIndex={0}
-              style={{ cursor: "pointer", outline: "none" }}
+              tabIndex={n.faded ? -1 : 0}
+              style={{
+                cursor: n.faded ? "default" : "pointer",
+                outline: "none",
+                opacity: n.faded ? FADE_OPACITY : 1,
+                pointerEvents: n.faded ? "none" : undefined,
+              }}
               onMouseEnter={() => setHoveredId(n.id)}
               onMouseLeave={() => setHoveredId(null)}
               onClick={() => onNodeClick(n.id)}
@@ -164,15 +179,15 @@ export default function SvgTreeRenderer({
                 fill={fill}
                 stroke={stroke}
                 strokeWidth={strokeWidth}
-                opacity={n.hollow ? 0.75 : hovered || n.isMatch ? 1 : 0.95}
+                opacity={n.hollow ? 0.75 : hovered ? 1 : 0.95}
               />
-              {n.ringed && (
+              {ringed && (
                 <circle
                   cx={n.cx}
                   cy={n.cy}
                   r={r + 3}
                   fill="none"
-                  stroke="var(--tree-match)"
+                  stroke={RING_COLOR}
                   strokeWidth={3}
                   vectorEffect="non-scaling-stroke"
                 />
@@ -211,7 +226,7 @@ export default function SvgTreeRenderer({
           {nodes
             .filter((n) => n.labelShown && n.labelText)
             .map((n) => (
-              <g key={`label-${n.id}`}>
+              <g key={`label-${n.id}`} opacity={n.faded ? FADE_OPACITY : 1}>
                 <line
                   x1={n.cx}
                   y1={n.cy}
@@ -227,12 +242,12 @@ export default function SvgTreeRenderer({
                   y={n.cy}
                   dominantBaseline="middle"
                   fontSize={fontSize}
-                  fill={n.isMatch ? MATCH_FILL : "currentColor"}
+                  fill={n.isMatch ? RING_COLOR : "currentColor"}
                   fontWeight={n.isMatch ? "bold" : undefined}
                 >
                   {splitByHighlight(n.labelText, highlightText ?? "").map((seg, i) =>
                     seg.highlight ? (
-                      <tspan key={i} fill={MATCH_FILL} fontWeight="bold">
+                      <tspan key={i} fill={RING_COLOR} fontWeight="bold">
                         {seg.text}
                       </tspan>
                     ) : (
