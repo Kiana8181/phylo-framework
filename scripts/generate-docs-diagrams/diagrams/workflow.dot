@@ -1,0 +1,36 @@
+digraph workflow {
+  bgcolor="white";
+  rankdir=TB;
+  pad=0.4;
+  nodesep=0.4;
+  ranksep=0.5;
+  fontname="Helvetica";
+  labelloc="t";
+  fontsize=16;
+  label="Happy-path workflow — upload → run → result";
+
+  node [fontname="Helvetica", fontsize=10, shape=box, style="rounded,filled",
+        fillcolor="#f8fafc", color="#94a3b8", margin="0.22,0.12"];
+  edge [fontname="Helvetica", fontsize=9, color="#64748b"];
+
+  n1 [label="Browser → API:  POST /uploads/init", fillcolor="#e0e7ff", color="#6366f1"];
+  n2 [label="Browser → API:  PUT /uploads/{id}/content\n(streamed to MinIO — phylo-datasets)", fillcolor="#e0e7ff", color="#6366f1"];
+  n3 [label="Browser → API:  POST /runs?method={id}\n(run row created — status = QUEUED)", fillcolor="#e0e7ff", color="#6366f1"];
+
+  subgraph cluster_worker {
+    label="Worker — asynchronous, DB-queued";
+    labelloc="b";
+    style="rounded,dashed"; color="#22c55e"; fontsize=10; fontcolor="#15803d";
+    w1 [label="Worker claims QUEUED run\n(PostgreSQL lease)", fillcolor="#dcfce7", color="#22c55e"];
+    w2 [label="Stage dataset from MinIO → run workspace", fillcolor="#dcfce7", color="#22c55e"];
+    w3 [label="Worker → Method:  POST {METHOD_URL}/jobs", fillcolor="#dcfce7", color="#22c55e"];
+    w4 [label="Method computes → uploads artifacts\nto MinIO (phylo-artifacts) + writes manifest", fillcolor="#fef9c3", color="#eab308"];
+    w5 [label="Worker polls GET /jobs/{id}/status,\nthen GET /jobs/{id}/result", fillcolor="#dcfce7", color="#22c55e"];
+    w6 [label="Worker ingests manifest → run_artifacts rows\n(PostgreSQL) — status = DONE", fillcolor="#dcfce7", color="#22c55e"];
+  }
+
+  n7 [label="Browser → API:  GET /runs/{id}/status | /result | /artifacts", fillcolor="#e0e7ff", color="#6366f1"];
+  n8 [label="Browser → API:  GET /artifacts/{id}/preview | /download\n(API streams bytes from MinIO)", fillcolor="#e0e7ff", color="#6366f1"];
+
+  n1 -> n2 -> n3 -> w1 -> w2 -> w3 -> w4 -> w5 -> w6 -> n7 -> n8;
+}

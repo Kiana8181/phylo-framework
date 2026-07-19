@@ -100,6 +100,13 @@
 
     "minseq": { "type": "integer", "default": 3, "title": "Min seq/clone" },
     "nproc": { "type": "integer", "default": 1, "title": "Threads" },
+    "seed": {
+      "type": "integer",
+      "title": "Random seed",
+      "description": "Seed for stochastic tree search (e.g. the pratchet parsimony ratchet). Fixing this makes a run reproducible: the same input, parameters and seed produce the same tree. Also forwarded as rseed to RAxML-NG / IgPhyML builders, which ignore R's RNG.",
+      "minimum": 0,
+      "default": 42
+    },
     "collapse_identical_sequences": {
       "type": "boolean",
       "default": true,

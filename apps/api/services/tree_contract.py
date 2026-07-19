@@ -626,6 +626,17 @@ def assemble_unified_tree_result(
     for w in raw_result.get("warnings") or []:
         warnings_out.append(_normalize_service_warning(w))
 
+    # gctree emits a download-only `display_newick` list aligned 1:1 with `trees`
+    # (original sequence_ids as labels). Passed through untouched and stored per
+    # tree; other methods omit it. No relabeling happens in this layer.
+    raw_display_newick = raw_result.get("display_newick")
+
+    def _display_newick_for(idx: int) -> str | None:
+        if not isinstance(raw_display_newick, list) or idx >= len(raw_display_newick):
+            return None
+        value = raw_display_newick[idx]
+        return value if isinstance(value, str) and value.strip() else None
+
     trees_out: list[dict[str, Any]] = []
     rows_for_db: list[dict[str, Any]] = []
 
@@ -665,6 +676,7 @@ def assemble_unified_tree_result(
                     "node_attributes": None,
                     "lineage_plot": None,
                     "label_to_sequence_id": None,
+                    "display_newick": _display_newick_for(idx),
                 }
             )
             continue
@@ -715,6 +727,7 @@ def assemble_unified_tree_result(
                 "node_attributes": node_attributes if node_attributes else None,
                 "lineage_plot": lineage_plot,
                 "label_to_sequence_id": label_to_sequence_id if label_to_sequence_id else None,
+                "display_newick": _display_newick_for(idx),
             }
         )
 

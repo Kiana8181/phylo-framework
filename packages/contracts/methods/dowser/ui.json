@@ -6,6 +6,10 @@
     "Raw FASTA must be processed by AIRR/Change-O/IgBLAST/IMGT before Dowser.",
     "If your column names differ from standard AIRR keys, enable Input Mapping and map each field once — the R service always uses canonical names."
   ],
+  "uploadGuidanceLinks": [
+    { "label": "Data columns needed across all methods", "href": "/documents/data-requirements" },
+    { "label": "This method's field requirements", "href": "/documents/dowser" }
+  ],
   "order": [
     "doMapping",
     "column_map.sequence_id",
@@ -27,6 +31,7 @@
     "tree_build",
     "minseq",
     "nproc",
+    "seed",
     "collapse_identical_sequences",
     "trait_fields",
     "mod3",
@@ -109,6 +114,7 @@
         "tree_build",
         "minseq",
         "nproc",
+        "seed",
         "collapse_identical_sequences",
         "trait_fields",
         "mod3",

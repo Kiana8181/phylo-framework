@@ -1,0 +1,64 @@
+{
+  "$comment": "Single source of truth for ClonalTree's data-column requirements. Read by apps/api/preprocess/column_requirements.py AND apps/web/features/docs/compatibility.ts. Columns are canonical AIRR keys (the column_map targets).",
+  "requiredGroups": [
+    {
+      "id": "base",
+      "note": "ClonalTree base-codes formatter + downstream scripts.",
+      "columns": [
+        "sequence_id",
+        "productive",
+        "v_call",
+        "d_call",
+        "j_call",
+        "sequence_alignment",
+        "junction_aa",
+        "cdr3_aa"
+      ]
+    },
+    {
+      "id": "alignment",
+      "note": "Required by alignment_intraclonal.py when ClonalTree builds per-clone trees.",
+      "columns": [
+        "sequence",
+        "v_identity",
+        "d_identity",
+        "j_identity",
+        "cdr1",
+        "cdr2",
+        "cdr3",
+        "fwr1",
+        "fwr2",
+        "fwr3",
+        "fwr4",
+        "v_germline_alignment",
+        "d_germline_alignment",
+        "j_germline_alignment",
+        "np1",
+        "np2",
+        "v_sequence_start",
+        "cdr1_start",
+        "cdr1_end",
+        "cdr2_start",
+        "cdr2_end",
+        "cdr3_start",
+        "cdr3_end",
+        "d_sequence_start",
+        "d_sequence_end"
+      ]
+    }
+  ],
+  "conditionalGroups": [
+    {
+      "id": "refinement",
+      "when": { "use_refinement": true },
+      "defaultWhenAbsent": true,
+      "note": "Refinement step enabled (on by default)",
+      "columns": [
+        "j_sequence_alignment",
+        "v_sequence_alignment",
+        "j_sequence_alignment_aa",
+        "v_sequence_alignment_aa"
+      ]
+    }
+  ]
+}

@@ -3,6 +3,7 @@ import { http } from "@/lib/http/client";
 import {
   API_ROUTES,
   type CreateRunResponse,
+  type DashboardRunsResponse,
   type RunArtifactsResponse,
   type RunResult,
   type RunTreePayload,
@@ -47,6 +48,21 @@ export const RunsApi = {
     return serviceHandler<CurrentRunResponse>({
       method: Method.Get,
       url: API_ROUTES.runCurrent(),
+    });
+  },
+
+  async dashboard(): Promise<DashboardRunsResponse> {
+    return serviceHandler<DashboardRunsResponse>({
+      method: Method.Get,
+      url: API_ROUTES.runDashboard(),
+    });
+  },
+
+  async cancelQueued(id: string): Promise<RunStatus> {
+    return serviceHandler<RunStatus>({
+      method: Method.Post,
+      url: API_ROUTES.runCancelQueued(id),
+      allowDuplicateRequests: true,
     });
   },
 

@@ -5,6 +5,10 @@
     "BrepPhylo accepts TSV and CSV.",
     "If you want to compare across methods, upload a format accepted by all desired methods."
   ],
+  "uploadGuidanceLinks": [
+    { "label": "Data columns needed across all methods", "href": "/documents/data-requirements" },
+    { "label": "This method's field requirements", "href": "/documents/brepphylo" }
+  ],
   "fileLabel": "AIRR / rearrangement table (CSV or TSV)",
 
   "order": [

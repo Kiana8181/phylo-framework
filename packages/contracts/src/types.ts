@@ -20,7 +20,26 @@ export type MethodSpec = {
   uiHints?: Record<string, any>;
 };
 
-export type CreateRunResponse = { run_id: string };
+export type CreateRunResponse = {
+  run_id: string;
+  /** True when the run did NOT become the active turn (it is waiting in the personal queue). */
+  queued: boolean;
+  /** 1-based position within the user's personal queue, or null when it became the active turn. */
+  queue_position: number | null;
+};
+
+/** Live payload for the run-queue dashboard (non-terminal runs only). */
+export type DashboardRunsResponse = {
+  /** The active-turn run (RUNNING or promoted-QUEUED), or null when the user has none. */
+  active: RunStatus | null;
+  /** The personal queue behind the active turn, FIFO (dispatch_seq NULL). */
+  queue: RunSummary[];
+  limits: {
+    max_queued: number;
+    queued_count: number;
+    can_add: boolean;
+  };
+};
 
 export type RunParams = Record<string, unknown>;
 
@@ -204,6 +223,12 @@ export type RunTreePayload = {
   node_attributes?: Record<string, TreeNodeAttrs> | null;
   lineage_plot?: LineagePlot | null;
   label_to_sequence_id?: Record<string, string> | null;
+  /**
+   * Download-only Newick relabeled with the user's original sequence_ids
+   * (gctree only; null for other methods and legacy runs). Never parsed for
+   * layout — used solely for the "Newick (original IDs)" download.
+   */
+  display_newick?: string | null;
   /** Artifact id of this tree's method-rendered image (served via preview_url). */
   image_artifact_id?: string | null;
 };

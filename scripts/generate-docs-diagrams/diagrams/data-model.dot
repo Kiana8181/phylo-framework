@@ -1,0 +1,33 @@
+digraph datamodel {
+  bgcolor="white";
+  rankdir=LR;
+  pad=0.4;
+  nodesep=0.5;
+  ranksep=0.9;
+  fontname="Helvetica";
+  labelloc="t";
+  fontsize=16;
+  label="Internal data model — PostgreSQL (key columns)";
+
+  node [fontname="Helvetica", fontsize=10, shape=record, style="filled",
+        fillcolor="#f8fafc", color="#64748b"];
+  edge [fontname="Helvetica", fontsize=9, color="#64748b", fontcolor="#475569"];
+
+  users          [label="{users|id (PK)\l email\l username\l}"];
+  runs           [label="{runs|id (PK)\l user_id (FK)\l input_file_id (FK)\l method_id\l status · stage\l params (JSONB)\l result (JSONB)\l}", fillcolor="#e0e7ff"];
+  files          [label="{files|id (PK)\l user_id (FK)\l run_id (FK)\l storage_bucket · storage_path\l checksum_sha256\l storage_state\l}"];
+  run_trees      [label="{run_trees|id (PK)\l run_id (FK)\l tree_index · tree_id\l newick\l}"];
+  run_artifacts  [label="{run_artifacts|id (PK)\l run_id (FK)\l tree_id\l object_key\l artifact_kind · artifact_role\l is_previewable\l storage_state\l}"];
+  job_queue      [label="{job_queue|id (PK)\l run_id (FK)\l job_id\l status\l}"];
+  upload_sessions[label="{upload_sessions|id (PK)\l user_id (FK)\l status\l final_file_id (FK)\l}"];
+
+  users -> runs            [label="1:N"];
+  users -> files           [label="1:N"];
+  users -> upload_sessions [label="1:N"];
+  runs -> run_trees        [label="1:N"];
+  runs -> run_artifacts    [label="1:N"];
+  runs -> job_queue        [label="1:N"];
+  runs -> files            [label="1:N outputs\n(files.run_id)"];
+  runs -> files            [label="input_file_id", style=dashed, constraint=false];
+  upload_sessions -> files [label="final_file_id", style=dashed, constraint=false];
+}
