@@ -1,0 +1,39 @@
+digraph studymodel {
+  bgcolor="white";
+  rankdir=LR;
+  pad=0.4;
+  nodesep=0.45;
+  ranksep=0.8;
+  fontname="Helvetica";
+  labelloc="t";
+  fontsize=16;
+  label="How your study data flows through Phylo Runner";
+
+  node [fontname="Helvetica", fontsize=10, shape=box, style="rounded,filled",
+        fillcolor="#f8fafc", color="#94a3b8", margin="0.22,0.13"];
+  edge [fontname="Helvetica", fontsize=9, color="#64748b", fontcolor="#475569"];
+
+  dataset [label="Your dataset\nB-cell receptor repertoire —\nan AIRR / Change-O table of\naligned antibody sequences",
+           fillcolor="#e0e7ff", color="#6366f1"];
+  clones  [label="Clonal lineages (clones)\nsequences grouped by clone —\neach clone is one B-cell lineage",
+           fillcolor="#dcfce7", color="#22c55e"];
+  tree    [label="Lineage tree (one per clone)\ngermline at the root · observed sequences at the tips\n· inferred ancestral sequences at internal nodes",
+           fillcolor="#dcfce7", color="#22c55e"];
+
+  method  [label="one method:\nDowser · GCtree · BrepPhylo · ClonalTree",
+           shape=box, style="rounded,dashed", fillcolor="#ffffff", color="#94a3b8", fontsize=9];
+
+  seqs     [label="Reconstructed sequences\ngermline + ancestral (internal-node)\nsequences along the lineage",
+            fillcolor="#dbeafe", color="#3b82f6"];
+  analyses [label="Evolutionary analyses\nisotype / class-switching, selection,\nmeasurable evolution over time",
+            fillcolor="#dbeafe", color="#3b82f6"];
+  figures  [label="Figures & tables\nlineage-tree plots, per-clone tables,\ndownloadable result bundles",
+            fillcolor="#dbeafe", color="#3b82f6"];
+
+  dataset -> clones [label="grouped into clones"];
+  clones -> tree    [label="phylogenetic inference"];
+  method -> tree    [label="applied by", style=dashed, constraint=false];
+  tree -> seqs;
+  tree -> analyses;
+  tree -> figures;
+}

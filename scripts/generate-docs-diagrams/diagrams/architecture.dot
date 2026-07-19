@@ -1,0 +1,54 @@
+digraph architecture {
+  bgcolor="white";
+  rankdir=TB;
+  pad=0.4;
+  nodesep=0.4;
+  ranksep=0.6;
+  fontname="Helvetica";
+  labelloc="t";
+  fontsize=16;
+  label="Phylo Runner — services & trust boundary";
+
+  node [fontname="Helvetica", fontsize=11, shape=box, style="rounded,filled",
+        fillcolor="#f8fafc", color="#94a3b8", margin="0.20,0.11"];
+  edge [fontname="Helvetica", fontsize=9, color="#64748b", fontcolor="#475569"];
+
+  browser [label="Browser — Web UI\n(Next.js, :3000)", fillcolor="#e0e7ff", color="#6366f1"];
+
+  subgraph cluster_server {
+    label="Server — private network (MinIO is never exposed to the browser)";
+    labelloc="b";
+    style="rounded,dashed";
+    color="#cbd5e1";
+    fontname="Helvetica"; fontsize=11; fontcolor="#475569";
+
+    api    [label="API — FastAPI\n(:8000)", fillcolor="#dcfce7", color="#22c55e"];
+    worker [label="API Worker\n(no port — polls DB)", fillcolor="#dcfce7", color="#22c55e"];
+    pg     [label="PostgreSQL (:5432)\nruns · files · run_artifacts …", fillcolor="#fef9c3", color="#eab308"];
+    minio  [label="MinIO — S3-compatible (:9000/:9001)\nbuckets: phylo-datasets, phylo-artifacts",
+            fillcolor="#fef9c3", color="#eab308"];
+
+    subgraph cluster_methods {
+      label="Method services (HTTP)";
+      style="rounded"; color="#e2e8f0"; fontsize=10; fontcolor="#64748b";
+      dowser     [label="Dowser\n(:8001)"];
+      gctree     [label="GCtree\n(:8002)"];
+      brepphylo  [label="BrepPhylo\n(:8003)"];
+      clonaltree [label="ClonalTree\n(:8004)"];
+    }
+  }
+
+  browser -> api [label="REST — only public entry"];
+  api -> pg      [label="run / file metadata"];
+  api -> minio   [label="streams dataset &\nartifact bytes to browser"];
+  worker -> pg   [label="claim QUEUED runs"];
+  worker -> minio [label="stage dataset"];
+  worker -> dowser [label="POST /jobs"];
+  worker -> gctree;
+  worker -> brepphylo;
+  worker -> clonaltree;
+  dowser -> minio     [label="PutObject artifacts\n(scoped credentials)", style=dashed];
+  gctree -> minio     [style=dashed];
+  brepphylo -> minio  [style=dashed];
+  clonaltree -> minio [style=dashed];
+}

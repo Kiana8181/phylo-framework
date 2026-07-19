@@ -86,6 +86,7 @@ export default function TreeViewport({
           displayIdField={displayIdField || undefined}
           sizeBy={sizeByField || undefined}
           filename={current.id || `tree-${idx + 1}`}
+          displayNewick={current.displayNewick}
           collapseSignal={collapseSignal}
           height={viewportHeight}
         />
@@ -113,6 +114,7 @@ export default function TreeViewport({
           unknownValue={unknownValue}
           filename={lineageDownloadName}
           newickText={lineageNewick}
+          displayNewick={current.displayNewick}
           collapseSignal={collapseSignal}
           height={viewportHeight}
         />

@@ -7,9 +7,12 @@ export const API_ROUTES = {
   createRun: (methodId: string) => `/runs?method=${encodeURIComponent(methodId)}`,
   runsList: () => `/runs`,
   runCurrent: () => `/runs/current`,
+  runDashboard: () => `/runs/dashboard`,
   runStatus: (runId: string) => `/runs/${encodeURIComponent(runId)}/status`,
   runResult: (runId: string) => `/runs/${encodeURIComponent(runId)}/result`,
   runCancel: (runId: string) => `/runs/${encodeURIComponent(runId)}/cancel`,
+  runCancelQueued: (runId: string) =>
+    `/runs/${encodeURIComponent(runId)}/cancel-queued`,
   runTrees: (runId: string) => `/runs/${encodeURIComponent(runId)}/trees`,
   runTree: (runId: string, treeId: string) =>
     `/runs/${encodeURIComponent(runId)}/trees/${encodeURIComponent(treeId)}`,

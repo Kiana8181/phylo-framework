@@ -5,6 +5,10 @@
     "ClonalTree accepts TSV. You can also upload CSV; conversion is applied when possible.",
     "If you want to compare across methods, upload a format accepted by all desired methods."
   ],
+  "uploadGuidanceLinks": [
+    { "label": "Data columns needed across all methods", "href": "/documents/data-requirements" },
+    { "label": "This method's field requirements", "href": "/documents/clonaltree" }
+  ],
   "fileLabel": "AIRR / IMGT HighV-QUEST TSV",
   "order": [
     "doMapping",

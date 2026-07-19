@@ -19,15 +19,15 @@ type JsonSchemaField = {
   properties?: Record<string, JsonSchemaField>;
 };
 
-type ParamSchema = {
+export type ParamSchema = {
   type?: string;
   properties?: Record<string, JsonSchemaField>;
   required?: string[];
 };
 
-type Condition = Record<string, unknown>;
+export type Condition = Record<string, unknown>;
 
-type VisibilityRule = {
+export type VisibilityRule = {
   when?: Condition;
   whenAll?: Condition[];
   whenAny?: Condition[];
@@ -35,7 +35,7 @@ type VisibilityRule = {
 
 type UiSection = { id: string; label: string; order: number; fields: string[] };
 
-type UiHints = {
+export type UiHints = {
   order?: string[];
   sections?: UiSection[];
   visibility?: Record<string, VisibilityRule>;
@@ -56,7 +56,7 @@ export type LoadedMethod = {
 // ---- Helpers ----------------------------------------------------------------
 
 /** Resolve a (possibly nested, dot-separated) field path to its leaf schema. */
-function resolveField(schema: ParamSchema, path: string): JsonSchemaField | undefined {
+export function resolveField(schema: ParamSchema, path: string): JsonSchemaField | undefined {
   const parts = path.split(".");
   let node: JsonSchemaField | undefined = schema.properties?.[parts[0]];
   for (let i = 1; i < parts.length && node; i += 1) {
@@ -66,7 +66,7 @@ function resolveField(schema: ParamSchema, path: string): JsonSchemaField | unde
 }
 
 /** Turn a snake_case / dotted key into a readable label as a last resort. */
-function humanizeKey(key: string): string {
+export function humanizeKey(key: string): string {
   const tail = key.split(".").pop() ?? key;
   return tail
     .replace(/_/g, " ")
@@ -77,7 +77,7 @@ const SPECIAL_FIELD_LABELS: Record<string, string> = {
   $inputFormat: "Input file format",
 };
 
-function fieldLabel(schema: ParamSchema, path: string): string {
+export function fieldLabel(schema: ParamSchema, path: string): string {
   if (SPECIAL_FIELD_LABELS[path]) return SPECIAL_FIELD_LABELS[path];
   return resolveField(schema, path)?.title || humanizeKey(path);
 }
@@ -112,7 +112,7 @@ function describeDefault(field: JsonSchemaField): string {
 }
 
 /** Describe one visibility condition, e.g. `Tree build = igphyml` or `CSR analysis is enabled`. */
-function describeCondition(schema: ParamSchema, condition: Condition): string {
+export function describeCondition(schema: ParamSchema, condition: Condition): string {
   const parts = Object.entries(condition).map(([key, value]) => {
     const label = fieldLabel(schema, key);
     if (typeof value === "boolean") return `${label} is ${value ? "enabled" : "disabled"}`;

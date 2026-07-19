@@ -608,6 +608,7 @@ build_export_bundle <- function(out_dir, result_parts, p) {
   run_meta <- list(
     analysis_mode = p$analysis_mode,
     tree_build = p$tree_build,
+    seed = p$seed,
     timestamp = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
   )
   write_json_file(run_meta, file.path(out_dir, "run_metadata.json"))

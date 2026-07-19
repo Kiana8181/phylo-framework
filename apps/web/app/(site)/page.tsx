@@ -1,5 +1,6 @@
 import { Hero } from "@/components/landing/Hero";
 import { WhyUseIt } from "@/components/landing/WhyUseIt";
+import { SequenceTraceSpotlight } from "@/components/landing/SequenceTraceSpotlight";
 import { FeatureHighlights } from "@/components/landing/FeatureHighlights";
 import { CtaSection } from "@/components/landing/CtaSection";
 
@@ -8,6 +9,7 @@ export default function Home() {
     <main className="flex flex-col">
       <Hero />
       <WhyUseIt />
+      <SequenceTraceSpotlight />
       <FeatureHighlights />
       <CtaSection />
     </main>
