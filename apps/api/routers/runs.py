@@ -24,6 +24,10 @@ router = APIRouter(prefix="/runs", tags=["runs"])
 
 TERMINAL_STATUSES = (RunStatus.DONE, RunStatus.ERROR, RunStatus.CANCELLED)
 
+# A user may have 1 active turn + up to MAX_QUEUED queued behind it (MAX_QUEUED + 1
+# non-terminal runs total).
+MAX_QUEUED = 5
+
 
 # --------------------------------------------------------------------------- #
 # Serialization helpers
@@ -297,18 +301,21 @@ async def create_run(
             "This method requires an input file. Upload a file first and pass its file_id.",
         )
 
-    # One active run per user.
+    # Per-user queue quota: 1 active turn + up to MAX_QUEUED queued (MAX_QUEUED+1
+    # non-terminal total). Enforced atomically here; the partial-unique index backs
+    # the "one active turn" half.
     if user_id:
-        active = await run_repo.get_active_run_for_user(user_id)
-        if active:
+        nonterminal = await run_repo.count_nonterminal_for_user(user_id)
+        if nonterminal >= MAX_QUEUED + 1:
             raise HTTPException(
                 status_code=409,
                 detail={
-                    "code": "RUN_IN_PROGRESS",
-                    "message": "You already have a run in progress. Wait for it to finish or check its status.",
-                    "run_id": str(active.id),
-                    "status": active.status.value if hasattr(active.status, "value") else str(active.status),
-                    "progress": active.progress,
+                    "code": "QUEUE_FULL",
+                    "message": (
+                        f"Your run queue is full ({MAX_QUEUED} queued behind your active "
+                        "run). Wait for a run to finish or cancel a queued one."
+                    ),
+                    "limit": MAX_QUEUED,
                 },
             )
 
@@ -342,7 +349,30 @@ async def create_run(
         dataset_name=existing_file.original_filename if existing_file else None,
     )
 
-    return {"run_id": str(run.id)}
+    # Promote so a user with a free turn dispatches immediately. Anonymous runs have
+    # no per-user serialization — promote the specific run so it becomes claimable.
+    if user_id:
+        await run_repo.promote_next_for_user(user_id)
+    else:
+        await run_repo.promote_run(run.id)
+
+    # Report whether this run became the active turn or is waiting in the personal
+    # queue (and, if waiting, its 1-based position).
+    fresh = await run_repo.get_by_id(run.id)
+    is_active_turn = fresh is not None and fresh.dispatch_seq is not None
+    queue_position: Optional[int] = None
+    if not is_active_turn and user_id:
+        personal_queue = await run_repo.get_personal_queue_for_user(user_id)
+        for idx, queued_run in enumerate(personal_queue):
+            if queued_run.id == run.id:
+                queue_position = idx + 1
+                break
+
+    return {
+        "run_id": str(run.id),
+        "queued": not is_active_turn,
+        "queue_position": queue_position,
+    }
 
 
 @router.post("/{run_id}/cancel")
@@ -383,6 +413,54 @@ async def cancel_run(
     )
 
 
+@router.post("/{run_id}/cancel-queued")
+async def cancel_queued_run(
+    run_id: str,
+    current_user: Optional[User] = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Cancel a QUEUED run the user owns — whether it is the promoted turn or a plain
+    personal-queue item. Cancelling the active turn promotes the user's next queued
+    run; cancelling a personal-queue item disturbs no other user's ordering.
+
+    Cancelling a RUNNING run is not handled here — use POST /runs/{run_id}/cancel,
+    which drives the graceful worker-cancellation flow.
+    """
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    run_repo = RunRepository(db)
+    file_repo = FileRepository(db)
+    run = await _load_run_with_access(run_id, current_user=current_user, run_repo=run_repo)
+
+    if run.status in TERMINAL_STATUSES:
+        dataset_name, dataset_files = await _resolve_dataset_meta(run, file_repo)
+        return _public_status(
+            run, include_run_id=True, dataset_name=dataset_name, dataset_files=dataset_files
+        )
+
+    if run.status != RunStatus.QUEUED:
+        # RUNNING (or otherwise claimed): defer to the graceful cancel flow.
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "RUN_NOT_QUEUED",
+                "message": "This run is no longer queued; use the cancel endpoint instead.",
+            },
+        )
+
+    cancelled = await run_repo.cancel_queued_run(run.id, current_user.id, "Cancelled by user")
+    if cancelled is None:
+        # Raced with the worker claiming it; fall back to graceful cancel.
+        await run_repo.request_cancel(run.id, "Cancelling...")
+
+    refreshed = await run_repo.get_by_id(run.id) or run
+    dataset_name, dataset_files = await _resolve_dataset_meta(refreshed, file_repo)
+    return _public_status(
+        refreshed, include_run_id=True, dataset_name=dataset_name, dataset_files=dataset_files
+    )
+
+
 @router.get("/current")
 async def get_current_run(
     current_user: Optional[User] = Depends(get_current_user),
@@ -405,6 +483,46 @@ async def get_current_run(
         dataset_name=dataset_name,
         dataset_files=dataset_files,
     )
+
+
+@router.get("/dashboard")
+async def get_dashboard(
+    current_user: Optional[User] = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Live dashboard payload for the run queue: the active-turn run, the personal
+    queue (FIFO), and quota limits. Returns only non-terminal runs — a finished run
+    simply drops out of the payload (the client detects completion by diffing ids).
+    """
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    run_repo = RunRepository(db)
+    file_repo = FileRepository(db)
+
+    active = await run_repo.get_active_turn_run_for_user(current_user.id)
+    queue = await run_repo.get_personal_queue_for_user(current_user.id)
+    nonterminal = await run_repo.count_nonterminal_for_user(current_user.id)
+
+    active_payload = None
+    if active is not None:
+        dataset_name, dataset_files = await _resolve_dataset_meta(active, file_repo)
+        active_payload = _public_status(
+            active,
+            include_run_id=True,
+            dataset_name=dataset_name,
+            dataset_files=dataset_files,
+        )
+
+    return {
+        "active": active_payload,
+        "queue": [_run_summary(r) for r in queue],
+        "limits": {
+            "max_queued": MAX_QUEUED,
+            "queued_count": len(queue),
+            "can_add": nonterminal < MAX_QUEUED + 1,
+        },
+    }
 
 
 # Declare same-dataset before other /{run_id}/... routes so the path "same-dataset" is matched

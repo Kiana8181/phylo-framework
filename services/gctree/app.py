@@ -916,6 +916,7 @@ def _gctree_zip_patterns(outbase: str) -> List[str]:
         "deduplicated.phylip",
         "abundances.csv",
         "idmap.txt",
+        "display_newick*.nwk",
         "manifest.json",
         "original.*",
         "input_normalized.fasta",
@@ -1132,6 +1133,131 @@ def bridge_deduplicate_idmap_to_original(
     return True, bridged_count, unmapped_safe_ids
 
 
+# Characters that force single-quote quoting of a Newick label (lossless).
+# Standards-compliant: wrap in single quotes and double any interior quote.
+_NEWICK_QUOTE_CHARS = frozenset("()[]{}/\\,;:=*'\"`<>~")
+
+
+def _escape_newick_label(label: str) -> str:
+    """Quote a Newick label if it contains reserved characters or whitespace.
+
+    Lossless: never substitutes characters. If quoting is required, wraps the
+    label in single quotes and doubles any interior single quote.
+    """
+    if any(ch in _NEWICK_QUOTE_CHARS or ch.isspace() for ch in label):
+        return "'" + label.replace("'", "''") + "'"
+    return label
+
+
+def _ensure_newick_semicolon(nwk: str) -> str:
+    s = nwk.rstrip()
+    return s if s.endswith(";") else s + ";"
+
+
+def build_display_newick(
+    canonical_newick: str, label_to_seq: Mapping[str, str]
+) -> Tuple[str, List[str]]:
+    """Relabel a canonical Newick with the user's original sequence_ids.
+
+    Returns ``(display_newick, warnings)``. Node *name* tokens (tips and
+    internal nodes) are substituted using ``label_to_seq`` — the same map the
+    result ships as ``label_to_sequence_id`` — so the newick and map can never
+    disagree. Unmapped labels (inferred internals, germline root) pass through
+    unchanged. Topology and branch lengths are preserved byte-for-byte; only
+    name tokens change. Applies lossless single-quote escaping and a per-tree
+    collision guard (colliding nodes keep their canonical labels + a warning).
+    On any parse failure the canonical newick is returned unchanged with a
+    warning, so the caller's per-tree list stays index-aligned.
+    """
+    warnings: List[str] = []
+    src = canonical_newick
+    n = len(src)
+    out_parts: List[str] = []
+    # Each name-token slot: index into out_parts + its raw canonical label.
+    name_slots: List[Dict[str, Any]] = []
+
+    try:
+        i = 0
+        while i < n:
+            ch = src[i]
+            if ch in "(),;":
+                out_parts.append(ch)
+                i += 1
+                continue
+            if ch == ":":
+                # Branch length (and any :support): copy verbatim up to the
+                # next structural delimiter. Never relabeled.
+                j = i + 1
+                while j < n and src[j] not in ",();":
+                    j += 1
+                out_parts.append(src[i:j])
+                i = j
+                continue
+            if ch == "[":
+                # Comment: copy verbatim through the matching ']'.
+                j = src.find("]", i)
+                j = n if j == -1 else j + 1
+                out_parts.append(src[i:j])
+                i = j
+                continue
+            if ch == "'":
+                # Already-quoted name: copy verbatim, do not relabel.
+                j = i + 1
+                while j < n:
+                    if src[j] == "'":
+                        if j + 1 < n and src[j + 1] == "'":
+                            j += 2
+                            continue
+                        j += 1
+                        break
+                    j += 1
+                out_parts.append(src[i:j])
+                i = j
+                continue
+            if ch.isspace():
+                out_parts.append(ch)
+                i += 1
+                continue
+            # Unquoted node-name token: runs until a structural delimiter.
+            j = i
+            while j < n and src[j] not in ":,()[;'" and not src[j].isspace():
+                j += 1
+            raw_label = src[i:j]
+            name_slots.append({"out_idx": len(out_parts), "raw": raw_label})
+            out_parts.append(raw_label)  # placeholder; resolved below
+            i = j
+    except Exception as exc:  # pragma: no cover - defensive
+        return canonical_newick, [
+            f"display_newick: failed to relabel tree ({exc}); kept canonical labels."
+        ]
+
+    # Resolve each name to its final (mapped-or-canonical) form.
+    for slot in name_slots:
+        raw = slot["raw"]
+        mapped = label_to_seq.get(raw)
+        slot["final"] = mapped if isinstance(mapped, str) and mapped else raw
+
+    # Collision guard: two *different* canonical labels resolving to the same
+    # final label — keep canonical for all of them and warn. Never merge nodes.
+    by_final: Dict[str, List[Dict[str, Any]]] = {}
+    for slot in name_slots:
+        by_final.setdefault(slot["final"], []).append(slot)
+    for final_label, slots in by_final.items():
+        distinct_raw = {s["raw"] for s in slots}
+        if len(slots) > 1 and len(distinct_raw) > 1:
+            for s in slots:
+                s["final"] = s["raw"]
+            warnings.append(
+                f"display_newick: {len(slots)} nodes would collide on label "
+                f"'{final_label}'; kept canonical labels for these nodes."
+            )
+
+    for slot in name_slots:
+        out_parts[slot["out_idx"]] = _escape_newick_label(slot["final"])
+
+    return "".join(out_parts), warnings
+
+
 def _base_payload(
     *,
     ok: bool,
@@ -1149,13 +1275,36 @@ def _base_payload(
     status_code: int = 200,
     response_idmap_path: Optional[Path] = None,
 ) -> JSONResponse:
+    node_abundances = parse_abundances_csv(abund_csv)
+    label_to_sequence_id = parse_idmap(response_idmap_path or idmap_txt)
+
+    # Download-only Newick(s) relabeled with the user's original sequence_ids,
+    # aligned 1:1 with `trees`. Written into `tmp` BEFORE the zip is built so
+    # they are bundled alongside the canonical artifacts. The canonical
+    # `trees`/newick and everything that consumes them are untouched.
+    warnings = list(warnings)
+    display_newicks: List[str] = []
+    for canonical in trees:
+        dn, dn_warnings = build_display_newick(canonical, label_to_sequence_id)
+        display_newicks.append(dn)
+        warnings.extend(dn_warnings)
+    try:
+        if len(display_newicks) == 1:
+            (tmp / "display_newick.nwk").write_text(
+                _ensure_newick_semicolon(display_newicks[0]), encoding="utf-8"
+            )
+        else:
+            for n_idx, dn in enumerate(display_newicks, start=1):
+                (tmp / f"display_newick_tree{n_idx}.nwk").write_text(
+                    _ensure_newick_semicolon(dn), encoding="utf-8"
+                )
+    except Exception:
+        pass
+
     # Build the artifact zip directly on disk and reference it by path —
     # no base64 round-trip. materialize_artifacts copies it into the run
     # artifact dir and the API worker uploads it to object storage.
     bundle_zip = zip_artifacts_to_path(tmp, outbase, tmp / "gctree_run_artifacts.zip")
-
-    node_abundances = parse_abundances_csv(abund_csv)
-    label_to_sequence_id = parse_idmap(response_idmap_path or idmap_txt)
 
     artifact_files: List[Dict[str, Any]] = list(figure_files or [])
     if bundle_zip is not None and bundle_zip.exists():
@@ -1175,6 +1324,7 @@ def _base_payload(
     payload: Dict[str, Any] = {
         "ok": ok,
         "trees": trees,
+        "display_newick": display_newicks or None,
         "figures": None,
         "annotations": [],
         "clones": {"clone_id": [], "seqs": []},

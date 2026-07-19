@@ -14,6 +14,16 @@
         "type": "string"
       }
     },
+    "display_newick": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "description": "Per-tree Newick (index-aligned with `trees`) whose node labels are the user's original sequence_ids (representative id for genotype-collapsed nodes; full membership preserved in the idmap artifact). Download-only; never used for layout or as the canonical tree.",
+      "items": {
+        "type": "string"
+      }
+    },
     "figures": {
       "description": "Rendered tree images and related figures, base64-encoded data URLs grouped by kind.",
       "type": [
