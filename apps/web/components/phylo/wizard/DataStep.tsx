@@ -33,6 +33,19 @@ export default function DataStep({
   const uploadGuidance = Array.isArray(spec.uiHints?.uploadGuidance)
     ? (spec.uiHints?.uploadGuidance as string[])
     : [];
+  // Optional ui-hints field: links from the upload step to the docs that explain
+  // how to satisfy the guidance (cross-method columns + this method's fields).
+  const uploadGuidanceLinks: { label: string; href: string }[] = Array.isArray(
+    spec.uiHints?.uploadGuidanceLinks,
+  )
+    ? (spec.uiHints?.uploadGuidanceLinks as unknown[]).filter(
+        (link): link is { label: string; href: string } =>
+          !!link &&
+          typeof link === "object" &&
+          typeof (link as { label?: unknown }).label === "string" &&
+          typeof (link as { href?: unknown }).href === "string",
+      )
+    : [];
   const fileLabel = typeof spec.uiHints?.fileLabel === "string" ? spec.uiHints.fileLabel : "Input dataset";
 
   const compatibleFiles = useMemo(
@@ -65,6 +78,15 @@ export default function DataStep({
           <div className="mt-2 space-y-1 text-xs text-muted-foreground">
             {uploadGuidance.map((line, idx) => (
               <p key={`${spec.id}-guidance-${idx}`}>{line}</p>
+            ))}
+          </div>
+        )}
+        {uploadGuidanceLinks.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs">
+            {uploadGuidanceLinks.map((link) => (
+              <Link key={link.href} href={link.href} className="text-primary hover:underline">
+                {link.label}
+              </Link>
             ))}
           </div>
         )}

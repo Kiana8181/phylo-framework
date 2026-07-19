@@ -14,7 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import LineageSVG from "@/components/LineageSVG";
+import TreeView, { type CollapseSignal } from "@/components/phylo/tree/TreeView";
 import SequenceTraceInfoIcon from "@/components/sequence-trace/SequenceTraceInfoIcon";
 import { RunsApi } from "@/features/runs/api";
 import { useRunStatus } from "@/features/runs/hooks";
@@ -127,6 +127,9 @@ function ComparisonColumn({
   highlightText,
   markMatches,
   focusSignal,
+  collapseSignal,
+  colorByField,
+  onColorFields,
   displayIdField,
   onDisplayIdFieldChange,
   isLoading,
@@ -142,6 +145,9 @@ function ComparisonColumn({
   highlightText: string;
   markMatches?: boolean;
   focusSignal?: number;
+  collapseSignal?: CollapseSignal;
+  colorByField: string;
+  onColorFields?: (fields: string[]) => void;
   displayIdField: string;
   onDisplayIdFieldChange: (v: string) => void;
   isLoading?: boolean;
@@ -162,9 +168,17 @@ function ComparisonColumn({
   const newickText = payload?.original_newick ?? payload?.newick ?? "";
   const hasLineage = tree?.hasLineagePlot ?? false;
   const showLineage = hasLineage && (lineagePlot ?? payloadLoading);
-  const displayFields = displayFieldsFromAttrs(nodeAttributes as Record<string, Record<string, unknown>> | undefined);
+  const displayFields = useMemo(
+    () => displayFieldsFromAttrs(nodeAttributes as Record<string, Record<string, unknown>> | undefined),
+    [nodeAttributes],
+  );
+  // Report this (base) panel's field keys up so the global Colour-by select has options.
+  useEffect(() => {
+    onColorFields?.(displayFields);
+  }, [displayFields, onColorFields]);
   const { contractSpec } = useContractSpec(run?.methodId);
   const runDatasetLabel = datasetLabel(run?.datasetName, run?.datasetFiles);
+  const germlineLabel = lineagePlot?.meta?.germlineLabel ?? null;
 
   if (error) {
     return (
@@ -269,18 +283,20 @@ function ComparisonColumn({
           </div>
         )}
         {showLineage && lineagePlot && (
-          <div className="flex-1 min-h-[380px] overflow-auto rounded border bg-background">
-            <LineageSVG
-              lineagePlot={lineagePlot}
-              nodeAttributes={nodeAttributes}
-              displayIdField={displayIdField || undefined}
-              filename={`comparison-${run.runId}-${treeId}`}
-              newickText={newickText || undefined}
-              highlightText={highlightText || undefined}
-              markMatches={markMatches}
-              focusSignal={focusSignal}
-            />
-          </div>
+          <TreeView
+            source={{ kind: "lineage", lineagePlot, nodeAttributes }}
+            displayIdField={displayIdField || undefined}
+            filename={`comparison-${run.runId}-${treeId}`}
+            newickText={newickText || undefined}
+            highlightText={highlightText || undefined}
+            markMatches={markMatches}
+            focusSignal={focusSignal}
+            collapseSignal={collapseSignal}
+            colorByField={colorByField}
+            germlineLabel={germlineLabel}
+            height={420}
+            className="shrink-0"
+          />
         )}
         {run.trees.length > 0 && !hasLineage && !payloadLoading && (
           <p className="text-sm text-muted-foreground">No lineage plot for this tree.</p>
@@ -305,6 +321,10 @@ export default function ComparisonPage() {
   const [highlightSequence, setHighlightSequence] = useState("");
   const [markMatches, setMarkMatches] = useState(false);
   const [focusSignal, setFocusSignal] = useState(0);
+  const [colorByField, setColorByField] = useState<string>("auto");
+  const [colorFieldOptions, setColorFieldOptions] = useState<string[]>([]);
+  // Lineage panels default to abundance; "auto" resolves to it.
+  const effectiveColorField = colorByField === "auto" ? "abundance" : colorByField;
   const [displayIdField, setDisplayIdField] = useState("sequence_id");
   const [expandOpen, setExpandOpen] = useState(false);
   const nextPanelIdRef = useRef(1);
@@ -470,8 +490,8 @@ export default function ComparisonPage() {
             Locate a sequence
           </CardTitle>
           <p className="text-xs text-muted-foreground font-normal mt-1">
-            Enter a sequence_id (or part of a label) and click <strong>Show me</strong> — an arrow marks it,
-            and each tree scrolls to the match. Matching nodes also turn red as you type.
+            Enter a sequence_id (or part of a label) — matching nodes are ringed as you type. Click{" "}
+            <strong>Show me</strong> and each tree focuses the path to the match, fading the rest.
           </p>
         </CardHeader>
         <CardContent>
@@ -570,17 +590,39 @@ export default function ComparisonPage() {
             <h2 className="text-lg font-medium">Side-by-side Sequence Trace</h2>
             <SequenceTraceInfoIcon />
           </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="gap-1.5"
-            onClick={() => setExpandOpen(true)}
-            disabled={expandTrees.length === 0}
-          >
-            <Maximize2 className="h-4 w-4" />
-            Expand
-          </Button>
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
+              <Label className="text-xs shrink-0">Colour by</Label>
+              <Select value={colorByField} onValueChange={setColorByField}>
+                <SelectTrigger className="h-8 w-[140px] text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="auto">Auto (abundance)</SelectItem>
+                  <SelectItem value="abundance">abundance</SelectItem>
+                  <SelectItem value="none">none</SelectItem>
+                  {colorFieldOptions
+                    .filter((f) => f !== "abundance")
+                    .map((f) => (
+                      <SelectItem key={f} value={f}>
+                        {f}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              onClick={() => setExpandOpen(true)}
+              disabled={expandTrees.length === 0}
+            >
+              <Maximize2 className="h-4 w-4" />
+              Expand
+            </Button>
+          </div>
         </div>
         <p className="text-sm text-muted-foreground">
           Each panel keeps its own tree selection. Choose a run in each Sequence Trace slot to view trees side-by-side.
@@ -599,6 +641,8 @@ export default function ComparisonPage() {
             highlightText={highlightSequence}
             markMatches={markMatches}
             focusSignal={focusSignal}
+            colorByField={effectiveColorField}
+            onColorFields={setColorFieldOptions}
             displayIdField={displayIdField}
             onDisplayIdFieldChange={setDisplayIdField}
             isLoading={baseStatusLoading || (baseDone && baseTreesLoading)}
@@ -629,6 +673,7 @@ export default function ComparisonPage() {
               highlightText={highlightSequence}
               markMatches={markMatches}
               focusSignal={focusSignal}
+              colorByField={effectiveColorField}
               displayIdField={displayIdField}
               onDisplayIdFieldChange={setDisplayIdField}
               methodNameById={methodNameById}
@@ -644,6 +689,7 @@ export default function ComparisonPage() {
         highlightText={highlightSequence}
         displayIdField={displayIdField}
         methodNameById={methodNameById}
+        colorByField={effectiveColorField}
       />
     </main>
   );
@@ -656,6 +702,8 @@ function RunLineageBlock({
   highlightText,
   markMatches,
   focusSignal,
+  collapseSignal,
+  colorByField,
   displayIdField,
   onDisplayIdFieldChange,
   isLoading,
@@ -666,6 +714,8 @@ function RunLineageBlock({
   highlightText: string;
   markMatches?: boolean;
   focusSignal?: number;
+  collapseSignal?: CollapseSignal;
+  colorByField: string;
   displayIdField: string;
   onDisplayIdFieldChange: (v: string) => void;
   isLoading?: boolean;
@@ -730,18 +780,19 @@ function RunLineageBlock({
         </div>
       )}
       {showLineage && lineagePlot && (
-        <div className="min-h-[380px] overflow-auto rounded border bg-background">
-          <LineageSVG
-            lineagePlot={lineagePlot}
-            nodeAttributes={nodeAttributes}
-            displayIdField={displayIdField || undefined}
-            filename={`comparison-${run.runId}-${treeId}`}
-            newickText={newickText || undefined}
-            highlightText={highlightText || undefined}
-            markMatches={markMatches}
-            focusSignal={focusSignal}
-          />
-        </div>
+        <TreeView
+          source={{ kind: "lineage", lineagePlot, nodeAttributes }}
+          displayIdField={displayIdField || undefined}
+          filename={`comparison-${run.runId}-${treeId}`}
+          newickText={newickText || undefined}
+          highlightText={highlightText || undefined}
+          markMatches={markMatches}
+          focusSignal={focusSignal}
+          collapseSignal={collapseSignal}
+          colorByField={colorByField}
+          germlineLabel={lineagePlot?.meta?.germlineLabel ?? null}
+          height={420}
+        />
       )}
       {run.trees.length > 0 && !hasLineage && !payloadLoading && (
         <p className="text-sm text-muted-foreground">No lineage plot for this tree.</p>
@@ -765,6 +816,8 @@ function ComparisonSlot({
   highlightText,
   markMatches,
   focusSignal,
+  collapseSignal,
+  colorByField,
   displayIdField,
   onDisplayIdFieldChange,
   methodNameById,
@@ -780,6 +833,8 @@ function ComparisonSlot({
   highlightText: string;
   markMatches?: boolean;
   focusSignal?: number;
+  collapseSignal?: CollapseSignal;
+  colorByField: string;
   displayIdField: string;
   onDisplayIdFieldChange: (v: string) => void;
   methodNameById: Map<string, string>;
@@ -863,6 +918,8 @@ function ComparisonSlot({
               highlightText={highlightText}
               markMatches={markMatches}
               focusSignal={focusSignal}
+              collapseSignal={collapseSignal}
+              colorByField={colorByField}
               displayIdField={displayIdField}
               onDisplayIdFieldChange={onDisplayIdFieldChange}
               isLoading={treesLoading}

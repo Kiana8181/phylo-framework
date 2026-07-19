@@ -16,16 +16,17 @@ export function Hero() {
         <div className="space-y-6">
           <span className="inline-flex items-center gap-2 rounded-full border bg-background/60 px-3 py-1 text-xs font-medium text-muted-foreground backdrop-blur">
             <Sparkles className="h-3.5 w-3.5 text-primary" />
-            Four phylogenetics methods, one workflow
+            Standardized · Reproducible · Four methods, one workflow
           </span>
           <h1 className="text-4xl font-bold tracking-tight sm:text-5xl md:text-6xl">
-            Build B-cell lineage trees{" "}
-            <span className="text-primary">without the friction</span>
+            A unified workflow for{" "}
+            <span className="text-primary">B-cell lineage reconstruction</span>
           </h1>
           <p className="max-w-xl text-lg leading-relaxed text-muted-foreground">
-            Phylo Runner wraps Dowser, GCtree, BrepPhylo and ClonalTree behind a single guided
-            interface. Upload your data once, run any method, and compare results — all executed on
-            the server.
+            Phylo Runner is a unified, reproducible framework for standardized B-cell lineage
+            reconstruction across multiple phylogenetic methods. Run Dowser, GCtree, BrepPhylo and
+            ClonalTree over one dataset through one workflow — every run recorded with its parameters
+            and its random seed, so any result can be regenerated exactly.
           </p>
           <div className="flex flex-wrap gap-3">
             <Link href="/dashboard">

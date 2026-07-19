@@ -1,0 +1,13 @@
+{
+  "name": "generate-docs-diagrams",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Authoring-time only: renders the docs architecture/workflow/data-model diagrams from exact Graphviz specs to static SVGs. NOT part of the Next.js app; never imported by apps/web.",
+  "scripts": {
+    "generate": "node generate.mjs"
+  },
+  "dependencies": {
+    "@hpcc-js/wasm": "2.18.0"
+  }
+}

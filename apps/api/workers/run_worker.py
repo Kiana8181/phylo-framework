@@ -153,7 +153,7 @@ async def _persist_error(
     )
     async with AsyncSessionLocal() as db:
         run_repo = RunRepository(db)
-        await run_repo.update(
+        updated = await run_repo.update(
             run_id,
             status=RunStatus.ERROR,
             stage="ERROR",
@@ -165,6 +165,8 @@ async def _persist_error(
             finished_at=func.now(),
             worker_lease_until=None,
         )
+        # Free the owner's turn so their next queued run dispatches promptly.
+        await run_repo.promote_next_for_user(updated.user_id if updated else None)
     _log("run errored", run_id=run_id)
 
 
@@ -173,7 +175,7 @@ async def _persist_staging_error(run_id: UUID, err: StagingError) -> None:
 
     async with AsyncSessionLocal() as db:
         run_repo = RunRepository(db)
-        await run_repo.update(
+        updated = await run_repo.update(
             run_id,
             status=RunStatus.ERROR,
             stage="ERROR",
@@ -185,6 +187,8 @@ async def _persist_staging_error(run_id: UUID, err: StagingError) -> None:
             finished_at=func.now(),
             worker_lease_until=None,
         )
+        # Free the owner's turn so their next queued run dispatches promptly.
+        await run_repo.promote_next_for_user(updated.user_id if updated else None)
     _log("run staging error", run_id=run_id, code=err.code)
 
 
@@ -420,6 +424,13 @@ async def main() -> None:
 
     while True:
         try:
+            # Promote every user's head-of-line first, so a slot freed since the last
+            # cycle immediately makes the next-ready runs claimable. Idempotent + cheap;
+            # this is the correctness backstop behind the per-transition promotion.
+            async with AsyncSessionLocal() as db:
+                run_repo = RunRepository(db)
+                await run_repo.promote_all_eligible()
+
             claimed_any = False
             while len(active) < MAX_CONCURRENT:
                 async with AsyncSessionLocal() as db:

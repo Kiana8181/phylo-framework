@@ -1,6 +1,12 @@
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { RunsApi, type RunListFilters } from "./api";
-import type { RunStatus, RunResult, CreateRunResponse, RunSummary } from "@phylo/contracts";
+import type {
+  RunStatus,
+  RunResult,
+  CreateRunResponse,
+  RunSummary,
+  DashboardRunsResponse,
+} from "@phylo/contracts";
 import { notify } from "@/lib/notify";
 import { useEffect, useRef } from "react";
 
@@ -28,6 +34,33 @@ export function useCreateRun() {
 export function useCancelRun() {
   return useMutation<RunStatus, any, string>({
     mutationFn: (runId: string) => RunsApi.cancel(runId),
+    onError: (e: any) =>
+      notify.error("Failed to cancel run", truncateForToast(e?.message ?? "Unknown error")),
+  });
+}
+
+/** Live run-queue dashboard. Polls every ~2.5s while there is an active or queued run. */
+export function useDashboardRuns(enabled = true) {
+  return useQuery<DashboardRunsResponse>({
+    queryKey: ["dashboardRuns"],
+    queryFn: () => RunsApi.dashboard(),
+    enabled,
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      if (!data) return 2500;
+      const hasActive = !!data.active;
+      const hasQueue = (data.queue?.length ?? 0) > 0;
+      return hasActive || hasQueue ? 2500 : false;
+    },
+  });
+}
+
+/** Cancel a QUEUED run (promoted turn or personal-queue item); refreshes the dashboard. */
+export function useCancelQueuedRun() {
+  const queryClient = useQueryClient();
+  return useMutation<RunStatus, any, string>({
+    mutationFn: (runId: string) => RunsApi.cancelQueued(runId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["dashboardRuns"] }),
     onError: (e: any) =>
       notify.error("Failed to cancel run", truncateForToast(e?.message ?? "Unknown error")),
   });
