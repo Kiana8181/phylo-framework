@@ -30,10 +30,12 @@ export function CtaSection() {
         <div aria-hidden className="pointer-events-none absolute inset-0 -z-10">
           <div className="absolute left-1/2 top-0 h-72 w-72 -translate-x-1/2 rounded-full bg-primary/10 blur-3xl" />
         </div>
-        <h2 className="text-3xl font-bold tracking-tight">Ready to build some trees?</h2>
+        <h2 className="text-2xl font-bold tracking-tight sm:text-3xl">
+          Ready to uncover the evolutionary story encoded in your sequences?
+        </h2>
         <p className="mx-auto mt-3 max-w-xl text-muted-foreground">
-          Head to the dashboard to start a run, or read the documentation to learn what each method
-          does and how its form maps to the underlying parameters.
+          Start a run from the dashboard, or check the documentation to learn how each method helps
+          reveal the evolutionary patterns shaping your lineages.
         </p>
         <div className="mt-7 flex flex-wrap justify-center gap-3">
           <Link href="/dashboard">
