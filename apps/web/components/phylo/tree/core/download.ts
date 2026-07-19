@@ -73,11 +73,7 @@ export type TreeSvgMeta = {
 const EXPORT_INK = "#111827";
 
 function xmlEscape(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 function exportColor(c: string): string {
@@ -104,9 +100,7 @@ export function serializeTreeSvg(
   );
 
   // Edges.
-  parts.push(
-    `<g fill="none" stroke="${EXPORT_INK}" stroke-width="${meta.strokeWidth}" opacity="0.8">`,
-  );
+  parts.push(`<g fill="none" stroke="${EXPORT_INK}" stroke-width="${meta.strokeWidth}" opacity="0.8">`);
   for (const e of edges) parts.push(`<path d="${e.d}"/>`);
   parts.push(`</g>`);
 
@@ -173,12 +167,7 @@ export function downloadSvg(svgMarkup: string, filename: string): void {
   triggerDownload(URL.createObjectURL(blob), filename, true);
 }
 
-export function downloadPng(
-  svgMarkup: string,
-  width: number,
-  height: number,
-  filename: string,
-): void {
+export function downloadPng(svgMarkup: string, width: number, height: number, filename: string): void {
   const img = new Image();
   img.onload = () => {
     const canvas = document.createElement("canvas");
@@ -199,4 +188,53 @@ export function downloadNewick(text: string, filename: string): void {
   const normalized = trimmed.endsWith(";") ? trimmed : `${trimmed};`;
   const blob = new Blob([normalized], { type: "text/plain" });
   triggerDownload(URL.createObjectURL(blob), filename, true);
+}
+
+export type NewickExportEntry = {
+  label: string;
+  description: string;
+  /** Download filename, already suffixed with the appropriate extension. */
+  filename: string;
+  /** The Newick string to serialize for this entry. */
+  newick: string;
+  /** True when the entry has no usable content (kept but greyed out). */
+  disabled: boolean;
+};
+
+/**
+ * Ordered Newick download entries for a tree's Download menu.
+ *
+ * When a `displayNewick` (the user's original sequence_ids; gctree only) is
+ * present and non-empty, it is offered FIRST as the default "Newick (original
+ * IDs)" entry (`<name>.nwk`). The canonical internal-label newick is always
+ * offered as a secondary "Newick (internal labels)" entry (`<name>.internal.nwk`),
+ * disabled when empty. Old runs / other methods (no display newick) get only the
+ * internal entry — graceful fallback.
+ *
+ * Pure: builds descriptors only, performs no I/O.
+ */
+export function newickExportEntries(args: {
+  filename: string;
+  internalNewick: string;
+  displayNewick?: string | null;
+}): NewickExportEntry[] {
+  const entries: NewickExportEntry[] = [];
+  const display = args.displayNewick && args.displayNewick.trim() ? args.displayNewick : null;
+  if (display) {
+    entries.push({
+      label: "Newick (original IDs)",
+      description: "Original sequence IDs as labels (.nwk)",
+      filename: `${args.filename}.nwk`,
+      newick: display,
+      disabled: false,
+    });
+  }
+  entries.push({
+    label: "Newick",
+    description: "Tree topology (.nwk)",
+    filename: `${args.filename}.internal.nwk`,
+    newick: args.internalNewick,
+    disabled: !args.internalNewick.trim(),
+  });
+  return entries;
 }
