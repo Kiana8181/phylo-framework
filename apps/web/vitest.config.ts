@@ -3,7 +3,10 @@ import path from "node:path";
 
 export default defineConfig({
   test: {
-    include: ["components/**/__tests__/**/*.test.ts"],
+    include: [
+      "components/**/__tests__/**/*.test.ts",
+      "features/**/__tests__/**/*.test.ts",
+    ],
   },
   resolve: {
     alias: {
