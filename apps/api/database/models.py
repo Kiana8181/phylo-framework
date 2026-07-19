@@ -292,6 +292,7 @@ class RunTree(Base):
     tree_id = Column(String(120), nullable=False)
     newick = Column(Text, nullable=False)
     original_newick = Column(Text, nullable=True)
+    display_newick = Column(Text, nullable=True)
     # NOTE: the former `service_image` (base64 JSONB) column has been removed.
     # Tree images are now RunArtifact rows (artifact_role="phylogeny") served
     # via the artifact preview endpoint — no base64 is stored in the DB.

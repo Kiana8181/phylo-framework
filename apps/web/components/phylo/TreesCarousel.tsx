@@ -4,11 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { ChevronLeft, ChevronRight, Maximize2, Settings2 } from "lucide-react";
 import { RunsApi } from "@/features/runs/api";
-import {
-  type LineagePlot,
-  type RunTree,
-  type RunTreePayload,
-} from "@phylo/contracts";
+import { type LineagePlot, type RunTree, type RunTreePayload } from "@phylo/contracts";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import TreeSettingsPanel from "@/components/phylo/tree/TreeSettingsPanel";
@@ -46,6 +42,7 @@ export type TreeVM = {
   imageArtifactId?: string | null;
   nodeAttributes?: Record<string, Record<string, any>>;
   lineagePlot?: LineagePlot;
+  displayNewick?: string;
 };
 
 function treeIdFor(tree: RunTree | string, index: number): string {
@@ -138,8 +135,8 @@ export default function TreesCarousel({
           typeof err?.message === "string"
             ? err.message
             : typeof err === "string"
-            ? err
-            : "Failed to load tree data.";
+              ? err
+              : "Failed to load tree data.";
         setTreeLoadErrors((prev) => ({ ...prev, [treeId]: message }));
       })
       .finally(() => {
@@ -168,8 +165,7 @@ export default function TreesCarousel({
       const payload = treeCache[treeId];
       const lineagePlot = payload?.lineage_plot as LineagePlot | undefined;
       const imageArtifactId = payload?.image_artifact_id ?? null;
-      const cloneId =
-        typeof t !== "string" && typeof t.clone_id === "string" ? t.clone_id : undefined;
+      const cloneId = typeof t !== "string" && typeof t.clone_id === "string" ? t.clone_id : undefined;
       const phylogenyNewick = payload?.newick
         ? cleanNewick(payload.original_newick || payload.newick || "")
         : "";
@@ -184,6 +180,7 @@ export default function TreesCarousel({
         imageArtifactId,
         nodeAttributes: payload?.node_attributes ?? {},
         lineagePlot,
+        displayNewick: payload?.display_newick || undefined,
       };
     });
   }, [cleanNewick, loadingTreeId, treeCache, treeLoadErrors, trees]);
@@ -226,7 +223,7 @@ export default function TreesCarousel({
     colorByField === "auto"
       ? activeTab === "lineage"
         ? "abundance"
-        : colorBy ?? "abundance"
+        : (colorBy ?? "abundance")
       : colorByField;
   const germlineLabel = current?.lineagePlot?.meta?.germlineLabel ?? null;
 
