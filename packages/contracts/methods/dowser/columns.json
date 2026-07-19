@@ -1,0 +1,32 @@
+{
+  "$comment": "Single source of truth for Dowser's data-column requirements. Read by the API preprocess step (apps/api/preprocess/column_requirements.py) AND the web docs (apps/web/features/docs/compatibility.ts) so the two cannot drift. Columns are canonical AIRR keys (the column_map targets).",
+  "requiredGroups": [
+    {
+      "id": "core",
+      "note": "Always required; validated by services/dowser before formatClones (validate_airr_for_dowser + clone-consistency checks).",
+      "columns": [
+        "sequence_id",
+        "clone_id",
+        "sequence_alignment",
+        "germline_alignment_d_mask",
+        "v_call",
+        "j_call",
+        "junction_length"
+      ]
+    }
+  ],
+  "conditionalGroups": [
+    {
+      "id": "paired_chain",
+      "when": { "chain_mode": "HL" },
+      "note": "Paired heavy/light (HL) chain mode",
+      "columns": ["cell_id", "locus"]
+    },
+    {
+      "id": "regions",
+      "when": { "use_regions": true },
+      "note": "Region columns enabled (use_regions)",
+      "columns": ["v_region_start", "v_region_end", "j_region_start", "j_region_end"]
+    }
+  ]
+}

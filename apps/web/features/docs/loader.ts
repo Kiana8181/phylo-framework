@@ -65,3 +65,12 @@ function loadMethod(id: MethodId): LoadedMethod {
 export function getMethodDocModel(id: MethodId): MethodDocModel {
   return buildMethodDocModel(loadMethod(id), getMethodContent(id));
 }
+
+/**
+ * The raw loaded contracts (paramSchema + uiHints) for a method. Exposed so the
+ * cross-method compatibility model can classify columns directly from the same
+ * JSON the form and per-method docs consume — no drift, no second source.
+ */
+export function getLoadedMethod(id: MethodId): LoadedMethod {
+  return loadMethod(id);
+}
