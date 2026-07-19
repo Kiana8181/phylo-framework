@@ -27,6 +27,7 @@ import {
   downloadSvg,
   downloadPng,
   downloadNewick,
+  newickExportEntries,
   defaultCollapsed,
   collapseAll,
   expandAll,
@@ -74,6 +75,7 @@ export type TreeViewProps = {
   /** Chrome */
   filename?: string;
   newickText?: string | null;
+  displayNewick?: string | null;
   height?: number | string;
   isLoading?: boolean;
   className?: string;
@@ -102,6 +104,7 @@ export default function TreeView({
   collapseSignal,
   filename = "tree",
   newickText,
+  displayNewick,
   height,
   isLoading = false,
   className,
@@ -274,9 +277,7 @@ export default function TreeView({
           striped: summary ? summary.multiple : false,
           isMatch: false,
           faded,
-          labelText: showLabels
-            ? `n=${ln.node.subtreeLeafCount} · Σ=${ln.node.subtreeAbundanceSum}`
-            : null,
+          labelText: showLabels ? `n=${ln.node.subtreeLeafCount} · Σ=${ln.node.subtreeAbundanceSum}` : null,
         });
         if (inFocus(ln.id)) grow(ln.xPixel, ln.y - hh, farX, ln.y + hh);
         continue;
@@ -422,8 +423,12 @@ export default function TreeView({
     connectorX: layout.connectorX,
     strokeWidth: 1,
   };
-  const newickForExport =
-    newickText ?? (isLineage ? lineagePlot?.meta?.normalizedNewick ?? "" : newick);
+  const newickForExport = newickText ?? (isLineage ? (lineagePlot?.meta?.normalizedNewick ?? "") : newick);
+  const newickDownloads = newickExportEntries({
+    filename,
+    internalNewick: newickForExport,
+    displayNewick,
+  });
 
   if (isLoading) return <TreeSkeleton height={height} />;
 
@@ -489,12 +494,12 @@ export default function TreeView({
               description: "Scalable vector graphic",
               onSelect: () => downloadSvg(serializeTreeSvg(visuals, edges, meta, glyphs), `${filename}.svg`),
             },
-            {
-              label: "Newick",
-              description: "Tree topology (.nwk)",
-              onSelect: () => downloadNewick(newickForExport, `${filename}.nwk`),
-              disabled: !newickForExport.trim(),
-            },
+            ...newickDownloads.map((entry) => ({
+              label: entry.label,
+              description: entry.description,
+              onSelect: () => downloadNewick(entry.newick, entry.filename),
+              disabled: entry.disabled,
+            })),
           ]}
         />
       </div>
