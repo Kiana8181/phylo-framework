@@ -104,6 +104,103 @@ export function MethodDoc({ id }: { id: MethodId }) {
         </div>
       </section>
 
+      {/* ZIP bundle format */}
+      {content.zipBundle && (
+        <>
+          <Separator />
+          <section className="space-y-4">
+            <h2 className="text-xl font-semibold tracking-tight">ZIP bundle format</h2>
+            {content.zipBundle.intro.map((para, i) => (
+              <p key={i} className="leading-relaxed text-muted-foreground">
+                {para}
+              </p>
+            ))}
+
+            <div className="space-y-2">
+              <h3 className="text-base font-semibold text-foreground">Archive layout</h3>
+              <ul className="list-disc space-y-1.5 pl-5 text-sm text-muted-foreground">
+                {content.zipBundle.layout.map((rule, i) => (
+                  <li key={i}>{rule}</li>
+                ))}
+              </ul>
+            </div>
+
+            <div className="space-y-2">
+              <h3 className="text-base font-semibold text-foreground">Example manifest.json</h3>
+              <pre className="overflow-x-auto rounded-lg border bg-muted/50 p-4 text-xs leading-relaxed text-foreground">
+                <code>{content.zipBundle.manifestExample}</code>
+              </pre>
+            </div>
+
+            <div className="space-y-4">
+              <h3 className="text-base font-semibold text-foreground">
+                Scenarios &amp; their mandatory files
+              </h3>
+              <p className="text-sm text-muted-foreground">
+                The manifest&apos;s <code className="rounded bg-muted px-1 py-0.5">scenario</code> must
+                be one of these values. Each row lists the roles that <em>must</em> appear under{" "}
+                <code className="rounded bg-muted px-1 py-0.5">files</code> for that scenario.
+              </p>
+              <div className="overflow-hidden rounded-lg border">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-muted/50 hover:bg-muted/50">
+                      <TableHead className="min-w-[14rem]">Scenario</TableHead>
+                      <TableHead>Use it when</TableHead>
+                      <TableHead className="min-w-[16rem]">Mandatory files</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {content.zipBundle.scenarios.map((sc) => (
+                      <TableRow key={sc.scenario} className="align-top">
+                        <TableCell className="font-mono text-xs font-medium text-foreground">
+                          {sc.scenario}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">{sc.when}</TableCell>
+                        <TableCell className="text-muted-foreground">
+                          <ul className="space-y-1.5">
+                            {sc.required.map((r) => (
+                              <li key={r.role}>
+                                <code className="rounded bg-muted px-1 py-0.5 text-foreground">
+                                  {r.role}
+                                </code>{" "}
+                                — {r.description}
+                              </li>
+                            ))}
+                          </ul>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+
+            {content.zipBundle.fileFormats && content.zipBundle.fileFormats.length > 0 && (
+              <div className="space-y-2">
+                <h3 className="text-base font-semibold text-foreground">
+                  Optional files &amp; their formats
+                </h3>
+                <p className="text-sm text-muted-foreground">
+                  These roles may be added to any scenario&apos;s{" "}
+                  <code className="rounded bg-muted px-1 py-0.5">files</code> map. To apply isotype
+                  annotation, include <code className="rounded bg-muted px-1 py-0.5">isotype_mapfile</code>{" "}
+                  (and an idmap).
+                </p>
+                <ul className="space-y-1.5 pl-5 text-sm text-muted-foreground">
+                  {content.zipBundle.fileFormats.map((f) => (
+                    <li key={f.role} className="list-disc">
+                      <code className="rounded bg-muted px-1 py-0.5 text-foreground">{f.role}</code> —{" "}
+                      {f.description}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </section>
+        </>
+      )}
+
       <Separator />
 
       {/* Form fields */}
