@@ -65,7 +65,6 @@ export function PhyloHeroArt({ className }: { className?: string }) {
       viewBox="0 0 480 360"
       className={className}
       fill="none"
-      role="img"
       aria-hidden="true"
     >
       {/* soft glow behind the root */}
@@ -115,6 +114,28 @@ export function PhyloHeroArt({ className }: { className?: string }) {
             <circle cx={p[0]} cy={p[1]} r={11} className="fill-current opacity-15" />
           </g>
         ))}
+
+        {/* germline label near the root */}
+        <text
+          x={ROOT[0]}
+          y={ROOT[1] + 24}
+          textAnchor="middle"
+          fontSize={10}
+          className="fill-muted-foreground opacity-60"
+        >
+          Germline
+        </text>
+
+        {/* faint mutation-distance axis hint beneath the branches */}
+        <text
+          x={(ROOT[0] + TIPS[0][0]) / 2}
+          y={352}
+          textAnchor="middle"
+          fontSize={10}
+          className="fill-muted-foreground opacity-40"
+        >
+          mutation distance →
+        </text>
       </g>
     </svg>
   );

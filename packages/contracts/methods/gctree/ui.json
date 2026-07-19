@@ -7,6 +7,10 @@
     "For DNAPARS outfile + abundances (and optional idmap, position maps), upload a single .zip containing manifest.json plus the files listed in the manifest (see docs).",
     "If you want to compare across methods, upload a format accepted by all desired methods."
   ],
+  "uploadGuidanceLinks": [
+    { "label": "Data columns needed across all methods", "href": "/documents/data-requirements" },
+    { "label": "This method's field requirements", "href": "/documents/gctree" }
+  ],
   "order": [
     "input_scenario",
     "doMapping",

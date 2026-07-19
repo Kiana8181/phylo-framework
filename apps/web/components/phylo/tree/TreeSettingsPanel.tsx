@@ -1,6 +1,8 @@
 "use client";
 
+import { ChevronsDownUp, ChevronsUpDown } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
+import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import TreeOverlay from "./TreeOverlay";
 
@@ -40,6 +42,11 @@ export default function TreeSettingsPanel({
   displayFields,
   displayIdField,
   setDisplayIdField,
+  colorFields,
+  colorByField,
+  setColorByField,
+  onExpandAll,
+  onCollapseAll,
 }: {
   open: boolean;
   onClose: () => void;
@@ -53,6 +60,11 @@ export default function TreeSettingsPanel({
   displayFields: string[];
   displayIdField: string;
   setDisplayIdField: (v: string) => void;
+  colorFields: string[];
+  colorByField: string;
+  setColorByField: (v: string) => void;
+  onExpandAll?: () => void;
+  onCollapseAll?: () => void;
 }) {
   return (
     <TreeOverlay
@@ -108,9 +120,61 @@ export default function TreeSettingsPanel({
         )}
 
         <div className="space-y-1.5">
+          <label className="block text-sm font-medium">Colour by</label>
+          <Select value={colorByField} onValueChange={setColorByField}>
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Colour field" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="auto">Auto (by view)</SelectItem>
+              <SelectItem value="abundance">abundance</SelectItem>
+              <SelectItem value="none">none</SelectItem>
+              {colorFields
+                .filter((f) => f !== "abundance")
+                .map((f) => (
+                  <SelectItem key={f} value={f}>
+                    {f}
+                  </SelectItem>
+                ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="space-y-1.5">
           <label className="block text-sm font-medium">Tip size by</label>
           <p className="text-sm text-muted-foreground">abundance</p>
         </div>
+
+        {(onExpandAll || onCollapseAll) && (
+          <div className="space-y-1.5">
+            <label className="block text-sm font-medium">Subtrees</label>
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="flex-1 gap-1.5"
+                onClick={onCollapseAll}
+              >
+                <ChevronsDownUp className="size-4" />
+                Collapse all
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="flex-1 gap-1.5"
+                onClick={onExpandAll}
+              >
+                <ChevronsUpDown className="size-4" />
+                Expand all
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Right-click a node (or tap-hold on touch) to collapse or expand its subtree.
+            </p>
+          </div>
+        )}
       </div>
     </TreeOverlay>
   );

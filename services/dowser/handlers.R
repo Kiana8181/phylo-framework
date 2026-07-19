@@ -10,6 +10,7 @@ parse_dowser_params <- function(raw) {
 
   p$minseq <- as.integer(p$minseq %||% 3L)
   p$nproc <- as.integer(p$nproc %||% 1L)
+  p$seed <- as.integer(p$seed %||% 42L)
   p$analysis_mode <- normalize_col(p$analysis_mode, "tree_only")
   mode_err <- validate_analysis_mode(p$analysis_mode)
   if (!is.null(mode_err)) dowser_validation_error(mode_err, step = "dowser.params.analysis_mode")
@@ -398,6 +399,7 @@ run_handler_impl <- function(req, res) {
       total_seqs = nrow(db_working),
       analysis_mode = p$analysis_mode,
       tree_build = p$tree_build,
+      seed = p$seed,
       label_field = p$label_field,
       tip_color_by = tip_col,
       tip_size_by = p$tip_size_by,

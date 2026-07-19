@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BookOpen, GitBranch } from "lucide-react";
+import { BookOpen, Database, GitBranch, Network, Table2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { METHOD_IDS } from "@/features/docs/types";
 import { getMethodContent } from "@/features/docs/content";
@@ -11,6 +11,9 @@ type Item = { href: string; label: string; icon: typeof BookOpen };
 
 const ITEMS: Item[] = [
   { href: "/documents", label: "Overview", icon: BookOpen },
+  { href: "/documents/architecture", label: "Architecture", icon: Network },
+  { href: "/documents/data-model", label: "Data model", icon: Database },
+  { href: "/documents/data-requirements", label: "Data requirements", icon: Table2 },
   ...METHOD_IDS.map((id) => ({
     href: `/documents/${id}`,
     label: getMethodContent(id).displayName,

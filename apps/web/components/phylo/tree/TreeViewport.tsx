@@ -1,8 +1,8 @@
 "use client";
 
 import { API_ROUTES } from "@phylo/contracts";
-import TreeSVG from "@/components/TreeSVG";
-import LineageSVG from "@/components/LineageSVG";
+import TreeView, { type CollapseSignal } from "@/components/phylo/tree/TreeView";
+import TreeSkeleton from "@/components/phylo/tree/TreeSkeleton";
 import ArtifactImage from "@/components/phylo/ArtifactImage";
 import { Loading } from "@/components/ui/loading";
 import type { TreeVM } from "@/components/phylo/TreesCarousel";
@@ -12,7 +12,10 @@ export type TreeViewportProps = {
   current?: TreeVM;
   idx: number;
   phyloAnnotations: Array<{ label: string } & Record<string, unknown>>;
-  colorBy?: string;
+  /** Resolved colour-by field (view-aware default already applied by the caller). */
+  colorByField: string | null;
+  colorDomain?: readonly string[] | null;
+  germlineLabel?: string | null;
   unknownValue?: string;
   displayIdField: string;
   showLabels: boolean;
@@ -21,19 +24,23 @@ export type TreeViewportProps = {
   sizeByField: string;
   lineageDownloadName: string;
   lineageNewick: string;
-  /** Override the renderers' scrollable viewport height (fullscreen expand). */
+  collapseSignal?: CollapseSignal;
+  /** Height for the interactive tree pane (fullscreen expand passes e.g. "78vh"). */
   viewportHeight?: number | string;
 };
 
 /** Renders the active tree view (method image / phylogeny / lineage), with its
  *  loading / error / empty states. Shared by the inline display and the
- *  fullscreen expand dialog. */
+ *  fullscreen expand dialog. The phylogeny/lineage tabs render the single
+ *  `TreeView`; the method tab is untouched. */
 export default function TreeViewport({
   activeTab,
   current,
   idx,
   phyloAnnotations,
-  colorBy,
+  colorByField,
+  colorDomain,
+  germlineLabel,
   unknownValue,
   displayIdField,
   showLabels,
@@ -42,6 +49,7 @@ export default function TreeViewport({
   sizeByField,
   lineageDownloadName,
   lineageNewick,
+  collapseSignal,
   viewportHeight,
 }: TreeViewportProps) {
   return (
@@ -66,35 +74,53 @@ export default function TreeViewport({
       )}
 
       {activeTab === "phylogeny" && current?.phylogenyNewick && (
-        <TreeSVG
-          newick={current.phylogenyNewick}
-          annotations={phyloAnnotations}
+        <TreeView
+          source={{ kind: "phylogeny", newick: current.phylogenyNewick, annotations: phyloAnnotations }}
           showLabels={showLabels}
           showInternalNodes={showInternalNodes}
           showNodeNumbers={showNodeNumbers}
-          colorBy={colorBy}
+          colorByField={colorByField}
+          colorDomain={colorDomain}
+          germlineLabel={germlineLabel}
           unknownValue={unknownValue}
           displayIdField={displayIdField || undefined}
           sizeBy={sizeByField || undefined}
-          viewportHeight={viewportHeight}
+          filename={current.id || `tree-${idx + 1}`}
+          displayNewick={current.displayNewick}
+          collapseSignal={collapseSignal}
+          height={viewportHeight}
         />
+      )}
+      {activeTab === "phylogeny" && !current?.phylogenyNewick && current?.isLoading && (
+        <TreeSkeleton height={viewportHeight} />
+      )}
+      {activeTab === "phylogeny" && !current?.phylogenyNewick && !current?.isLoading && current?.loadError && (
+        <div className="rounded border p-4 text-sm text-red-600">{current.loadError}</div>
+      )}
+      {activeTab === "phylogeny" && !current?.phylogenyNewick && !current?.isLoading && !current?.loadError && (
+        <div className="rounded border p-4 text-sm text-muted-foreground">No phylogenetic tree available.</div>
       )}
 
       {activeTab === "lineage" && current?.lineagePlot && (
-        <LineageSVG
-          lineagePlot={current.lineagePlot}
-          nodeAttributes={current.nodeAttributes}
+        <TreeView
+          source={{ kind: "lineage", lineagePlot: current.lineagePlot, nodeAttributes: current.nodeAttributes }}
           displayIdField={displayIdField || undefined}
           showLabels={showLabels}
           showInternalNodes={showInternalNodes}
           showNodeNumbers={showNodeNumbers}
+          colorByField={colorByField}
+          colorDomain={colorDomain}
+          germlineLabel={germlineLabel}
+          unknownValue={unknownValue}
           filename={lineageDownloadName}
           newickText={lineageNewick}
-          viewportHeight={viewportHeight}
+          displayNewick={current.displayNewick}
+          collapseSignal={collapseSignal}
+          height={viewportHeight}
         />
       )}
       {activeTab === "lineage" && !current?.lineagePlot && current?.isLoading && (
-        <div className="rounded border p-4 text-sm text-muted-foreground">Loading lineage plot...</div>
+        <TreeSkeleton height={viewportHeight} />
       )}
       {activeTab === "lineage" && !current?.lineagePlot && !current?.isLoading && current?.loadError && (
         <div className="rounded border p-4 text-sm text-red-600">{current.loadError}</div>

@@ -19,6 +19,8 @@ from fastapi import FastAPI, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from validators import validate_clonaltree_input
+
 load_dotenv()
 
 # ---------- constants ----------
@@ -102,10 +104,17 @@ def ok(data, status_code: int = 200) -> JSONResponse:
     return JSONResponse(status_code=status_code, content=data)
 
 
-def err(msg, status_code: int = 400, logs: Optional[List[dict]] = None) -> JSONResponse:
+def err(
+    msg,
+    status_code: int = 400,
+    logs: Optional[List[dict]] = None,
+    details: Optional[Dict[str, Any]] = None,
+) -> JSONResponse:
     payload: Dict[str, Any] = {"ok": False, "error": msg}
     if logs:
         payload["logs"] = logs
+    if details:
+        payload["error_details"] = details
     return JSONResponse(status_code=status_code, content=payload)
 
 
@@ -696,12 +705,32 @@ async def run_handler(request: Request):
         if not submodule_ok:
             return err(submodule_error, logs=logs)
 
+        validation = validate_clonaltree_input(input_path, params)
+        if not validation.ok:
+            logs.append(
+                {
+                    "step": "input_validation",
+                    "cmd": "validate input file and parameters",
+                    "ok": False,
+                    "out": validation.error or "Input validation failed.",
+                }
+            )
+            return err(
+                validation.error or "Input validation failed.",
+                logs=logs,
+                details=validation.error_details or None,
+            )
+
+        warnings.extend(validation.warnings)
         logs.append(
             {
                 "step": "input_validation",
                 "cmd": "validate input file and parameters",
                 "ok": True,
-                "out": f"input={input_path.name}",
+                "out": (
+                    f"input={input_path.name}; "
+                    f"warnings={len(validation.warnings)}"
+                ),
             }
         )
 
