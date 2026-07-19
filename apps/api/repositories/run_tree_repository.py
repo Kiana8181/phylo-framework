@@ -27,6 +27,7 @@ class RunTreePayload(TypedDict):
     node_attributes: dict[str, Any] | None
     lineage_plot: dict[str, Any] | None
     label_to_sequence_id: dict[str, Any] | None
+    display_newick: str | None
     image_artifact_id: str | None
 
 
@@ -60,6 +61,7 @@ class RunTreeRepository:
                 node_attributes=item.get("node_attributes"),
                 lineage_plot=item.get("lineage_plot"),
                 label_to_sequence_id=item.get("label_to_sequence_id"),
+                display_newick=item.get("display_newick"),
             )
             self.session.add(row)
 
@@ -122,6 +124,7 @@ class RunTreeRepository:
                 RunTree.node_attributes,
                 RunTree.lineage_plot,
                 RunTree.label_to_sequence_id,
+                RunTree.display_newick,
             )
             .where(RunTree.run_id == run_id, RunTree.tree_id == tree_id)
             .limit(1)
@@ -137,6 +140,7 @@ class RunTreeRepository:
             node_attributes,
             lineage_plot,
             label_to_sequence_id,
+            display_newick,
         ) = row
         return {
             "treeId": str(raw_tree_id),
@@ -147,5 +151,6 @@ class RunTreeRepository:
             "label_to_sequence_id": (
                 label_to_sequence_id if isinstance(label_to_sequence_id, dict) else None
             ),
+            "display_newick": str(display_newick) if display_newick is not None else None,
             "image_artifact_id": await self._image_artifact_id(run_id, str(raw_tree_id)),
         }

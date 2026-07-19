@@ -5,6 +5,7 @@ from uuid import UUID
 from datetime import date, datetime, timezone, timedelta
 
 from sqlalchemy import String, and_, case, cast, exists, func, or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.database.models import Run, RunStatus, ACTIVE_RUN_STATUSES
@@ -12,6 +13,9 @@ from apps.api.repositories.base_repository import BaseRepository
 from apps.api.utils.datetime_util import utc_now
 
 TERMINAL_RUN_STATUSES = (RunStatus.DONE, RunStatus.ERROR, RunStatus.CANCELLED)
+
+# Postgres sequence backing the global dispatch order (see migration 009).
+DISPATCH_SEQ = "runs_dispatch_seq"
 
 
 class RunRepository(BaseRepository[Run]):
@@ -52,6 +56,186 @@ class RunRepository(BaseRepository[Run]):
             .limit(1)
         )
         return result.scalars().first()
+
+    # --------------------------------------------------------------------- #
+    # Per-user run queue (FCFS over per-user sub-queues)
+    # --------------------------------------------------------------------- #
+    @staticmethod
+    def _active_turn_predicate():
+        """A run is the user's active turn when it is RUNNING or a promoted QUEUED."""
+        return or_(
+            Run.status == RunStatus.RUNNING,
+            and_(Run.status == RunStatus.QUEUED, Run.dispatch_seq.isnot(None)),
+        )
+
+    async def count_nonterminal_for_user(self, user_id: UUID) -> int:
+        """Count a user's non-terminal runs (PENDING/QUEUED/RUNNING). Drives the quota."""
+        result = await self.session.execute(
+            select(func.count())
+            .select_from(Run)
+            .where(Run.user_id == user_id)
+            .where(Run.status.in_(ACTIVE_RUN_STATUSES))
+        )
+        return int(result.scalar() or 0)
+
+    async def get_active_turn_run_for_user(self, user_id: UUID) -> Optional[Run]:
+        """The user's active-turn run: RUNNING, or QUEUED with dispatch_seq assigned."""
+        result = await self.session.execute(
+            select(Run)
+            .where(Run.user_id == user_id)
+            .where(self._active_turn_predicate())
+            .order_by(Run.dispatch_seq.asc().nulls_last(), Run.created_at.asc())
+            .limit(1)
+        )
+        return result.scalars().first()
+
+    async def get_personal_queue_for_user(self, user_id: UUID) -> List[Run]:
+        """The user's waiting-behind list: QUEUED with no dispatch_seq, FIFO by creation."""
+        result = await self.session.execute(
+            select(Run)
+            .where(Run.user_id == user_id)
+            .where(Run.status == RunStatus.QUEUED)
+            .where(Run.dispatch_seq.is_(None))
+            .order_by(Run.created_at.asc())
+        )
+        return list(result.scalars().all())
+
+    async def _promote_next_locked(self, user_id: Optional[UUID]) -> Optional[Run]:
+        """Promote the user's head-of-line into the global dispatch order.
+
+        Does NOT commit — the caller owns the transaction. No-op (returns None) if
+        the user already holds an active turn or has an empty personal queue. Selects
+        the oldest personal-queue run FOR UPDATE SKIP LOCKED so concurrent promoters
+        never grab the same candidate.
+        """
+        if user_id is None:
+            return None
+
+        already = await self.session.execute(
+            select(Run.id)
+            .where(Run.user_id == user_id)
+            .where(self._active_turn_predicate())
+            .limit(1)
+        )
+        if already.scalar_one_or_none() is not None:
+            return None
+
+        candidate = await self.session.execute(
+            select(Run.id)
+            .where(Run.user_id == user_id)
+            .where(Run.status == RunStatus.QUEUED)
+            .where(Run.dispatch_seq.is_(None))
+            .order_by(Run.created_at.asc())
+            .limit(1)
+            .with_for_update(skip_locked=True)
+        )
+        candidate_id = candidate.scalar_one_or_none()
+        if candidate_id is None:
+            return None
+
+        stmt = (
+            update(Run)
+            .where(Run.id == candidate_id)
+            .values(dispatch_seq=func.nextval(DISPATCH_SEQ))
+            .returning(Run)
+        )
+        run = (await self.session.execute(stmt)).scalar_one_or_none()
+        return run
+
+    async def promote_next_for_user(self, user_id: Optional[UUID]) -> Optional[Run]:
+        """Promote a user's head-of-line, committing the result.
+
+        Catches the partial-unique-index violation (a racing second promotion) and
+        treats it as a no-op. Safe to call opportunistically.
+        """
+        if user_id is None:
+            return None
+        try:
+            run = await self._promote_next_locked(user_id)
+            await self.session.commit()
+            return run
+        except IntegrityError:
+            await self.session.rollback()
+            return None
+
+    async def promote_run(self, run_id: UUID) -> Optional[Run]:
+        """Unconditionally promote a specific QUEUED, unpromoted run into the dispatch
+        order. Used for anonymous runs (user_id NULL), which have no per-user serial
+        constraint — each is independently dispatch-ready. Commits.
+        """
+        stmt = (
+            update(Run)
+            .where(
+                Run.id == run_id,
+                Run.status == RunStatus.QUEUED,
+                Run.dispatch_seq.is_(None),
+            )
+            .values(dispatch_seq=func.nextval(DISPATCH_SEQ))
+            .returning(Run)
+        )
+        run = (await self.session.execute(stmt)).scalar_one_or_none()
+        await self.session.commit()
+        return run
+
+    async def promote_all_eligible(self) -> int:
+        """Promote the head-of-line for every user who has no active turn but a
+        non-empty personal queue. Idempotent; used by the worker sweep and as a
+        self-healing backstop. Returns the number of runs promoted.
+        """
+        # Users with at least one waiting (unpromoted) QUEUED run.
+        waiting = await self.session.execute(
+            select(Run.user_id)
+            .where(Run.user_id.isnot(None))
+            .where(Run.status == RunStatus.QUEUED)
+            .where(Run.dispatch_seq.is_(None))
+            .group_by(Run.user_id)
+        )
+        user_ids = [row[0] for row in waiting.all()]
+
+        promoted = 0
+        for uid in user_ids:
+            run = await self.promote_next_for_user(uid)
+            if run is not None:
+                promoted += 1
+
+        # Anonymous runs (user_id NULL) have no serial constraint — promote each
+        # independently, oldest first, as a backstop for any missed at creation.
+        anon = await self.session.execute(
+            select(Run.id)
+            .where(Run.user_id.is_(None))
+            .where(Run.status == RunStatus.QUEUED)
+            .where(Run.dispatch_seq.is_(None))
+            .order_by(Run.created_at.asc())
+        )
+        for (run_id,) in anon.all():
+            run = await self.promote_run(run_id)
+            if run is not None:
+                promoted += 1
+        return promoted
+
+    async def _terminal_update_and_promote(
+        self, run_id: UUID, **values
+    ) -> Optional[Run]:
+        """Apply a terminal status update to a run and, atomically, promote the
+        owner's next queued run. The promotion runs in a SAVEPOINT so a racing
+        partial-unique violation rolls back only the promotion, never the terminal
+        flip (durability of the terminal state is the priority).
+        """
+        owner_id = await self.session.scalar(
+            select(Run.user_id).where(Run.id == run_id)
+        )
+        stmt = update(Run).where(Run.id == run_id).values(**values).returning(Run)
+        result = (await self.session.execute(stmt)).scalar_one_or_none()
+
+        if owner_id is not None:
+            try:
+                async with self.session.begin_nested():
+                    await self._promote_next_locked(owner_id)
+            except IntegrityError:
+                pass  # already promoted / raced; worker sweep is the backstop
+
+        await self.session.commit()
+        return result
 
     async def get_by_user(
         self,
@@ -140,15 +324,18 @@ class RunRepository(BaseRepository[Run]):
         status: RunStatus,
         message: Optional[str] = None,
     ) -> Optional[Run]:
-        """Update run status."""
+        """Update run status. Terminal transitions also promote the owner's next run."""
         update_data = {"status": status}
         if message is not None:
             update_data["message"] = message
 
         if status == RunStatus.RUNNING:
             update_data["started_at"] = utc_now()
-        elif status in (RunStatus.DONE, RunStatus.ERROR, RunStatus.CANCELLED):
+            return await self.update(run_id, **update_data)
+
+        if status in TERMINAL_RUN_STATUSES:
             update_data["finished_at"] = func.now()
+            return await self._terminal_update_and_promote(run_id, **update_data)
 
         return await self.update(run_id, **update_data)
 
@@ -190,9 +377,11 @@ class RunRepository(BaseRepository[Run]):
     ) -> Optional[Run]:
         """Atomically claim the next runnable run for this worker.
 
-        Picks either a freshly QUEUED run, or a RUNNING run whose lease has
-        expired (worker crashed/restarted). Uses SELECT ... FOR UPDATE
-        SKIP LOCKED so two workers never claim the same run.
+        Picks either a promoted QUEUED run (dispatch_seq assigned = dispatch-ready),
+        or a RUNNING run whose lease has expired (worker crashed/restarted). Ordered
+        by ``dispatch_seq`` — the global readiness (promotion) order, NOT creation
+        order — so the FCFS-over-per-user-sub-queues discipline holds. Uses
+        SELECT ... FOR UPDATE SKIP LOCKED so two workers never claim the same run.
 
         Commits the claim and returns the leased Run, or None when idle.
         """
@@ -203,7 +392,10 @@ class RunRepository(BaseRepository[Run]):
             select(Run.id)
             .where(
                 or_(
-                    Run.status == RunStatus.QUEUED,
+                    and_(
+                        Run.status == RunStatus.QUEUED,
+                        Run.dispatch_seq.isnot(None),
+                    ),
                     and_(
                         Run.status == RunStatus.RUNNING,
                         Run.worker_lease_until.isnot(None),
@@ -211,7 +403,7 @@ class RunRepository(BaseRepository[Run]):
                     ),
                 )
             )
-            .order_by(Run.created_at.asc())
+            .order_by(Run.dispatch_seq.asc(), Run.id.asc())
             .limit(1)
             .with_for_update(skip_locked=True)
         )
@@ -298,7 +490,10 @@ class RunRepository(BaseRepository[Run]):
     async def cancel_if_queued(self, run_id: UUID, message: Optional[str] = None) -> bool:
         """Immediately cancel a run that is still QUEUED and unclaimed.
 
-        Used when a user cancels before the worker picks up the run.
+        Used when a user cancels before the worker picks up the run. If the cancelled
+        run was the owner's active turn, promotes their next queued run; the
+        active-turn guard makes the promotion a safe no-op when a plain
+        personal-queue item is cancelled instead.
         """
         now = utc_now()
         stmt = (
@@ -317,11 +512,65 @@ class RunRepository(BaseRepository[Run]):
                 finished_at=func.now(),
                 worker_lease_until=None,
             )
-            .returning(Run.id)
+            .returning(Run.id, Run.user_id)
+        )
+        row = (await self.session.execute(stmt)).first()
+        if row is None:
+            await self.session.commit()
+            return False
+
+        owner_id = row[1]
+        if owner_id is not None:
+            try:
+                async with self.session.begin_nested():
+                    await self._promote_next_locked(owner_id)
+            except IntegrityError:
+                pass
+        await self.session.commit()
+        return True
+
+    async def cancel_queued_run(
+        self, run_id: UUID, user_id: UUID, message: Optional[str] = None
+    ) -> Optional[Run]:
+        """Cancel a QUEUED run owned by ``user_id`` — whether it is the promoted turn
+        or a plain personal-queue item.
+
+        If the cancelled run was the owner's active turn, promotes their next queued
+        run. If it was a personal-queue item, the active-turn guard makes the
+        promotion a no-op, so no other user's dispatch ordering is disturbed. Returns
+        the cancelled run, or None if nothing matched (wrong owner / not QUEUED).
+        """
+        now = utc_now()
+        stmt = (
+            update(Run)
+            .where(
+                Run.id == run_id,
+                Run.user_id == user_id,
+                Run.status == RunStatus.QUEUED,
+            )
+            .values(
+                status=RunStatus.CANCELLED,
+                stage="CANCELLED",
+                stage_message=message or "Cancelled by user",
+                message=message or "Cancelled by user",
+                cancel_requested_at=now,
+                finished_at=func.now(),
+                worker_lease_until=None,
+            )
+            .returning(Run)
         )
         cancelled = (await self.session.execute(stmt)).scalar_one_or_none()
+        if cancelled is None:
+            await self.session.commit()
+            return None
+
+        try:
+            async with self.session.begin_nested():
+                await self._promote_next_locked(user_id)
+        except IntegrityError:
+            pass
         await self.session.commit()
-        return cancelled is not None
+        return cancelled
 
     async def request_cancel(self, run_id: UUID, message: Optional[str] = None) -> Optional[Run]:
         """Mark a RUNNING run as cancel-requested so the worker terminates it."""
@@ -345,8 +594,8 @@ class RunRepository(BaseRepository[Run]):
         return result.scalar_one_or_none()
 
     async def mark_cancelled(self, run_id: UUID, message: Optional[str] = None) -> Optional[Run]:
-        """Finalize a run as CANCELLED and release the worker lease."""
-        return await self.update(
+        """Finalize a run as CANCELLED, release the lease, and promote the owner's next run."""
+        return await self._terminal_update_and_promote(
             run_id,
             status=RunStatus.CANCELLED,
             stage="CANCELLED",
@@ -396,8 +645,8 @@ class RunRepository(BaseRepository[Run]):
         result: dict,
         status: RunStatus = RunStatus.DONE,
     ) -> Optional[Run]:
-        """Set run result and mark as done."""
-        return await self.update(
+        """Set run result, mark as done, and promote the owner's next queued run."""
+        return await self._terminal_update_and_promote(
             run_id,
             result=result,
             status=status,
@@ -414,8 +663,8 @@ class RunRepository(BaseRepository[Run]):
         run_id: UUID,
         error: str,
     ) -> Optional[Run]:
-        """Set run error and mark as error."""
-        return await self.update(
+        """Set run error, mark as error, and promote the owner's next queued run."""
+        return await self._terminal_update_and_promote(
             run_id,
             status=RunStatus.ERROR,
             stage="ERROR",

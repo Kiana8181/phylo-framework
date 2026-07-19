@@ -178,7 +178,7 @@ const METHOD_CONTENT: Record<MethodId, MethodContent> = {
       {
         type: "ZIP",
         handling:
-          "A dnapars outfile + abundances bundle (with manifest.json and optional idmap / position maps), used to run GCtree ranking directly.",
+          "A pre-built bundle described by a manifest.json — used to run GCtree ranking, re-render a saved forest, or apply isotype annotation directly, skipping the FASTA/dnapars steps. See “ZIP bundle format” below for the exact layout and the mandatory / optional files for each scenario.",
       },
     ],
     fieldMappings: {
@@ -201,6 +201,95 @@ const METHOD_CONTENT: Record<MethodId, MethodContent> = {
       "The column-mapping toggle and fields appear only for CSV/TSV input (the FASTA-conversion path).",
       "Root sequence ID, quick search and jumble apply only to the FASTA-derived scenarios; the extra coloring mode appears only when coloring settings are enabled.",
     ],
+    zipBundle: {
+      intro: [
+        "Because GCtree natively takes several different inputs (an aligned FASTA, a dnapars outfile + abundances, or a saved forest pickle), a ZIP upload is not just a folder of files — it is a self-describing bundle. A manifest.json at the top declares which scenario the bundle is for and maps each named role to a filename, so the framework knows exactly how to run GCtree without guessing.",
+        "This is the input to use when you already have the intermediate artifacts and want to re-rank, re-render, or apply isotype annotation without re-running the parsimony search from scratch.",
+      ],
+      layout: [
+        "The archive must contain exactly one manifest.json, either at the archive root or inside a single top-level folder that also holds the data files (a common folder wrapper from zipping a directory is fine). Multiple manifest.json files, or none, are rejected.",
+        "manifest.json has two keys: \"scenario\" (one of the four values below) and \"files\" (an object mapping each role name to a filename, resolved relative to the manifest's own folder).",
+        "Every filename listed under \"files\" must actually exist in the archive next to the manifest; a missing file for any declared role fails the upload. Extra files not referenced by the manifest are ignored. macOS __MACOSX / dotfile entries are skipped automatically.",
+      ],
+      manifestExample: `{
+  "scenario": "dnapars_outfile_with_abundance",
+  "files": {
+    "dnapars_outfile": "outfile",
+    "abundances_csv": "abundances.csv",
+    "idmapfile": "idmap.txt",
+    "isotype_mapfile": "isotypemap.csv",
+    "idmapfile_isotype": "idmap_isotype.txt"
+  }
+}`,
+      scenarios: [
+        {
+          scenario: "aligned_fasta_with_root",
+          when: "You have an aligned FASTA (including the root/germline sequence) and want the framework to run dnapars and GCtree ranking for you.",
+          required: [
+            {
+              role: "aligned_fasta",
+              description: "Aligned sequences with the root/germline included; the starting point for parsimony inference.",
+            },
+          ],
+          optional: [],
+        },
+        {
+          scenario: "airr_or_changeo_table_adapter",
+          when: "Same as above, but your sequences originate from an AIRR / Change-O table that has already been converted to an aligned FASTA for the bundle.",
+          required: [
+            {
+              role: "aligned_fasta",
+              description: "The aligned FASTA (with root) produced from the tabular data.",
+            },
+          ],
+          optional: [],
+        },
+        {
+          scenario: "dnapars_outfile_with_abundance",
+          when: "You already ran PHYLIP/dnapars and want GCtree to rank the equally-parsimonious trees using your abundances — no re-inference.",
+          required: [
+            {
+              role: "dnapars_outfile",
+              description: "The raw dnapars `outfile` containing the parsimony trees.",
+            },
+            {
+              role: "abundances_csv",
+              description: "Per-genotype abundances: two columns per line (sequence label, abundance ≥ 0), comma- or tab-separated, no header required.",
+            },
+          ],
+          optional: [],
+        },
+        {
+          scenario: "gctree_forest_pickle",
+          when: "You have a previously computed GCtree forest and only want to re-rank, re-render, or annotate it (e.g. change the figure format or add isotypes).",
+          required: [
+            {
+              role: "gctree_forest_pickle",
+              description: "The saved GCtree forest pickle (.p) to re-load.",
+            },
+          ],
+          optional: [],
+        },
+      ],
+      fileFormats: [
+        {
+          role: "idmapfile",
+          description: "Optional in any scenario. Maps dnapars/tree tip labels to your original sequence IDs — two columns per line (label, sequence_id), separated by whitespace, comma, or tab. Used to label nodes and as the default idmap for isotype annotation.",
+        },
+        {
+          role: "positionmapfile / positionmapfile2",
+          description: "Optional site-position maps passed to GCtree's mutation annotation (`--positionmapfile` / `--positionmapfile2`); the `2` variant is for the second chain in paired-chain workflows.",
+        },
+        {
+          role: "isotype_mapfile",
+          description: "Required to apply isotype annotation. Maps each observed sequence ID to its isotype; consumed by the `gctree isotype` utility when the Apply isotype option is on.",
+        },
+        {
+          role: "idmapfile_isotype",
+          description: "Optional idmap used specifically for isotype annotation. If omitted, the run falls back to `idmapfile`, and then to the idmap GCtree generates internally.",
+        },
+      ],
+    },
   },
 
   brepphylo: {

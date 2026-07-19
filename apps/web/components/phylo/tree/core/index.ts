@@ -43,8 +43,10 @@ export {
   downloadSvg,
   downloadPng,
   downloadNewick,
+  newickExportEntries,
   type NodeVisual,
   type EdgeVisual,
   type GlyphVisual,
   type TreeSvgMeta,
+  type NewickExportEntry,
 } from "./download";
