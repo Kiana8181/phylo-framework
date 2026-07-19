@@ -175,6 +175,12 @@ class Run(Base):
     worker_lease_until = Column(DateTime(timezone=True), nullable=True, index=True)
     # Optional, useful for debugging which worker owns the run.
     worker_id = Column(String(255), nullable=True)
+    # Global dispatch ticket, assigned from the `runs_dispatch_seq` sequence when
+    # the run is promoted to its owner's head-of-line (readiness). NULL = still in
+    # the owner's personal queue (not yet dispatch-ready); NOT NULL = promoted into
+    # the global dispatch order. This single column is BOTH the "promoted?" marker
+    # and the FCFS sort key (readiness order, independent of created_at).
+    dispatch_seq = Column(BigInteger, nullable=True)
     created_at = Column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -204,6 +210,8 @@ class Run(Base):
         Index("idx_runs_status", "status"),
         Index("idx_runs_created_at", "created_at"),
         Index("idx_runs_method_id", "method_id"),
+        # Drives the dispatcher claim query (ORDER BY dispatch_seq over promoted rows).
+        Index("idx_runs_status_dispatch_seq", "status", "dispatch_seq"),
     )
 
 
