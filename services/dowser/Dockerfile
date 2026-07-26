@@ -38,27 +38,26 @@ RUN set -eux; \
     done; \
     if ! command -v raxml-ng >/dev/null 2>&1; then \
       mkdir -p /tmp/raxml-ng && cd /tmp/raxml-ng; \
-      wget -q https://github.com/amkozlov/raxml-ng/releases/download/1.2.2/raxml-ng_v1.2.2_linux_x86_64.zip || \
-        wget -q https://github.com/amkozlov/raxml-ng/releases/download/1.1.0/raxml-ng_v1.1.0_linux_x86_64.zip; \
+      wget -q https://github.com/amkozlov/raxml-ng/releases/download/1.2.2/raxml-ng_v1.2.2_linux_x86_64.zip; \
       unzip -q raxml-ng_*.zip || true; \
       if [ -f raxml-ng ]; then install -m 0755 raxml-ng /usr/local/bin/raxml-ng; fi; \
       cd / && rm -rf /tmp/raxml-ng; \
     fi; \
     if ! command -v pdflatex >/dev/null 2>&1; then \
-      R -q -e "install.packages('tinytex', repos='https://cloud.r-project.org'); tinytex::install_tinytex()" || true; \
+      R -q -e "install.packages('tinytex', repos='https://packagemanager.posit.co/cran/2026-07-20'); tinytex::install_tinytex()" || true; \
     fi; \
     dnf clean all; \
     rm -rf /var/cache/dnf
 
 RUN DOWNLOAD_STATIC_LIBV8=1 R -q -e "install.packages( \
     c('promises', 'later', 'webutils', 'sodium', 'plumber', 'jsonlite', 'httpuv', 'swagger', 'jsonvalidate', 'httr', 'ape', 'phangorn', 'remotes'), \
-    repos = 'https://cloud.r-project.org' \
+    repos = 'https://packagemanager.posit.co/cran/2026-07-20' \
     ); \
-    install.packages('BiocManager', repos = 'https://cloud.r-project.org'); \
+    install.packages('BiocManager', repos = 'https://packagemanager.posit.co/cran/2026-07-20'); \
     BiocManager::install(c('Biostrings', 'ggtree'), ask = FALSE); \
     stopifnot(all(c('promises', 'plumber', 'jsonvalidate') %in% rownames(installed.packages())))"
 
-RUN R -q -e "install.packages(c('paws.storage', 'digest'), repos = 'https://cloud.r-project.org'); \
+RUN R -q -e "install.packages(c('paws.storage', 'digest'), repos = 'https://packagemanager.posit.co/cran/2026-07-20'); \
     stopifnot(all(c('paws.storage', 'digest') %in% rownames(installed.packages())))"
 
 WORKDIR /srv
