@@ -2,7 +2,7 @@ import type { PhyloAnnotation } from "./types";
 import type { DetailRow } from "./lineageDisplay";
 
 /**
- * Annotation lookup + title/rows helpers for the phylogeny view, ported verbatim
+ * Annotation lookup + rows helpers for the phylogeny view, ported verbatim
  * from TreeSVG. Rebased onto `PhyloAnnotation` (was an inline `any`-typed Anno).
  */
 
@@ -30,46 +30,6 @@ export function resolveAnno(
 // The render path passes a node's `attrs` (a looser attribute bag) here, so the
 // anno param is typed as a plain string-keyed record rather than PhyloAnnotation.
 type AttrBag = Record<string, unknown>;
-
-export function buildTipTitle(
-  label: string,
-  anno: AttrBag | undefined,
-  colorField: string | null,
-  displayField: string | null,
-): string {
-  if (typeof anno?.tooltip === "string" && anno.tooltip.trim()) {
-    return anno.tooltip.trim();
-  }
-
-  const lines: string[] = [];
-  const displayValue = (displayField && String(anno?.[displayField] ?? "").trim()) || label;
-  if (displayValue) lines.push(displayValue);
-
-  if (!anno) return lines.join("\n");
-
-  const seqId = String(anno.sequence_id ?? "").trim();
-  if (seqId && seqId !== displayValue) lines.push(`sequence_id: ${seqId}`);
-
-  if (colorField) {
-    const cval = String(anno[colorField] ?? "").trim();
-    if (cval) lines.push(`${colorField}: ${cval}`);
-  }
-
-  const skip = new Set<string>(["label", "sequence_id", "tooltip"]);
-  if (displayField) skip.add(displayField);
-  if (colorField) skip.add(colorField);
-
-  const extras = Object.keys(anno)
-    .filter((k) => !skip.has(k))
-    .sort((a, b) => a.localeCompare(b, "en"));
-
-  for (const k of extras) {
-    const v = String(anno[k] ?? "").trim();
-    if (v) lines.push(`${k}: ${v}`);
-  }
-
-  return lines.join("\n");
-}
 
 /** Structured field rows for the node-detail modal (clicking a tip). */
 export function buildTipRows(

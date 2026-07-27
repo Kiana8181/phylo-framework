@@ -16,10 +16,8 @@ import {
   fromNewick,
   layoutTree,
   buildColorScale,
-  buildTitle,
   buildRows,
   resolveNodeDisplayLabel,
-  buildTipTitle,
   buildTipRows,
   resolveTipDisplayLabel,
   truncateLabel,
@@ -35,6 +33,7 @@ import {
   subtreeColorSummary,
   computeTrace,
   deriveTraceCollapsed,
+  computeMatchIds,
   LOD_DETAIL_K,
   type NodeVisual,
   type EdgeVisual,
@@ -172,35 +171,18 @@ export default function TreeView({
 
   const needle = highlightText?.trim().toLowerCase() ?? "";
 
-  // Matched node ids (existing predicate: lineage = any node; phylogeny = leaves).
-  const matchIds = useMemo(() => {
-    const ids = new Set<string>();
-    if (!needle) return ids;
-    for (const [id, node] of model.nodes) {
-      if (isLineage) {
-        const dl = resolveNodeDisplayLabel(node, displayIdField, showInternalNodes, showNodeNumbers);
-        if (
-          buildTitle(node, displayIdField).toLowerCase().includes(needle) ||
-          dl.toLowerCase().includes(needle) ||
-          node.label.toLowerCase().includes(needle)
-        ) {
-          ids.add(id);
-        }
-      } else if (node.isLeaf) {
-        const dl = resolveTipDisplayLabel(node.label, node.attrs, displayIdField ?? null);
-        if (
-          buildTipTitle(node.label, node.attrs, colorScale.field, displayIdField ?? null)
-            .toLowerCase()
-            .includes(needle) ||
-          node.label.toLowerCase().includes(needle) ||
-          dl.toLowerCase().includes(needle)
-        ) {
-          ids.add(id);
-        }
-      }
-    }
-    return ids;
-  }, [needle, model, isLineage, displayIdField, showInternalNodes, showNodeNumbers, colorScale.field]);
+  // Matched node ids. EXACT, whole-string match on identifier fields (lineage =
+  // any node; phylogeny = leaves) — see core/match.ts.
+  const matchIds = useMemo(
+    () =>
+      computeMatchIds(model, needle, {
+        isLineage,
+        displayIdField,
+        showInternalNodes,
+        showNodeNumbers,
+      }),
+    [needle, model, isLineage, displayIdField, showInternalNodes, showNodeNumbers],
+  );
 
   // Sequence-Trace focus + context. Active only after "Show me" (markMatches). The
   // user's collapse set is LAYERED, never mutated → clearing the search restores it.

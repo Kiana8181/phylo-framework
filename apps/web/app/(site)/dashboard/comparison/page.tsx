@@ -490,14 +490,15 @@ export default function ComparisonPage() {
             Locate a sequence
           </CardTitle>
           <p className="text-xs text-muted-foreground font-normal mt-1">
-            Enter a sequence_id (or part of a label) — matching nodes are ringed as you type. Click{" "}
+            Enter a full sequence_id — nodes whose identifier matches it exactly are ringed as you
+            type. Click{" "}
             <strong>Show me</strong> and each tree focuses the path to the match, fading the rest.
           </p>
         </CardHeader>
         <CardContent>
           <div className="flex flex-wrap items-center gap-2">
             <Input
-              placeholder="e.g. sequence_id or label text…"
+              placeholder="e.g. full sequence_id…"
               value={highlightSequence}
               onChange={(e) => {
                 setHighlightSequence(e.target.value);

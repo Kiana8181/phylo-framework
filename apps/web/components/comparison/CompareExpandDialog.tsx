@@ -227,7 +227,7 @@ export default function CompareExpandDialog({
           </div>
           <div className="flex flex-1 flex-wrap items-center justify-end gap-2">
             <Input
-              placeholder="sequence_id or label…"
+              placeholder="full sequence_id…"
               value={query}
               onChange={(e) => {
                 setQuery(e.target.value);

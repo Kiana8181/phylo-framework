@@ -3,7 +3,7 @@ import type { TreeNodeModel } from "./types";
 export type DetailRow = { key: string; value: string };
 
 /**
- * Display-label / title / rows helpers for the lineage view, ported verbatim
+ * Display-label / rows helpers for the lineage view, ported verbatim
  * from LineageSVG but rebased onto `TreeNodeModel` (attrs live on the node).
  * These are display concerns invoked at render time with the current options.
  */
@@ -45,37 +45,6 @@ export function resolveNodeDisplayLabel(
     if (seq) return seq.length > 16 ? `${seq.slice(0, 16)}…` : seq;
   }
   return resolveDisplayLabel(node, displayIdField);
-}
-
-export function buildTitle(node: TreeNodeModel, displayIdField?: string | null): string {
-  const attrs = node.attrs;
-  if (typeof attrs?.tooltip === "string" && attrs.tooltip.trim()) {
-    return attrs.tooltip.trim();
-  }
-
-  const lines: string[] = [];
-  const display = resolveDisplayLabel(node, displayIdField);
-  lines.push(display);
-
-  const seq = String(attrs?.sequence_id ?? "").trim();
-  if (seq && seq !== display) lines.push(`sequence_id: ${seq}`);
-
-  lines.push(`abundance: ${node.abundance}`);
-
-  if (attrs && typeof attrs === "object") {
-    const ignored = new Set<string>(["tooltip", "sequence_id", "abundance"]);
-    if (displayIdField) ignored.add(displayIdField);
-    const keys = Object.keys(attrs)
-      .filter((key) => !ignored.has(key))
-      .sort((a, b) => a.localeCompare(b, "en"));
-    for (const key of keys) {
-      const value = String(attrs[key] ?? "").trim();
-      if (!value) continue;
-      lines.push(`${key}: ${value}`);
-    }
-  }
-
-  return lines.join("\n");
 }
 
 /** Structured field rows for the node-detail modal (clicking a node). */

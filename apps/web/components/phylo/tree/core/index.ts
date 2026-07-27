@@ -24,17 +24,16 @@ export {
   type ColorKey,
 } from "./collapse";
 export { computeTrace, deriveTraceCollapsed, type TraceResult } from "./trace";
+export { computeMatchIds, type MatchOptions } from "./match";
 export {
   resolveDisplayLabel,
   resolveNodeDisplayLabel,
-  buildTitle,
   buildRows,
   type DetailRow,
 } from "./lineageDisplay";
 export {
   buildAnnoLookup,
   resolveAnno,
-  buildTipTitle,
   buildTipRows,
   resolveTipDisplayLabel,
 } from "./phyloDisplay";
