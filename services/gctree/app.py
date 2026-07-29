@@ -1842,8 +1842,11 @@ async def run_handler(request: Request):
                     {
                         "code": "JUMBLE_NONDETERMINISTIC",
                         "message": (
-                            "jumble > 0 makes DNAPARS tree search non-deterministic; "
-                            "this run may not be exactly reproducible."
+                            "jumble > 0 runs a multi-start DNAPARS search using a "
+                            "seed fixed internally by the configuration generator; "
+                            "the search is reproducible under the same software "
+                            "environment, but the seed is not exposed or recorded "
+                            "as a run parameter."
                         ),
                     }
                 )
