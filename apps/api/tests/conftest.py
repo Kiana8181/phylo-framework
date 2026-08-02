@@ -74,9 +74,14 @@ async def _build_schema() -> None:
         await engine.dispose()
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="session")
 def _setup_test_db():
-    """Create the test DB + schema once per session (synchronous wrapper)."""
+    """Create the test DB + schema once per session (synchronous wrapper).
+
+    Requested via the ``session`` fixture rather than autouse, so that tests
+    which need no database (converters, contracts, the preprocessing log) still
+    run when Postgres is unreachable instead of skipping the whole suite.
+    """
     try:
         asyncio.run(_ensure_database())
         asyncio.run(_build_schema())
@@ -86,7 +91,7 @@ def _setup_test_db():
 
 
 @pytest_asyncio.fixture
-async def session() -> AsyncSession:
+async def session(_setup_test_db) -> AsyncSession:
     """A clean AsyncSession per test (tables truncated up front)."""
     engine = create_async_engine(TEST_URL)
     maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)

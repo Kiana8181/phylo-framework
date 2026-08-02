@@ -639,6 +639,41 @@ class RunRepository(BaseRepository[Run]):
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def append_result_logs(
+        self,
+        run_id: UUID,
+        entries: List[dict],
+    ) -> Optional[Run]:
+        """Append log entries to an active run's stored result without finishing it.
+
+        Used by the worker to persist preprocessing steps as soon as they run,
+        before the method job is submitted, so the record survives a worker
+        restart and the reclaim path (where staging is skipped on resume).
+        Reuses the existing `result` JSONB column; the run stays active.
+        """
+        if not entries:
+            return None
+
+        run = await self.get_by_id(run_id)
+        if run is None or run.status not in ACTIVE_RUN_STATUSES:
+            return None
+
+        current = dict(run.result) if isinstance(run.result, dict) else {}
+        existing_logs = current.get("logs")
+        current["logs"] = (
+            list(existing_logs) if isinstance(existing_logs, list) else []
+        ) + list(entries)
+
+        stmt = (
+            update(Run)
+            .where(Run.id == run_id)
+            .where(Run.status.in_(ACTIVE_RUN_STATUSES))
+            .values(result=current)
+            .returning(Run)
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def set_result(
         self,
         run_id: UUID,

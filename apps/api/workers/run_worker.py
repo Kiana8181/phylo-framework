@@ -34,6 +34,7 @@ from apps.api.services.artifact_service import (
     ManifestError,
     parse_manifest,
 )
+from apps.api.preprocess.prepare_input import PREPROCESS_LOG_PREFIX
 from apps.api.services.run_staging import (
     StagingError,
     cleanup_workspace,
@@ -93,6 +94,36 @@ async def _resolve_input_storage_path(run, file_repo: FileRepository) -> Optiona
     return None
 
 
+def _merge_preprocess_logs(
+    unified_result: dict[str, Any], run: Any
+) -> dict[str, Any]:
+    """Prepend the run's already-stored `preprocess.*` entries to its logs.
+
+    Staging writes the preprocessing trace into `result["logs"]` before the
+    method job is submitted; the unified record built from the service response
+    knows nothing about it. Runs staged before this change carry no such
+    entries, and are returned unchanged.
+    """
+    stored = getattr(run, "result", None)
+    if not isinstance(stored, dict):
+        return unified_result
+    preprocess_logs = [
+        entry
+        for entry in (stored.get("logs") or [])
+        if isinstance(entry, dict)
+        and str(entry.get("step", "")).startswith(f"{PREPROCESS_LOG_PREFIX}.")
+    ]
+    if not preprocess_logs:
+        return unified_result
+
+    merged = dict(unified_result)
+    service_logs = merged.get("logs")
+    merged["logs"] = preprocess_logs + (
+        list(service_logs) if isinstance(service_logs, list) else []
+    )
+    return merged
+
+
 async def _persist_done(
     run_id: UUID, method_id: str, method_job_id: str, result: dict[str, Any]
 ) -> None:
@@ -128,6 +159,12 @@ async def _persist_done(
     # 4) Persist run summary + trees + artifact references.
     async with AsyncSessionLocal() as db:
         run_repo = RunRepository(db)
+        # set_result overwrites `result` wholesale, so re-attach the
+        # preprocessing entries stored at staging time ahead of the service's
+        # own logs. Runs staged before this change simply have none.
+        unified_result = _merge_preprocess_logs(
+            unified_result, await run_repo.get_by_id(run_id)
+        )
         await run_repo.set_result(run_id, unified_result, RunStatus.DONE)
         tree_repo = RunTreeRepository(db)
         await tree_repo.replace_for_run(run_id, tree_rows)
@@ -290,6 +327,14 @@ async def process_run(run_id: UUID, worker_id: str) -> None:
                     return
                 workspace = staged.workspace
                 container_path = staged.container_path
+                # Persist the preprocessing trace now, before the method job is
+                # submitted. _persist_done merges it back ahead of the service's
+                # own logs when it overwrites `result` with the unified record.
+                if staged.log_entries:
+                    async with AsyncSessionLocal() as db:
+                        run_repo = RunRepository(db)
+                        await run_repo.append_result_logs(run_id, staged.log_entries)
+                        await db.commit()
 
             # Re-check cancellation just before submitting.
             async with AsyncSessionLocal() as db:

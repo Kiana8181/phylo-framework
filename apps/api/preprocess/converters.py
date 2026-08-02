@@ -86,6 +86,20 @@ def _row_is_blank(row: list[str]) -> bool:
     return all(not cell or not cell.strip() for cell in row)
 
 
+def _has_utf8_bom(input_path: Path) -> bool:
+    """True when the file starts with a UTF-8 byte-order mark.
+
+    `_read_table` opens with `utf-8-sig`, which strips a leading BOM silently.
+    Checking the raw bytes first is the only way to report whether a BOM was
+    actually removed rather than assuming it.
+    """
+    try:
+        with input_path.open("rb") as handle:
+            return handle.read(3) == b"\xef\xbb\xbf"
+    except OSError:
+        return False
+
+
 def _read_table(
     input_path: Path, delimiter_char: str
 ) -> tuple[list[str], list[list[str]], int]:
@@ -267,6 +281,7 @@ def normalize_table_delimiter(
     UTF-8 BOM and drops fully-blank padding rows that Excel often emits.
     """
     detected_char = _table_delimiter(input_path, delimiter=delimiter)
+    bom_stripped = _has_utf8_bom(input_path)
     header, body, blank_rows_dropped = _read_table(
         input_path, delimiter_char=detected_char
     )
@@ -281,6 +296,7 @@ def normalize_table_delimiter(
         "input_delimiter": detected_char,
         "output_delimiter": output_char,
         "blank_rows_dropped": blank_rows_dropped,
+        "bom_stripped": bom_stripped,
     }
 
 

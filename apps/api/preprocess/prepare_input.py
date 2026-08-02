@@ -83,11 +83,71 @@ class PreparedInput:
     applied_steps: list[dict[str, Any]]
     warnings: list[dict[str, Any]]
     stats: dict[str, Any]
+    log_entries: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
         payload["final_path"] = str(self.final_path)
         return payload
+
+
+# Prefix that distinguishes orchestrator preprocessing entries from the method
+# services' own `method.*` entries and the worker's `api.worker.*` ones in the
+# run's `logs` array. The shape is RunLogEntry ({step, ok, cmd, out}) so the
+# client renders them without special-casing.
+PREPROCESS_LOG_PREFIX = "preprocess"
+
+
+def _preprocess_log(step: str, out: str, ok: bool = True) -> dict[str, Any]:
+    """Build one RunLogEntry-shaped record for an executed preprocessing step."""
+    return {"step": f"{PREPROCESS_LOG_PREFIX}.{step}", "ok": ok, "out": out}
+
+
+def _summary_log(
+    *,
+    method: str,
+    applied_steps: list[dict[str, Any]],
+    input_ext: str,
+    final_ext: str,
+    note: str,
+) -> dict[str, Any]:
+    """Terminal entry naming every step that ran.
+
+    Steps that were skipped emit no entry of their own, so this summary is what
+    makes their absence unambiguous rather than merely silent.
+    """
+    names = [str(entry.get("step")) for entry in applied_steps]
+    return _preprocess_log(
+        "summary",
+        "method={method}; input=.{input_ext} -> prepared=.{final_ext}; "
+        "steps applied={count} [{names}]; {note}".format(
+            method=method,
+            input_ext=input_ext,
+            final_ext=final_ext,
+            count=len(names),
+            names=", ".join(names) if names else "none",
+            note=note,
+        ),
+    )
+
+
+def _fmt_delimiter(char: Any) -> str:
+    """Render a delimiter as a readable token rather than a raw control char."""
+    return {"\t": "tab", ",": "comma", ";": "semicolon", "|": "pipe"}.get(
+        char, repr(char)
+    )
+
+
+def _fmt_step_warnings(messages: Any) -> str:
+    """Render a step's own warnings for its log entry, or '' when it raised none.
+
+    The warnings themselves stay on `PreparedInput.warnings` — this only makes
+    them traceable alongside the step that raised them.
+    """
+    texts = [str(m) for m in (messages or []) if str(m).strip()]
+    if not texts:
+        return ""
+    return "; warnings={n} [{texts}]".format(n=len(texts), texts="; ".join(texts))
 
 
 def _truthy(value: Any) -> bool:
@@ -396,6 +456,7 @@ def prepare_input_for_method(
     stats: dict[str, Any] = {"method_id": method, "input_ext": normalized_ext}
     warnings: list[dict[str, Any]] = []
     applied_steps: list[dict[str, Any]] = []
+    log_entries: list[dict[str, Any]] = []
     current_path = uploaded_path
     current_ext = normalized_ext
     step_offset = 0
@@ -443,8 +504,28 @@ def prepare_input_for_method(
             "input_delimiter": norm_stats.get("input_delimiter"),
             "output_delimiter": norm_stats.get("output_delimiter"),
             "blank_rows_dropped": norm_stats.get("blank_rows_dropped", 0),
+            "bom_stripped": bool(norm_stats.get("bom_stripped")),
         }
         blank_dropped = int(norm_stats.get("blank_rows_dropped") or 0)
+        in_delim = _fmt_delimiter(norm_stats.get("input_delimiter"))
+        out_delim = _fmt_delimiter(norm_stats.get("output_delimiter"))
+        log_entries.append(
+            _preprocess_log(
+                step_name,
+                "file={name} delimiter={in_d}->{out_d}{unchanged}; "
+                "rows={rows} columns={cols}; blank rows dropped={blank}; "
+                "byte-order mark stripped={bom}".format(
+                    name=current_path.name,
+                    in_d=in_delim,
+                    out_d=out_delim,
+                    unchanged=" (unchanged)" if in_delim == out_delim else "",
+                    rows=norm_stats.get("rows", 0),
+                    cols=norm_stats.get("cols", 0),
+                    blank=blank_dropped,
+                    bom="yes" if norm_stats.get("bom_stripped") else "no",
+                ),
+            )
+        )
         if blank_dropped:
             warnings.append(
                 {
@@ -504,6 +585,33 @@ def prepare_input_for_method(
             }
             for warning in rename_stats.get("warnings", []):
                 warnings.append({"code": "TABLE_RENAME_WARNING", "message": str(warning)})
+            # `resolved_map` is canonical_key -> the source header it resolved
+            # to, so the rename reads source -> canonical in the log.
+            resolved_map = rename_stats.get("resolved_map") or {}
+            renames = [
+                f"{source}->{canonical}"
+                for canonical, source in resolved_map.items()
+                if source and source != canonical
+            ]
+            unchanged = sum(
+                1 for canonical, source in resolved_map.items() if source == canonical
+            )
+            log_entries.append(
+                _preprocess_log(
+                    step_name,
+                    "file={name}; columns renamed={n_renamed} [{renames}]; "
+                    "already canonical={n_same}; rows={rows} columns={cols}"
+                    "{warn}".format(
+                        name=current_path.name,
+                        n_renamed=len(renames),
+                        renames=", ".join(renames) if renames else "none",
+                        n_same=unchanged,
+                        rows=rename_stats.get("rows", 0),
+                        cols=rename_stats.get("cols", 0),
+                        warn=_fmt_step_warnings(rename_stats.get("warnings")),
+                    ),
+                )
+            )
         except ConversionError as exc:
             if exc.code == "MISSING_REQUIRED_MAPPING":
                 raise _missing_mapping_error(
@@ -541,12 +649,22 @@ def prepare_input_for_method(
                 stats["input_table"] = _table_stats(current_path, current_ext)
             except Exception:
                 pass
+        log_entries.append(
+            _summary_log(
+                method=method,
+                applied_steps=applied_steps,
+                input_ext=normalized_ext,
+                final_ext=current_ext,
+                note="no format conversion required",
+            )
+        )
         return PreparedInput(
             final_path=current_path,
             final_ext=current_ext,
             applied_steps=applied_steps,
             warnings=warnings,
             stats=stats,
+            log_entries=log_entries,
         )
 
     chain = safe_conversion_chain(method, current_ext)  # type: ignore[arg-type]
@@ -567,9 +685,33 @@ def prepare_input_for_method(
             if step_name == "convert_csv_to_tsv":
                 convert_csv_to_tsv(current_path, output_path)
                 stats[f"step_{index}_table"] = _table_stats(output_path, "tsv")
+                log_entries.append(
+                    _preprocess_log(
+                        step_name,
+                        "file={name}; converted CSV -> TSV; "
+                        "result=.{ext} rows={rows} columns={cols}".format(
+                            name=current_path.name,
+                            ext=target_ext,
+                            rows=stats[f"step_{index}_table"].get("rows", 0),
+                            cols=stats[f"step_{index}_table"].get("cols", 0),
+                        ),
+                    )
+                )
             elif step_name == "convert_tsv_to_csv":
                 convert_tsv_to_csv(current_path, output_path)
                 stats[f"step_{index}_table"] = _table_stats(output_path, "csv")
+                log_entries.append(
+                    _preprocess_log(
+                        step_name,
+                        "file={name}; converted TSV -> CSV; "
+                        "result=.{ext} rows={rows} columns={cols}".format(
+                            name=current_path.name,
+                            ext=target_ext,
+                            rows=stats[f"step_{index}_table"].get("rows", 0),
+                            cols=stats[f"step_{index}_table"].get("cols", 0),
+                        ),
+                    )
+                )
             elif step_name == "convert_table_to_aligned_fasta":
                 delimiter: Literal["csv", "tsv"] | None
                 if current_ext == "csv":
@@ -595,6 +737,23 @@ def prepare_input_for_method(
                 stats[f"step_{index}_fasta"] = conversion_stats
                 for warning in conversion_stats.get("warnings", []):
                     warnings.append({"code": "UNEXPECTED_ALIGNMENT_CHARACTER", "message": warning})
+                log_entries.append(
+                    _preprocess_log(
+                        step_name,
+                        "file={name}; exported table -> aligned FASTA "
+                        "(id column={id_col}, aligned sequence column={seq_col}); "
+                        "result=.{ext} records={n} alignment length={length}"
+                        "{warn}".format(
+                            name=current_path.name,
+                            id_col=conversion_stats.get("used_id_column"),
+                            seq_col=conversion_stats.get("used_aligned_seq_column"),
+                            ext=target_ext,
+                            n=conversion_stats.get("n_records", 0),
+                            length=conversion_stats.get("alignment_length"),
+                            warn=_fmt_step_warnings(conversion_stats.get("warnings")),
+                        ),
+                    )
+                )
             else:
                 raise PreprocessError(
                     code="CONVERSION_FAILED",
@@ -634,10 +793,20 @@ def prepare_input_for_method(
         current_path = output_path
         current_ext = target_ext
 
+    log_entries.append(
+        _summary_log(
+            method=method,
+            applied_steps=applied_steps,
+            input_ext=normalized_ext,
+            final_ext=current_ext,
+            note="safe conversion chain applied",
+        )
+    )
     return PreparedInput(
         final_path=current_path,
         final_ext=current_ext,
         applied_steps=applied_steps,
         warnings=warnings,
         stats=stats,
+        log_entries=log_entries,
     )

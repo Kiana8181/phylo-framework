@@ -10,7 +10,7 @@ import asyncio
 import os
 import shutil
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 from uuid import UUID
@@ -22,6 +22,7 @@ from apps.api.preprocess.prepare_input import (
     PreprocessError,
     prepare_input_for_method,
     should_apply_column_mapping,
+    _preprocess_log,
 )
 
 METHOD_SERVICE_FILE_PREFIX = "METHOD_SERVICE_FILE_PREFIX"
@@ -217,6 +218,10 @@ class StagedInput:
     container_path: str
     host_path: Path
     workspace: Optional[Path]
+    # RunLogEntry-shaped records describing the preprocessing steps that ran.
+    # The worker persists these into the run's `logs` so the transformations
+    # applied to a run remain visible with its results.
+    log_entries: list[dict[str, Any]] = field(default_factory=list)
 
 
 async def prepare_method_input(
@@ -260,6 +265,7 @@ async def prepare_method_input(
 
     workspace: Path | None = None
     method_input_host_path: Path | None = None
+    log_entries: list[dict[str, Any]] = []
 
     def _err(*, code: str, message: str, details: dict[str, Any]) -> StagingError:
         e = StagingError(code=code, message=message, details=details)
@@ -268,6 +274,16 @@ async def prepare_method_input(
 
     try:
         if native_ok and not force_preprocess:
+            # The method consumes this extension as-is and no column mapping was
+            # requested, so the preprocessing chain never runs. Record that
+            # explicitly rather than leaving the run with no preprocessing trace.
+            log_entries.append(
+                _preprocess_log(
+                    "skipped",
+                    f"method={method_id}; input=.{input_ext} accepted natively; "
+                    "no preprocessing applied",
+                )
+            )
             existing_shared = await asyncio.to_thread(
                 resolve_storage_path_under_shared_mount, original_storage_path, storage
             )
@@ -323,6 +339,7 @@ async def prepare_method_input(
                     work_dir=workspace,
                 )
                 method_input_host_path = prepared.final_path
+                log_entries.extend(prepared.log_entries)
             except PreprocessError as exc:
                 pe = _err(code=exc.code, message=exc.message, details=exc.details)
                 raise pe from exc
@@ -378,4 +395,9 @@ async def prepare_method_input(
             err.workspace = workspace
         raise
 
-    return StagedInput(container_path=container_path, host_path=method_input_host_path, workspace=workspace)
+    return StagedInput(
+        container_path=container_path,
+        host_path=method_input_host_path,
+        workspace=workspace,
+        log_entries=log_entries,
+    )
