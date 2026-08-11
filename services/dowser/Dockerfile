@@ -8,7 +8,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     IGPHYML_BIN=/usr/local/share/igphyml/src/igphyml \
     IGPHYML_MOTIFS=/usr/local/share/igphyml/src/motifs \
     IGPHYML_PATH=/usr/local/share/igphyml/src/motifs \
-    STRICT_CONTRACT_ROUTES=true
+    STRICT_CONTRACT_ROUTES=true \
+    MAKEFLAGS=-j1
 
 RUN set -eux; \
     dnf -y install --setopt=install_weak_deps=False \
@@ -21,6 +22,9 @@ RUN set -eux; \
       libtiff-devel \
       fontconfig-devel \
       freetype-devel \
+      libuv-devel \
+      fribidi-devel \
+      harfbuzz-devel \
       wget \
       tar \
       gzip \
@@ -44,21 +48,28 @@ RUN set -eux; \
       cd / && rm -rf /tmp/raxml-ng; \
     fi; \
     if ! command -v pdflatex >/dev/null 2>&1; then \
-      R -q -e "install.packages('tinytex', repos='https://packagemanager.posit.co/cran/2026-07-20'); tinytex::install_tinytex()" || true; \
+      R -q -e "install.packages('tinytex', repos='https://cloud.r-project.org'); tinytex::install_tinytex()" || true; \
     fi; \
     dnf clean all; \
     rm -rf /var/cache/dnf
 
-RUN DOWNLOAD_STATIC_LIBV8=1 R -q -e "install.packages( \
-    c('promises', 'later', 'webutils', 'sodium', 'plumber', 'jsonlite', 'httpuv', 'swagger', 'jsonvalidate', 'httr', 'ape', 'phangorn', 'remotes'), \
-    repos = 'https://packagemanager.posit.co/cran/2026-07-20' \
-    ); \
-    install.packages('BiocManager', repos = 'https://packagemanager.posit.co/cran/2026-07-20'); \
-    BiocManager::install(c('Biostrings', 'ggtree'), ask = FALSE); \
-    stopifnot(all(c('promises', 'plumber', 'jsonvalidate') %in% rownames(installed.packages())))"
+RUN dnf -y install --setopt=install_weak_deps=False v8-devel nodejs-devel \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
 
-RUN R -q -e "install.packages(c('paws.storage', 'digest'), repos = 'https://packagemanager.posit.co/cran/2026-07-20'); \
-    stopifnot(all(c('paws.storage', 'digest') %in% rownames(installed.packages())))"
+RUN R -q -e " \
+    cran_repo <- 'https://cloud.r-project.org'; \
+    install.packages('V8', repos = cran_repo, Ncpus = 1); \
+    stopifnot('V8' %in% rownames(installed.packages())); \
+    cran_pkgs <- c('promises', 'later', 'webutils', 'sodium', 'plumber', 'jsonlite', 'httpuv', 'swagger', 'jsonvalidate', 'httr', 'ape', 'phangorn', 'remotes'); \
+    install.packages(cran_pkgs, repos = cran_repo, Ncpus = 1); \
+    stopifnot(all(c('promises', 'plumber', 'jsonvalidate') %in% rownames(installed.packages()))); \
+    install.packages('BiocManager', repos = cran_repo, Ncpus = 1); \
+    BiocManager::install(c('Biostrings', 'ggtree'), ask = FALSE, update = FALSE, Ncpus = 1); \
+    install.packages(c('paws.storage', 'digest'), repos = cran_repo, Ncpus = 1); \
+    stopifnot(all(c('promises', 'plumber', 'jsonvalidate', 'paws.storage', 'digest') %in% rownames(installed.packages()))) \
+    " \
+    && rm -rf /tmp/Rtmp* /root/.cache/R
 
 WORKDIR /srv
 COPY validators.R data_io.R format_clones.R tree_build.R dta.R time_evolution.R internal_seqs.R exports.R handlers.R plumber.R job_manager.R job_runner.R artifact_manifest.R object_storage.R /srv/
