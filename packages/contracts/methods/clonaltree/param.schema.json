@@ -59,8 +59,8 @@
     "abundance_threshold": {
       "type": "integer",
       "title": "Unique sequence abundance threshold",
-      "description": "Minimum count retained during AIRR formatting (format_labeling_imgt_airr.py -t).",
-      "minimum": 1,
+      "description": "Minimum count threshold passed to AIRR formatting (format_labeling_imgt_airr.py -t). Set to 0 to retain every sequence occurring at least once.",
+      "minimum": 0,
       "default": 3
     },
     "clone_cdr3_similarity": {

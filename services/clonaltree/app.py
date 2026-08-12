@@ -736,7 +736,7 @@ async def run_handler(request: Request):
 
         # Parameters (backward-compatible defaults + upstream alignment)
         run_name = slugify(params.get("run_name") or input_path.stem or "clonaltree")
-        abundance_threshold = clamp_int(params.get("abundance_threshold"), 3, 1)
+        abundance_threshold = clamp_int(params.get("abundance_threshold"), 3, 0)
 
         clone_thr_raw = params.get("clone_cdr3_similarity", params.get("initial_clustering_threshold", 0.7))
         clone_thr = clamp_float(clone_thr_raw, 0.7, 0.0, 1.0)
