@@ -41,6 +41,30 @@
       "type": ["object", "null"],
       "additionalProperties": true
     },
+    "collapse_mapping": {
+      "type": ["object", "null"],
+      "description": "Optional. Present only for methods that collapse identical input sequences (e.g. Dowser formatClones). Maps each folded-away input identifier to the retained record representing it, so every observed input sequence stays inspectable. Methods that do not collapse are not required to emit this field.",
+      "additionalProperties": true,
+      "properties": {
+        "artifact_tsv": { "type": "string" },
+        "artifact_json": { "type": "string" },
+        "n_collapsed": { "type": "integer" },
+        "n_dropped_no_alignment_match": { "type": "integer" },
+        "n_ambiguous": { "type": "integer" },
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "collapsed": { "type": "string" },
+              "representative": { "type": "string" },
+              "reason": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
     "warnings": {
       "type": "array",
       "items": {

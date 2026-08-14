@@ -53,6 +53,10 @@ prepare_dowser_result <- function(result) {
   if (!is.null(result$warnings)) {
     result$warnings <- preserve_json_array(result$warnings)
   }
+  if (!is.null(result$collapse_mapping) && is.list(result$collapse_mapping)) {
+    result$collapse_mapping$entries <-
+      preserve_json_array(unname(result$collapse_mapping$entries %||% list()))
+  }
   if (!is.null(result$artifacts)) {
     result$artifacts <- preserve_json_array(result$artifacts)
   }
@@ -604,6 +608,48 @@ build_export_bundle <- function(out_dir, result_parts, p) {
 
   write_json_file(result_parts$data_provenance, file.path(out_dir, "data_provenance.json"))
   artifacts <- add_artifact_if_exists(artifacts, out_dir, "data_provenance.json", "data_provenance.json", "json")
+
+  # Collapse mapping: always emitted, even when nothing was collapsed, so that a
+  # consumer can distinguish "no collapse occurred" from "mapping not recorded".
+  cm <- result_parts$collapse_mapping %||% list()
+  cm_entries <- cm$entries %||% list()
+  cm_df <- data.frame(
+    collapsed_sequence_id = vapply(cm_entries, function(e) e$collapsed %||% "", character(1)),
+    representative_sequence_id = vapply(cm_entries, function(e) e$representative %||% "", character(1)),
+    reason = vapply(cm_entries, function(e) e$reason %||% "", character(1)),
+    stringsAsFactors = FALSE
+  )
+  # write_tsv_file() intentionally skips empty frames; here the file must exist
+  # unconditionally so "nothing was collapsed" is distinguishable from
+  # "mapping not recorded". Write the header by hand in the zero-row case.
+  cm_path <- file.path(out_dir, "collapse_mapping.tsv")
+  if (nrow(cm_df)) {
+    write_tsv_file(cm_df, cm_path)
+  } else {
+    writeLines(
+      paste("collapsed_sequence_id", "representative_sequence_id", "reason", sep = "\t"),
+      cm_path
+    )
+  }
+  artifacts <- add_artifact_if_exists(artifacts, out_dir, "collapse_mapping.tsv", "collapse_mapping.tsv", "tsv")
+
+  reps <- list()
+  for (e in cm_entries) {
+    if (nzchar(e$representative %||% "")) reps[[e$collapsed]] <- e$representative
+  }
+  cm_summary <- list(
+    n_input_ids = as.integer(cm$n_input_ids %||% 0L),
+    n_retained_ids = as.integer(cm$n_retained_ids %||% 0L),
+    n_collapsed = as.integer(cm$n_collapsed %||% 0L),
+    n_dropped_no_alignment_match = as.integer(cm$n_dropped_no_alignment_match %||% 0L),
+    n_ambiguous = as.integer(cm$n_ambiguous %||% 0L),
+    collapsed_ids = preserve_json_array(
+      unname(lapply(cm_entries, function(e) e$collapsed %||% ""))
+    ),
+    representatives = reps
+  )
+  write_json_file(cm_summary, file.path(out_dir, "collapse_summary.json"))
+  artifacts <- add_artifact_if_exists(artifacts, out_dir, "collapse_summary.json", "collapse_summary.json", "json")
 
   run_meta <- list(
     analysis_mode = p$analysis_mode,

@@ -209,6 +209,41 @@
       ],
       "additionalProperties": true
     },
+    "collapse_mapping": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Optional. Records which input sequence_id values formatClones folded away and which retained record represents each, so every observed input sequence remains inspectable.",
+      "additionalProperties": true,
+      "properties": {
+        "artifact_tsv": { "type": "string" },
+        "artifact_json": { "type": "string" },
+        "n_collapsed": { "type": "integer" },
+        "n_dropped_no_alignment_match": { "type": "integer" },
+        "n_ambiguous": { "type": "integer" },
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "collapsed": { "type": "string" },
+              "representative": { "type": "string" },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "collapsed_by_formatClones",
+                  "dropped_by_formatClones_no_alignment_match",
+                  "dropped_by_formatClones_alignment_length_mismatch",
+                  "dropped_by_formatClones_ambiguous_match"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
     "artifacts": {
       "type": "array",
       "items": {
