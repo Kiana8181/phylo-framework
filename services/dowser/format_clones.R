@@ -87,6 +87,7 @@ build_format_clones_args <- function(db, p) {
     num_fields = if (length(num_keep)) num_keep else NULL,
     columns = if (length(extra_columns)) extra_columns else NULL,
     collapse = isTRUE(p$collapse_identical_sequences %||% TRUE),
+    randomize = FALSE,
     minseq = as.integer(p$minseq %||% 3L),
     nproc = as.integer(p$nproc %||% 1L),
     mod3 = isTRUE(p$mod3 %||% FALSE),
