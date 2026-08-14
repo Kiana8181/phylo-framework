@@ -22,6 +22,7 @@
     "column_map.d_identity",
     "column_map.j_identity",
     "column_map.sequence_alignment",
+    "column_map.germline_alignment_d_mask",
     "column_map.j_sequence_alignment",
     "column_map.v_sequence_alignment",
     "column_map.j_sequence_alignment_aa",
@@ -55,6 +56,7 @@
     "clone_cdr3_similarity",
     "top_clones",
     "clonotypes_per_clone",
+    "use_input_alignment",
     "use_refinement",
     "v_distance",
     "j_distance",
@@ -83,6 +85,7 @@
         "column_map.d_identity",
         "column_map.j_identity",
         "column_map.sequence_alignment",
+        "column_map.germline_alignment_d_mask",
         "column_map.j_sequence_alignment",
         "column_map.v_sequence_alignment",
         "column_map.j_sequence_alignment_aa",
@@ -116,7 +119,7 @@
       "id": "runSelection",
       "label": "Run Selection",
       "order": 1,
-      "fields": ["run_name", "abundance_threshold", "top_clones", "clonotypes_per_clone"]
+      "fields": ["run_name", "abundance_threshold", "top_clones", "clonotypes_per_clone", "use_input_alignment"]
     },
     {
       "id": "cloneClustering",
@@ -161,6 +164,7 @@
     "column_map.d_identity": "e.g. d_identity",
     "column_map.j_identity": "e.g. j_identity",
     "column_map.sequence_alignment": "e.g. sequence_alignment",
+    "column_map.germline_alignment_d_mask": "e.g. germline_alignment_d_mask",
     "column_map.j_sequence_alignment": "e.g. j_sequence_alignment",
     "column_map.v_sequence_alignment": "e.g. v_sequence_alignment",
     "column_map.j_sequence_alignment_aa": "e.g. j_sequence_alignment_aa",
@@ -202,6 +206,7 @@
     "column_map.d_identity": { "when": { "doMapping": true } },
     "column_map.j_identity": { "when": { "doMapping": true } },
     "column_map.sequence_alignment": { "when": { "doMapping": true } },
+    "column_map.germline_alignment_d_mask": { "whenAll": [{ "doMapping": true }, { "use_input_alignment": true }] },
     "column_map.j_sequence_alignment": { "whenAll": [{ "doMapping": true }, { "use_refinement": true }] },
     "column_map.v_sequence_alignment": { "whenAll": [{ "doMapping": true }, { "use_refinement": true }] },
     "column_map.j_sequence_alignment_aa": { "whenAll": [{ "doMapping": true }, { "use_refinement": true }] },

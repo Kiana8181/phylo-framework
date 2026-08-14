@@ -8,6 +8,7 @@ from typing import Any, Literal
 from apps.api.preprocess.column_requirements import (
     CLONALTREE_ALIGNMENT_REQUIRED_KEYS,
     CLONALTREE_BASE_REQUIRED_KEYS,
+    CLONALTREE_PREALIGNED_GERMLINE_REQUIRED_KEYS,
     CLONALTREE_REFINEMENT_REQUIRED_KEYS,
     DOWSER_HL_REQUIRED_KEYS,
     DOWSER_REGION_REQUIRED_KEYS,
@@ -170,13 +171,20 @@ def _uses_clonaltree_refinement(params: dict[str, Any]) -> bool:
     return _truthy(params.get("use_refinement"))
 
 
+def _uses_clonaltree_input_alignment(params: dict[str, Any]) -> bool:
+    return _truthy(params.get("use_input_alignment"))
+
+
 def active_required_keys(method_id: str, params: dict[str, Any]) -> list[str]:
     method = method_id.lower().strip()
     if method == "clonaltree":
         required = list(CLONALTREE_BASE_REQUIRED_KEYS)
         if _uses_clonaltree_refinement(params):
             required.extend(CLONALTREE_REFINEMENT_REQUIRED_KEYS)
-        required.extend(CLONALTREE_ALIGNMENT_REQUIRED_KEYS)
+        if _uses_clonaltree_input_alignment(params):
+            required.extend(CLONALTREE_PREALIGNED_GERMLINE_REQUIRED_KEYS)
+        else:
+            required.extend(CLONALTREE_ALIGNMENT_REQUIRED_KEYS)
         return required
     if method == "dowser":
         required = list(DOWSER_REQUIRED_KEYS)
