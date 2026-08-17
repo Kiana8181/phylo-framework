@@ -14,9 +14,22 @@
         "junction_aa",
         "cdr3_aa"
       ]
+    }
+  ],
+  "conditionalGroups": [
+    {
+      "id": "prealigned_germline",
+      "when": { "use_input_alignment": true },
+      "defaultWhenAbsent": false,
+      "note": "Required when using the existing sequence_alignment; used as the germline root.",
+      "columns": [
+        "germline_alignment_d_mask"
+      ]
     },
     {
       "id": "alignment",
+      "when": { "use_input_alignment": false },
+      "defaultWhenAbsent": true,
       "note": "Required by alignment_intraclonal.py when ClonalTree builds per-clone trees.",
       "columns": [
         "sequence",
@@ -45,9 +58,7 @@
         "d_sequence_start",
         "d_sequence_end"
       ]
-    }
-  ],
-  "conditionalGroups": [
+    },
     {
       "id": "refinement",
       "when": { "use_refinement": true },

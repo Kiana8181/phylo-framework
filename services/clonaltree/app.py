@@ -522,7 +522,6 @@ def cleanup_alignment_sidecars(out_dir: Path, run_name: str, clone_idx: str, lim
         f"{run_name}_{clone_idx}_{limit_label}.aln",
         f"{run_name}_{clone_idx}_{limit_label}_uniq.aln.fa",
         f"{run_name}_{clone_idx}_{limit_label}_selected_seq_uniq.aln.fa",
-        f"{run_name}_{clone_idx}_{limit_label}_matching_sequences.txt",
         f"{run_name}_{clone_idx}_{limit_label}_aligned_regions.txt",
         f"{run_name}_{clone_idx}_{limit_label}_selected_seq.aln",
     ]
@@ -736,7 +735,7 @@ async def run_handler(request: Request):
 
         # Parameters (backward-compatible defaults + upstream alignment)
         run_name = slugify(params.get("run_name") or input_path.stem or "clonaltree")
-        abundance_threshold = clamp_int(params.get("abundance_threshold"), 3, 1)
+        abundance_threshold = clamp_int(params.get("abundance_threshold"), 3, 0)
 
         clone_thr_raw = params.get("clone_cdr3_similarity", params.get("initial_clustering_threshold", 0.7))
         clone_thr = clamp_float(clone_thr_raw, 0.7, 0.0, 1.0)
@@ -751,6 +750,7 @@ async def run_handler(request: Request):
             warnings.append("No clonotype limits parsed; defaulting to 30.")
 
         use_refinement = parse_bool(params.get("use_refinement"), True)
+        use_input_alignment = parse_bool(params.get("use_input_alignment"), False)
         use_abundance = parse_bool(params.get("tree_use_abundance"), True)
         revision = parse_bool(params.get("tree_revision"), True)
 
@@ -1006,7 +1006,8 @@ async def run_handler(request: Request):
                         str(out_dir / f"{run_name}_{idx}"),
                         "-s",
                         limit_label,
-                    ],
+                    ]
+                    + (["--use-input-alignment"] if use_input_alignment else []),
                     cwd=BASE_CODES_DIR,
                     step=f"alignment_clone{idx}_limit{limit_label}",
                     logs=logs,
@@ -1122,6 +1123,7 @@ async def run_handler(request: Request):
             "input_basename": input_path.name,
             "clonotype_method": clonotype_method,
             "clonotype_similarity_threshold": clonotype_similarity_threshold,
+            "use_input_alignment": use_input_alignment,
         }
 
         logs.append(

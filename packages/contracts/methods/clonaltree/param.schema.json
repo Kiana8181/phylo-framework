@@ -22,6 +22,7 @@
         "d_identity": { "type": "string", "title": "D identity column", "default": "" },
         "j_identity": { "type": "string", "title": "J identity column", "default": "" },
         "sequence_alignment": { "type": "string", "title": "Sequence alignment column", "default": "" },
+        "germline_alignment_d_mask": { "type": "string", "title": "Germline alignment (masked) column", "default": "" },
         "j_sequence_alignment": { "type": "string", "title": "J sequence alignment column", "default": "" },
         "v_sequence_alignment": { "type": "string", "title": "V sequence alignment column", "default": "" },
         "j_sequence_alignment_aa": { "type": "string", "title": "J sequence alignment aa column", "default": "" },
@@ -59,8 +60,8 @@
     "abundance_threshold": {
       "type": "integer",
       "title": "Unique sequence abundance threshold",
-      "description": "Minimum count retained during AIRR formatting (format_labeling_imgt_airr.py -t).",
-      "minimum": 1,
+      "description": "Minimum count threshold passed to AIRR formatting (format_labeling_imgt_airr.py -t). Set to 0 to retain every sequence occurring at least once.",
+      "minimum": 0,
       "default": 3
     },
     "clone_cdr3_similarity": {
@@ -83,6 +84,12 @@
       "title": "Clonotypes per clone",
       "description": "Comma/space-separated clonotype counts per selected clone (e.g. \"30, 200\" or \"all\").",
       "default": "30, 200"
+    },
+    "use_input_alignment": {
+      "type": "boolean",
+      "title": "Use input alignment directly",
+      "description": "Skip ClonalTree's MUSCLE alignment step and build trees from the existing sequence_alignment column. Requires germline_alignment_d_mask for the germline root.",
+      "default": false
     },
     "use_refinement": {
       "type": "boolean",

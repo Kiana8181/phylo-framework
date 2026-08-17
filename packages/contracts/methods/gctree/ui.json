@@ -17,6 +17,7 @@
     "column_map.sequence_id",
     "column_map.sequence_alignment",
     "root",
+    "at_abundance",
     "frame",
     "frame2",
     "chain_split",
@@ -44,7 +45,8 @@
         "doMapping",
         "column_map.sequence_id",
         "column_map.sequence_alignment",
-        "root"
+        "root",
+        "at_abundance"
       ]
     },
     {
@@ -106,6 +108,17 @@
         { "input_scenario": "airr_or_changeo_table_adapter" }
       ]
     },
-    "color_mode": { "when": { "apply_coloring_settings": true } }
+    "color_mode": { "when": { "apply_coloring_settings": true } },
+
+    "at_abundance": { "when": { "$fastaIdStyle": "at_abundance" } }
+  },
+  "validation": {
+    "requiredWhen": [
+      {
+        "field": "at_abundance",
+        "when": { "$fastaIdStyle": "at_abundance" },
+        "message": "Please answer — GCtree cannot interpret “@N” IDs on its own."
+      }
+    ]
   }
 }

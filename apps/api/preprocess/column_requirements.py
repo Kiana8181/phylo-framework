@@ -58,12 +58,14 @@ CLONALTREE_BASE_REQUIRED_KEYS = _required_group("clonaltree", "base")
 # Required only when services/clonaltree/app.py runs refinement.py.
 CLONALTREE_REFINEMENT_REQUIRED_KEYS = _conditional_group("clonaltree", "refinement")
 # Required by alignment_intraclonal.py when ClonalTree builds per-clone trees.
-CLONALTREE_ALIGNMENT_REQUIRED_KEYS = _required_group("clonaltree", "alignment")
+CLONALTREE_ALIGNMENT_REQUIRED_KEYS = _conditional_group("clonaltree", "alignment")
+# Required when the existing input alignment is used directly.
+CLONALTREE_PREALIGNED_GERMLINE_REQUIRED_KEYS = _conditional_group(
+    "clonaltree", "prealigned_germline"
+)
 
 CLONALTREE_REQUIRED_KEYS = (
     CLONALTREE_BASE_REQUIRED_KEYS
-    + CLONALTREE_REFINEMENT_REQUIRED_KEYS
-    + CLONALTREE_ALIGNMENT_REQUIRED_KEYS
 )
 
 # GCtree tabular adapter requirements only (CSV/TSV -> aligned FASTA path).

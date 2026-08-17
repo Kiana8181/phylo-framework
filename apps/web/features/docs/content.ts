@@ -196,10 +196,13 @@ const METHOD_CONTENT: Record<MethodId, MethodContent> = {
       tree_stats: "GCtree CLI `--tree_stats`.",
       top_n: "Number of top-ranked trees extracted from GCtree output.",
       apply_isotype: "Invokes GCtree's isotype-annotation utility (idmap + isotype map bundle).",
+      at_abundance:
+        "Not a GCtree CLI flag. Answering Yes makes the framework build the `abundances.csv` that GCtree consumes from the numbers in your headers; answering No sends the IDs through the usual GCtree-safe renaming instead.",
     },
     conditionalNotes: [
       "The column-mapping toggle and fields appear only for CSV/TSV input (the FASTA-conversion path).",
       "Root sequence ID, quick search and jumble apply only to the FASTA-derived scenarios; the extra coloring mode appears only when coloring settings are enabled.",
+      "GCtree writes sequence IDs as `name@abundance` (for example `seq3@9`) in its own output, but it cannot read that form back — its deduplicate step counts only IDs that are entirely digits, and the `@` breaks the DNAPARS root lookup. So when every header in your FASTA looks like `name@N`, an extra question appears asking whether N is an abundance count. Answer Yes and the framework builds the abundance file from those numbers; answer No and the IDs are replaced with short GCtree-safe IDs, with the originals kept in the ID map.",
     ],
     zipBundle: {
       intro: [

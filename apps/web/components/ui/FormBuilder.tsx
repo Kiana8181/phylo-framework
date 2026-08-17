@@ -253,7 +253,9 @@ function matchesCondition(values: unknown, cond: Record<string, unknown>): boole
   });
 }
 
-function matchesRule(values: unknown, rule: VisibilityRule): boolean {
+/** Evaluates a `visibility` / `requiredWhen` rule against form values merged
+ *  with any read-only context (e.g. `$inputFormat`). Exported for tests. */
+export function matchesRule(values: unknown, rule: VisibilityRule): boolean {
   if (rule.when && !matchesCondition(values, rule.when)) return false;
   if (rule.whenAll && !rule.whenAll.every((c) => matchesCondition(values, c))) return false;
   if (rule.whenAny && !rule.whenAny.some((c) => matchesCondition(values, c))) return false;
@@ -330,7 +332,12 @@ function zodObjectFromJsonSchema(schema: JSONSchema): z.ZodTypeAny {
   return z.object(shape);
 }
 
-export function buildZodSchema(schema: JSONSchema): z.ZodType<FormValues, FormValues> {
+/** `context` holds read-only `$`-prefixed values (e.g. `$inputFormat`) so that
+ *  `requiredWhen` rules can key off them the same way `visibility` rules do. */
+export function buildZodSchema(
+  schema: JSONSchema,
+  context?: Record<string, unknown>,
+): z.ZodType<FormValues, FormValues> {
   const base = zodObjectFromJsonSchema(schema);
   const validation = schema.uiHints?.validation;
   if (!validation?.requiredWhen?.length && !validation?.mutuallyExclusive?.length) {
@@ -338,8 +345,9 @@ export function buildZodSchema(schema: JSONSchema): z.ZodType<FormValues, FormVa
   }
 
   return base.superRefine((data: unknown, ctx: z.RefinementCtx) => {
+    const evalData = context ? { ...context, ...(data as object) } : data;
     for (const rule of validation.requiredWhen ?? []) {
-      if (matchesRule(data, rule) && isEmptyValue(getNestedValue(data, rule.field))) {
+      if (matchesRule(evalData, rule) && isEmptyValue(getNestedValue(data, rule.field))) {
         ctx.addIssue({
           code: "custom",
           path: rule.field.split("."),
@@ -439,7 +447,7 @@ export default function FormBuilder({
    *  evaluation only. Never submitted. Use `$`-prefixed reserved keys. */
   context?: Record<string, unknown>;
 }) {
-  const zodSchema = useMemo(() => buildZodSchema(schema), [schema]);
+  const zodSchema = useMemo(() => buildZodSchema(schema, context), [schema, context]);
   const formDefaults = useMemo(() => defaultsFromSchema(schema, defaults), [schema, defaults]);
   const leafFields = useMemo(() => collectLeafFields(schema), [schema]);
   const fieldMap = useMemo(() => {

@@ -275,10 +275,26 @@ run_handler_impl <- function(req, res) {
     fc <- run_format_clones(db_working, p)
     clones <- fc$clones
     chain_qc <- fc$chain_qc
+    collapse_mapping <- fc$collapse_mapping %||% list()
     if (nrow(clones) == 0) {
       return(fail_local(sprintf("No clones met minseq=%d.", p$minseq), step = "dowser.clones.format"))
     }
     input_qc$n_clones_after_formatClones <- nrow(clones)
+
+    # An ambiguous or unmatched collapse is a real finding for the user, not an
+    # internal detail — surface it alongside the recorded mapping.
+    if (length(collapse_mapping$warnings %||% character(0))) {
+      warnings <- c(warnings, as.character(collapse_mapping$warnings))
+    }
+    if ((collapse_mapping$n_dropped_no_alignment_match %||% 0L) > 0L) {
+      warnings <- c(warnings, sprintf(
+        paste0(
+          "%d input sequence(s) were removed by formatClones with no retained record ",
+          "sharing their alignment; see collapse_mapping.tsv."
+        ),
+        collapse_mapping$n_dropped_no_alignment_match
+      ))
+    }
 
     if (identical(p$tree_build, "igphyml")) {
       igv <- validate_igphyml_sequences_after_format_clones(clones)
@@ -296,6 +312,9 @@ run_handler_impl <- function(req, res) {
     data_provenance$transformations[[length(data_provenance$transformations) + 1]] <- list(
       action = "dowser_formatClones",
       collapse = isTRUE(p$collapse_identical_sequences),
+      collapsed_ids_recorded = TRUE,
+      collapsed_ids_artifact = "dowser_artifacts/collapse_mapping.tsv",
+      n_collapsed = as.integer(collapse_mapping$n_collapsed %||% 0L),
       traits = as.list(fc$format_args$traits %||% list()),
       text_fields = as.list(fc$format_args$text_fields %||% list()),
       num_fields = as.list(fc$format_args$num_fields %||% list()),
@@ -419,6 +438,7 @@ run_handler_impl <- function(req, res) {
       trees_detail = trees_detail,
       input_qc = input_qc,
       data_provenance = data_provenance,
+      collapse_mapping = collapse_mapping,
       discrete_trait_analysis = discrete_trait_analysis,
       igphyml = igphyml_out,
       figure_paths = fig$figure_paths,
@@ -482,6 +502,15 @@ run_handler_impl <- function(req, res) {
       stats = stats,
       input_qc = input_qc,
       data_provenance = data_provenance,
+      collapse_mapping = list(
+        artifact_tsv = "dowser_artifacts/collapse_mapping.tsv",
+        artifact_json = "dowser_artifacts/collapse_summary.json",
+        n_collapsed = as.integer(collapse_mapping$n_collapsed %||% 0L),
+        n_dropped_no_alignment_match =
+          as.integer(collapse_mapping$n_dropped_no_alignment_match %||% 0L),
+        n_ambiguous = as.integer(collapse_mapping$n_ambiguous %||% 0L),
+        entries = collapse_mapping$entries %||% list()
+      ),
       discrete_trait_analysis = discrete_trait_analysis,
       time_evolution = time_evolution,
       igphyml = igphyml_out,

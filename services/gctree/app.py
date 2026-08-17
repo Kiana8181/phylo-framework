@@ -110,6 +110,18 @@ RANKING_LINEAR_TERM_RE = re.compile(r"^(?:\d+(?:\.\d+)?)?([BAR])$")
 FASTA_LINE_DNA_RE = re.compile(r"^[ACGTURYSWKMBDHVNacgturyswkmbdhvn.\-]+$")
 AMBIG_NT = set("NRYSWKMBDHVnryswkmbdhv")  # not counting 'n' separately
 FASTA_HEADER_NUMERIC_RE = re.compile(r"^\d+$")
+# PHYLIP/DNAPARS-safe taxon name. Anything else (notably '@', '|', '-', ':') is
+# rewritten by the taxon-name handling inside dnapars, which then breaks the
+# name lookup gctree does when parsing the outfile.
+FASTA_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_.]{1,10}$")
+# gctree's own 'name@abundance' output convention. NOTE: keep this literal in
+# sync with apps/api/services/fasta_id_style.py and apps/web/lib/fastaIdStyle.ts
+# — three deploy units with no shared runtime.
+FASTA_ID_AT_ABUNDANCE_RE = re.compile(r"^(?P<name>[^@\s]+)@(?P<abundance>\d+)$")
+
+ID_STYLE_AT_ABUNDANCE = "at_abundance"
+ID_STYLE_OTHER_AT = "other_at"
+ID_STYLE_PLAIN = "plain"
 
 # ---------- FastAPI ----------
 app = FastAPI(title="GCtree microservice (bridge mode)")
@@ -363,11 +375,12 @@ def parse_fasta_records(path: Path) -> List[FastaRecord]:
 
 
 def is_gctree_safe_fasta_id(sid: str) -> bool:
-    if not sid or len(sid) > 10:
-        return False
-    try:
-        sid.encode("ascii")
-    except UnicodeEncodeError:
+    """At most 10 characters from [A-Za-z0-9_.], and not purely numeric.
+
+    The character class subsumes the ASCII and length checks. Purely numeric IDs
+    are excluded separately because DNAPARS names internal nodes with integers.
+    """
+    if not FASTA_SAFE_ID_RE.fullmatch(sid or ""):
         return False
     return FASTA_HEADER_NUMERIC_RE.fullmatch(sid) is None
 
@@ -389,6 +402,82 @@ def validate_fasta_record_ids(records_list: Sequence[FastaRecord]) -> Optional[s
             )
         seen.add(sid)
     return None
+
+
+def classify_fasta_id_style(records_list: Sequence[FastaRecord]) -> str:
+    """Detect gctree's 'name@abundance' header convention.
+
+    gctree writes 'seq3@9' in its own outputs, but `deduplicate` cannot read it
+    back: --id_abundances only recognises IDs that are entirely digits. So an
+    '@N' FASTA silently loses its abundances, and the '@' additionally breaks the
+    root lookup once dnapars rewrites the taxon name.
+    """
+    if not records_list:
+        return ID_STYLE_PLAIN
+    has_at = False
+    all_at_abundance = True
+    for record in records_list:
+        sid = record.original_id
+        if "@" in sid:
+            has_at = True
+        if not FASTA_ID_AT_ABUNDANCE_RE.fullmatch(sid):
+            all_at_abundance = False
+    if not has_at:
+        return ID_STYLE_PLAIN
+    return ID_STYLE_AT_ABUNDANCE if all_at_abundance else ID_STYLE_OTHER_AT
+
+
+@dataclass(frozen=True)
+class AtAbundanceStrip:
+    records: List["FastaRecord"]
+    abundance_by_original: Dict[str, int]
+    original_by_stripped: Dict[str, str]
+    stripped_by_original: Dict[str, str]
+
+
+def strip_at_abundance_ids(records_list: Sequence[FastaRecord]) -> AtAbundanceStrip:
+    """Turn 'seq3@9' headers into 'seq3' plus an abundance lookup.
+
+    Raises ValueError when two records collapse onto the same name, which is
+    genuinely ambiguous input rather than something we can guess through.
+    """
+    stripped: List[FastaRecord] = []
+    abundance_by_original: Dict[str, int] = {}
+    original_by_stripped: Dict[str, str] = {}
+    stripped_by_original: Dict[str, str] = {}
+
+    for record in records_list:
+        m = FASTA_ID_AT_ABUNDANCE_RE.fullmatch(record.original_id)
+        if not m:
+            raise ValueError(
+                f"FASTA ID {record.original_id!r} does not use the 'name@abundance' form."
+            )
+        name = m.group("name")
+        if name in original_by_stripped:
+            raise ValueError(
+                f"Removing the '@N' suffix makes IDs collide: {original_by_stripped[name]!r} "
+                f"and {record.original_id!r} both become {name!r}. Rename them so each "
+                "sequence keeps a unique ID."
+            )
+        original_by_stripped[name] = record.original_id
+        stripped_by_original[record.original_id] = name
+        abundance_by_original[record.original_id] = int(m.group("abundance"))
+        stripped.append(FastaRecord(original_id=name, sequence=record.sequence))
+
+    return AtAbundanceStrip(
+        records=stripped,
+        abundance_by_original=abundance_by_original,
+        original_by_stripped=original_by_stripped,
+        stripped_by_original=stripped_by_original,
+    )
+
+
+def write_fasta_records(records_list: Sequence[FastaRecord], dst: Path) -> None:
+    lines: List[str] = []
+    for record in records_list:
+        lines.append(f">{record.original_id}")
+        lines.append(record.sequence)
+    dst.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
 
 
 def _next_generated_safe_id(used: set[str], counter: int) -> Tuple[str, int]:
@@ -464,11 +553,7 @@ def remap_fasta_ids_for_gctree(
     if remap_err:
         raise ValueError(f"Internal FASTA ID remapping failed: {remap_err}")
 
-    fasta_lines: List[str] = []
-    for record in records_list:
-        fasta_lines.append(f">{original_to_safe[record.original_id]}")
-        fasta_lines.append(record.sequence)
-    dst.write_text("\n".join(fasta_lines) + ("\n" if fasta_lines else ""), encoding="utf-8")
+    write_fasta_records(remapped_records, dst)
 
     map_lines = ["safe_id\toriginal_id"]
     for record in records_list:
@@ -509,10 +594,15 @@ def validate_gctree_safe_fasta_ids(records_list: Sequence[FastaRecord]) -> Optio
         seen.add(sid)
         if len(sid) > 10:
             add_issue(sid, f"too long (>10 PHYLIP characters; length {len(sid)})")
-        try:
-            sid.encode("ascii")
-        except UnicodeEncodeError:
-            add_issue(sid, "non-ASCII characters")
+        bad_chars = sorted({ch for ch in sid if not FASTA_SAFE_ID_RE.fullmatch(ch)})
+        if bad_chars:
+            add_issue(
+                sid,
+                "contains characters outside A-Z a-z 0-9 _ . ("
+                + ", ".join(repr(c) for c in bad_chars[:8])
+                + ("…" if len(bad_chars) > 8 else "")
+                + ")",
+            )
         if FASTA_HEADER_NUMERIC_RE.fullmatch(sid):
             add_issue(
                 sid,
@@ -527,8 +617,9 @@ def validate_gctree_safe_fasta_ids(records_list: Sequence[FastaRecord]) -> Optio
         uniq = sorted(set(rs))
         lines.append(f"  {sid_key!r}: " + "; ".join(uniq))
     return (
-        "FASTA sequence IDs failed validation (must be unique, non-empty ASCII, "
-        "at most 10 characters, not purely numeric). Issues:\n" + "\n".join(lines)
+        "FASTA sequence IDs failed validation (must be unique, non-empty, at most "
+        "10 characters from A-Z a-z 0-9 _ . and not purely numeric). Issues:\n"
+        + "\n".join(lines)
     )
 
 
@@ -1104,28 +1195,101 @@ def parse_fasta_idmap(path: Path) -> Dict[str, str]:
     return out
 
 
+def parse_deduplicate_idmap_members(path: Path) -> Dict[str, List[str]]:
+    """Parse idmap.txt as dedup_label -> [member ids].
+
+    `deduplicate` writes 'label,id1:id2:id3'. parse_idmap() deliberately keeps
+    the colon-joined blob as one opaque string (it only ever needs a
+    representative); this one splits out the individual members.
+    """
+    out: Dict[str, List[str]] = {}
+    if not path.exists():
+        return out
+    try:
+        rows = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception:
+        return out
+    for raw in rows:
+        line = raw.strip()
+        if not line:
+            continue
+        label, _, joined = line.partition(",")
+        label = label.strip()
+        if not label:
+            continue
+        out[label] = [m for m in (x.strip() for x in joined.split(":")) if m]
+    return out
+
+
+def rewrite_abundances_from_at_ids(
+    abund_csv: Path,
+    dedup_idmap: Path,
+    fasta_idmap: Path,
+    abundance_by_original: Mapping[str, int],
+) -> Tuple[Dict[str, int], List[str]]:
+    """Replace deduplicate's per-record counts with the '@N' abundances.
+
+    `deduplicate` counts how many records collapsed onto each unique sequence.
+    With '@N' IDs each record is really N observations, so sum the N values of a
+    label's members instead. Root semantics are inherited from deduplicate:
+    id_map[root] excludes the root record itself, so a root's own '@N' does not
+    count towards its abundance (see gctree/deduplicate.py).
+    """
+    members_by_label = parse_deduplicate_idmap_members(dedup_idmap)
+    safe_to_original = parse_fasta_idmap(fasta_idmap)
+    if not members_by_label:
+        raise ValueError("deduplicate idmap is empty; cannot map '@N' abundances.")
+
+    counts: Dict[str, int] = {}
+    unmapped: List[str] = []
+    for label, members in members_by_label.items():
+        total = 0
+        for member in members:
+            original = safe_to_original.get(member, member)
+            value = abundance_by_original.get(original)
+            if value is None:
+                unmapped.append(member)
+                continue
+            total += value
+        counts[label] = total
+
+    abund_csv.write_text(
+        "".join(f"{label},{count}\n" for label, count in counts.items()),
+        encoding="utf-8",
+    )
+    return counts, unmapped
+
+
 def bridge_deduplicate_idmap_to_original(
     dedup_idmap: Path, fasta_idmap: Path, output: Path
 ) -> Tuple[bool, int, List[str]]:
-    dedup_to_safe = parse_idmap(dedup_idmap)
+    members_by_label = parse_deduplicate_idmap_members(dedup_idmap)
     safe_to_original = parse_fasta_idmap(fasta_idmap)
-    if not dedup_to_safe or not safe_to_original:
+    if not members_by_label or not safe_to_original:
         return False, 0, []
 
     bridged_count = 0
     unmapped_safe_ids: List[str] = []
     out_lines: List[str] = []
     seen_unmapped: set[str] = set()
-    for label, safe_id in dedup_to_safe.items():
-        original_id = safe_to_original.get(safe_id)
-        if original_id is None:
-            original_id = safe_id
-            if safe_id not in seen_unmapped:
-                unmapped_safe_ids.append(safe_id)
-                seen_unmapped.add(safe_id)
-        else:
-            bridged_count += 1
-        out_lines.append(f"{label}\t{original_id}")
+    for label, members in members_by_label.items():
+        # A label can collapse several records; deduplicate joins them with ':'
+        # and so do we, mapping each member back to its uploaded ID separately.
+        originals: List[str] = []
+        for safe_id in members:
+            original_id = safe_to_original.get(safe_id)
+            if original_id is None:
+                original_id = safe_id
+                if safe_id not in seen_unmapped:
+                    unmapped_safe_ids.append(safe_id)
+                    seen_unmapped.add(safe_id)
+            else:
+                bridged_count += 1
+            originals.append(original_id)
+        if not originals:
+            continue
+        # DISPLAY_ID_JOIN, not ':': these IDs become Newick node names.
+        out_lines.append(f"{label}\t" + DISPLAY_ID_JOIN.join(originals))
 
     output.write_text(
         "\n".join(out_lines) + ("\n" if out_lines else ""), encoding="utf-8"
@@ -1136,6 +1300,30 @@ def bridge_deduplicate_idmap_to_original(
 # Characters that force single-quote quoting of a Newick label (lossless).
 # Standards-compliant: wrap in single quotes and double any interior quote.
 _NEWICK_QUOTE_CHARS = frozenset("()[]{}/\\,;:=*'\"`<>~")
+
+# `deduplicate` joins the several original IDs of a collapsed genotype with ':'
+# (e.g. 'seq3@9:seq120@1'). ':' is Newick's branch-length delimiter, so such a
+# label parses as a name followed by a branch length that is not a number.
+# Quoting it is legal Newick but many parsers reject quoted labels, so join the
+# IDs with '|' instead — not reserved in Newick, and conventional in sequence
+# IDs. gctree itself sidesteps this by naming the node 'seq1' and keeping the
+# list in a separate `original_ids` node attribute.
+DISPLAY_ID_JOIN = "|"
+
+
+def normalize_idmap_for_display(idmap: Mapping[str, str]) -> Dict[str, str]:
+    """Re-join ':'-separated original IDs so they are safe as Newick labels.
+
+    Applies to idmaps supplied verbatim in a ZIP bundle, which carry
+    `deduplicate`'s own ':' convention. Idmaps this service writes already use
+    ``DISPLAY_ID_JOIN``, so this is a no-op for them.
+    """
+    out: Dict[str, str] = {}
+    for label, value in idmap.items():
+        if ":" in value:
+            value = DISPLAY_ID_JOIN.join(p for p in value.split(":") if p)
+        out[label] = value
+    return out
 
 
 def _escape_newick_label(label: str) -> str:
@@ -1276,7 +1464,11 @@ def _base_payload(
     response_idmap_path: Optional[Path] = None,
 ) -> JSONResponse:
     node_abundances = parse_abundances_csv(abund_csv)
-    label_to_sequence_id = parse_idmap(response_idmap_path or idmap_txt)
+    # Normalised here so the shipped map and the display Newick always agree,
+    # whichever scenario produced the idmap.
+    label_to_sequence_id = normalize_idmap_for_display(
+        parse_idmap(response_idmap_path or idmap_txt)
+    )
 
     # Download-only Newick(s) relabeled with the user's original sequence_ids,
     # aligned 1:1 with `trees`. Written into `tmp` BEFORE the zip is built so
@@ -2153,7 +2345,165 @@ async def run_handler(request: Request):
                     }
                 )
 
-            bio_w, bio_err = validate_fasta_for_gctree(fasta_norm, root)
+            # ----- 'name@abundance' header handling -----
+            # Must run before validate_fasta_for_gctree, which checks that the
+            # root ID is present: stripping '@N' changes that ID.
+            try:
+                norm_records = parse_fasta_records(fasta_norm)
+            except Exception as e:
+                return early_fail(
+                    f"Failed to parse FASTA: {e}",
+                    logs,
+                    tmp,
+                    outbase=outbase_safe,
+                    input_scenario=input_scenario,
+                    warnings=warnings,
+                )
+
+            id_style = classify_fasta_id_style(norm_records)
+            at_choice = str(p.get("at_abundance") or "").strip().lower()
+            fasta_for_run = fasta_norm
+            at_abundance_by_original: Optional[Dict[str, int]] = None
+            at_stripped_by_original: Dict[str, str] = {}
+
+            if id_style == ID_STYLE_AT_ABUNDANCE:
+                if at_choice not in ("yes", "no"):
+                    return early_fail(
+                        "Your FASTA IDs look like 'name@N' (e.g. "
+                        f"{norm_records[0].original_id!r}). GCtree cannot read that "
+                        "convention on its own, so we need to know what N means: set "
+                        "the parameter 'at_abundance' to \"yes\" if N is an abundance "
+                        "count (the framework will build abundances.csv from it), or "
+                        '"no" to have the IDs replaced with short GCtree-safe IDs.',
+                        logs,
+                        tmp,
+                        outbase=outbase_safe,
+                        input_scenario=input_scenario,
+                        warnings=warnings,
+                    )
+                if at_choice == "yes":
+                    try:
+                        strip_result = strip_at_abundance_ids(norm_records)
+                    except ValueError as e:
+                        return early_fail(
+                            str(e),
+                            logs,
+                            tmp,
+                            outbase=outbase_safe,
+                            input_scenario=input_scenario,
+                            warnings=warnings,
+                        )
+                    at_abundance_by_original = strip_result.abundance_by_original
+                    at_stripped_by_original = strip_result.stripped_by_original
+
+                    # Accept the root either as uploaded ('naive@0') or stripped ('naive').
+                    if root in at_stripped_by_original:
+                        resolved_root = at_stripped_by_original[root]
+                    elif root in strip_result.original_by_stripped:
+                        resolved_root = root
+                    else:
+                        return early_fail(
+                            f"Root sequence ID {root!r} not found among FASTA headers. "
+                            "With 'name@N' IDs you may give either the full header "
+                            "(e.g. 'naive@0') or the name alone (e.g. 'naive').",
+                            logs,
+                            tmp,
+                            outbase=outbase_safe,
+                            input_scenario=input_scenario,
+                            warnings=warnings,
+                        )
+
+                    total_abundance = sum(at_abundance_by_original.values())
+                    if total_abundance <= 0:
+                        return early_fail(
+                            "Every '@N' abundance in the FASTA is zero, so GCtree has no "
+                            "observed sequences to rank on. Check the header numbers, or "
+                            'set at_abundance to "no" if they are not abundances.',
+                            logs,
+                            tmp,
+                            outbase=outbase_safe,
+                            input_scenario=input_scenario,
+                            warnings=warnings,
+                        )
+
+                    root_own_abundance = at_abundance_by_original[
+                        strip_result.original_by_stripped[resolved_root]
+                    ]
+                    if root_own_abundance > 0:
+                        warnings.append(
+                            {
+                                "code": "AT_ROOT_ABUNDANCE_IGNORED",
+                                "message": (
+                                    f"The root header carries '@{root_own_abundance}', but GCtree "
+                                    "derives the root's abundance only from other sequences "
+                                    "identical to it, so that number is not counted."
+                                ),
+                            }
+                        )
+
+                    fasta_for_run = tmp / "input_at_stripped.fasta"
+                    write_fasta_records(strip_result.records, fasta_for_run)
+                    # `original_root` keeps the ID the user actually supplied.
+                    root = resolved_root
+                    render_meta["at_abundance"] = {
+                        "style": id_style,
+                        "choice": "yes",
+                        "total_abundance": total_abundance,
+                        "n_sequences": len(strip_result.records),
+                    }
+                    logs.append(
+                        {
+                            "step": "at_abundance_ids",
+                            "ok": True,
+                            "out": (
+                                f"Detected 'name@N' IDs; treating N as abundance. Stripped "
+                                f"{len(strip_result.records)} suffix(es) (total abundance "
+                                f"{total_abundance}); root {resolved_root!r}."
+                            ),
+                        }
+                    )
+                else:
+                    render_meta["at_abundance"] = {"style": id_style, "choice": "no"}
+                    warnings.append(
+                        {
+                            "code": "AT_IDS_NOT_ABUNDANCE",
+                            "message": (
+                                "FASTA IDs contain '@', which DNAPARS cannot carry through a "
+                                "PHYLIP taxon name. You indicated the number after '@' is not "
+                                "an abundance, so the IDs were replaced with short GCtree-safe "
+                                "IDs; the originals are preserved in the ID map."
+                            ),
+                        }
+                    )
+                    logs.append(
+                        {
+                            "step": "at_abundance_ids",
+                            "ok": True,
+                            "out": "Detected 'name@N' IDs; user answered 'no', sanitising IDs instead.",
+                        }
+                    )
+            elif id_style == ID_STYLE_OTHER_AT:
+                render_meta["at_abundance"] = {"style": id_style, "choice": None}
+                warnings.append(
+                    {
+                        "code": "AT_IDS_SANITIZED",
+                        "message": (
+                            "Some FASTA IDs contain '@' but not in the 'name@N' abundance form, "
+                            "so it cannot be read as abundance. DNAPARS cannot carry '@' through "
+                            "a PHYLIP taxon name, so the IDs were replaced with short GCtree-safe "
+                            "IDs; the originals are preserved in the ID map."
+                        ),
+                    }
+                )
+                logs.append(
+                    {
+                        "step": "at_abundance_ids",
+                        "ok": True,
+                        "out": "Detected '@' in IDs but not the 'name@N' form; sanitising IDs.",
+                    }
+                )
+
+            bio_w, bio_err = validate_fasta_for_gctree(fasta_for_run, root)
             warnings.extend(bio_w)
             if bio_err:
                 return early_fail(
@@ -2169,7 +2519,7 @@ async def run_handler(request: Request):
             fasta_idmap = tmp / "fasta_idmap.tsv"
             try:
                 remap_result = remap_fasta_ids_for_gctree(
-                    fasta_norm, fasta_safe, root, fasta_idmap
+                    fasta_for_run, fasta_safe, root, fasta_idmap
                 )
                 remapped_records = parse_fasta_records(remap_result.fasta_path)
                 remap_err = validate_gctree_safe_fasta_ids(remapped_records)
@@ -2188,6 +2538,23 @@ async def run_handler(request: Request):
             effective_root = remap_result.effective_root
             fasta_remapped_count = remap_result.remapped_count
             fasta_idmap_artifact = fasta_idmap.name
+
+            if at_abundance_by_original is not None:
+                # remap_fasta_ids_for_gctree mapped safe_id -> stripped name.
+                # Re-point it at the uploaded header ('naive@0') so the response
+                # idmap shows the names the user recognises, and so the abundance
+                # rewrite below can look up '@N' values directly.
+                stripped_to_original = {
+                    stripped: original
+                    for original, stripped in at_stripped_by_original.items()
+                }
+                map_lines = ["safe_id\toriginal_id"]
+                for safe_id, stripped in remap_result.safe_to_original.items():
+                    map_lines.append(
+                        f"{safe_id}\t{stripped_to_original.get(stripped, stripped)}"
+                    )
+                fasta_idmap.write_text("\n".join(map_lines) + "\n", encoding="utf-8")
+
             render_meta["fasta_id_remap"] = {
                 "remapped_count": fasta_remapped_count,
                 "mapping_file": fasta_idmap.name,
@@ -2242,6 +2609,45 @@ async def run_handler(request: Request):
                     input_scenario=input_scenario,
                     warnings=warnings,
                 )
+
+            if at_abundance_by_original is not None:
+                # deduplicate counted one observation per record; replace those
+                # counts with the '@N' abundances the headers actually encode.
+                try:
+                    at_counts, at_unmapped = rewrite_abundances_from_at_ids(
+                        abund_csv, idmap_txt, fasta_idmap, at_abundance_by_original
+                    )
+                except Exception as e:
+                    return early_fail(
+                        f"Could not apply '@N' abundances to abundances.csv: {e}",
+                        logs,
+                        tmp,
+                        outbase=outbase_safe,
+                        input_scenario=input_scenario,
+                        warnings=warnings,
+                    )
+                logs.append(
+                    {
+                        "step": "at_abundance_rewrite",
+                        "ok": True,
+                        "out": (
+                            f"Rewrote {abund_csv.name} from '@N' headers: {len(at_counts)} label(s), "
+                            f"total abundance {sum(at_counts.values())}."
+                        ),
+                    }
+                )
+                if at_unmapped:
+                    warnings.append(
+                        {
+                            "code": "AT_ABUNDANCE_UNMAPPED_IDS",
+                            "message": (
+                                f"{len(at_unmapped)} deduplicate member ID(s) could not be traced "
+                                "back to an '@N' header and were counted as 0: "
+                                + ", ".join(sorted(set(at_unmapped))[:8])
+                            ),
+                        }
+                    )
+
             if idmap_txt.is_file() and idmap_txt.stat().st_size > 0:
                 generated_or_bundle_idmap_source = "generated_deduplicate_idmap.txt"
                 idmap_original = tmp / "idmap.original.tsv"
@@ -2271,7 +2677,7 @@ async def run_handler(request: Request):
                             "ok": True,
                             "out": (
                                 f"Created {idmap_original.name} with {bridged_count} bridged "
-                                f"entry(ies) from {idmap_txt.name} using {fasta_idmap.name}."
+                                f"member ID(s) from {idmap_txt.name} using {fasta_idmap.name}."
                             ),
                         }
                     )
