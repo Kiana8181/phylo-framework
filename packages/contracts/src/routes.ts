@@ -27,6 +27,7 @@ export const API_ROUTES = {
   filesDelete: (id: string) => `/files/${encodeURIComponent(id)}`,
   datasetDelete: (id: string) => `/datasets/${encodeURIComponent(id)}`,
   datasetDownload: (id: string) => `/datasets/${encodeURIComponent(id)}/download`,
+  datasetFastaIdStyle: (id: string) => `/datasets/${encodeURIComponent(id)}/fasta-id-style`,
   uploadInit: () => `/uploads/init`,
   uploadContent: (uploadId: string) => `/uploads/${encodeURIComponent(uploadId)}/content`,
   uploadCancel: (uploadId: string) => `/uploads/${encodeURIComponent(uploadId)}`,

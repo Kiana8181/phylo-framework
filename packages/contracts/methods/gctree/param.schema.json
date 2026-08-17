@@ -42,6 +42,12 @@
       "description": "Original uploaded ID of the germline / outgroup sequence in the input FASTA alignment (FASTA-derived scenarios). It may be remapped internally to a short PHYLIP/GCtree-safe ID.",
       "default": "GL"
     },
+    "at_abundance": {
+      "type": "string",
+      "title": "Does the number after “@” mean abundance?",
+      "description": "Your FASTA headers look like name@N (for example seq3@9). GCtree writes this form in its own output but cannot read it back, and the “@” also breaks the DNAPARS root lookup. Yes — treat N as the number of times that sequence was observed and build the abundance counts from it. No — the “@” is part of the name, so the IDs are replaced with short GCtree-safe IDs (the originals stay in the ID map).",
+      "enum": ["yes", "no"]
+    },
     "frame": {
       "type": "integer",
       "title": "Coding frame (1–3)",

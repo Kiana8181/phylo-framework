@@ -69,3 +69,45 @@ describe("buildZodSchema", () => {
     expect(schema.safeParse({ which_clones: "c1" }).success).toBe(true);
   });
 });
+
+// GCtree asks whether the number in `seq3@9` is an abundance, but only when the
+// uploaded FASTA actually uses that form. That fact lives in the read-only
+// context (`$fastaIdStyle`), not in any form field, so `requiredWhen` has to be
+// able to key off context the same way `visibility` does.
+const gctreeLikeSchema = {
+  type: "object",
+  properties: {
+    at_abundance: { type: "string", enum: ["yes", "no"] },
+  },
+  uiHints: {
+    validation: {
+      requiredWhen: [
+        {
+          field: "at_abundance",
+          when: { $fastaIdStyle: "at_abundance" },
+          message: "Please answer",
+        },
+      ],
+    },
+  },
+} as const;
+
+describe("buildZodSchema with read-only context", () => {
+  it("requires the field when a context-only key matches", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const schema = buildZodSchema(gctreeLikeSchema as any, { $fastaIdStyle: "at_abundance" });
+    expect(errorsByField(schema, {})["at_abundance"]).toContain("Please answer");
+    expect(schema.safeParse({ at_abundance: "yes" }).success).toBe(true);
+  });
+
+  it("leaves the field optional when the context key does not match", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const schema = buildZodSchema(gctreeLikeSchema as any, { $fastaIdStyle: "plain" });
+    expect(schema.safeParse({}).success).toBe(true);
+  });
+
+  it("leaves the field optional when no context is supplied at all", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(buildZodSchema(gctreeLikeSchema as any).safeParse({}).success).toBe(true);
+  });
+});
