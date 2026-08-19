@@ -10,12 +10,7 @@ import { Card } from "@/components/ui/card";
 import { SpinnerIllustration } from "@/components/ui/spinner-illustration";
 import { useContractSpec, useMethods } from "@/features/methods/hooks";
 import { RunsApi } from "@/features/runs/api";
-import {
-  useCancelQueuedRun,
-  useDashboardRuns,
-  useRunResult,
-  useRunStatus,
-} from "@/features/runs/hooks";
+import { useCancelQueuedRun, useDashboardRuns, useRunResult, useRunStatus } from "@/features/runs/hooks";
 import { notify } from "@/lib/notify";
 import { formatRunDuration } from "@/lib/runDuration";
 import { type MethodInfo, type RunSummary } from "@phylo/contracts";
@@ -65,8 +60,7 @@ function RunResultsSurface({ runId, onBack }: { runId: string; onBack: () => voi
   const currentStatus = status?.status;
   const isDone = currentStatus === "DONE";
   const isFailed = currentStatus === "ERROR" || currentStatus === "CANCELLED";
-  const isActive =
-    currentStatus === "RUNNING" || currentStatus === "QUEUED" || currentStatus === "PENDING";
+  const isActive = currentStatus === "RUNNING" || currentStatus === "QUEUED" || currentStatus === "PENDING";
 
   const resultEnabled = isDone || isFailed;
   const { data: result } = useRunResult(runId, resultEnabled);
@@ -92,7 +86,7 @@ function RunResultsSurface({ runId, onBack }: { runId: string; onBack: () => voi
   const runStartedAt = status?.started_at ?? result?.started_at ?? null;
   const runFinishedAt = status?.finished_at ?? result?.finished_at ?? null;
   const runDurationLabel = formatRunDuration(runStartedAt, runFinishedAt);
-
+  console.log(result);
   // "Use as defaults for next run" hands the config back to the live dashboard's
   // Add-run wizard via a one-shot sessionStorage handoff, then navigates home.
   const handleUseAsDefaults = () => {
@@ -148,7 +142,8 @@ function RunResultsSurface({ runId, onBack }: { runId: string; onBack: () => voi
           datasetLabel={runDatasetLabel}
           errorCode={status?.error?.code}
           errorMessage={status?.error?.message ?? status?.message ?? result?.error}
-          logs={result?.logs}
+          // @ts-expect-error - logs is not always present
+          logs={result?.error?.logs}
           paramsSlot={
             runMethodKey ? (
               <RunParamsPanel
@@ -229,10 +224,9 @@ function RunResultsSurface({ runId, onBack }: { runId: string; onBack: () => voi
 
           {result?.dataset?.is_deleted && (
             <div className="rounded border p-3 bg-amber-50 text-amber-900 dark:bg-amber-950/30 dark:text-amber-200 text-sm">
-              The input dataset{" "}
-              <span className="font-medium">{result.dataset.original_filename}</span> has been
-              deleted. This run&apos;s results are preserved, but to run it again you must
-              re-upload the file.
+              The input dataset <span className="font-medium">{result.dataset.original_filename}</span> has
+              been deleted. This run&apos;s results are preserved, but to run it again you must re-upload the
+              file.
             </div>
           )}
 
