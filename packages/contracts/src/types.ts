@@ -240,6 +240,14 @@ export type RunLogEntry = {
   out?: string;
 };
 
+export type RunErrorDetails = {
+  ok?: boolean;
+  logs?: RunLogEntry[];
+  error?: string | null;
+  artifacts?: Array<Record<string, unknown>>;
+  manifest_version?: number;
+};
+
 export type RunWarning =
   | string
   | {
@@ -632,7 +640,7 @@ export type RunResult = {
   provenance?: RunProvenance;
   warnings?: RunWarning[];
   logs?: RunLogEntry[];
-  error?: string | null;
+  error?: string | RunErrorDetails | null;
   trees_detail?: DowserTreeDetail[];
   discrete_trait_analysis?: DowserDtaResult;
   time_evolution?: DowserTimeEvolution;

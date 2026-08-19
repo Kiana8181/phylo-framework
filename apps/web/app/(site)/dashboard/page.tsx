@@ -86,7 +86,13 @@ function RunResultsSurface({ runId, onBack }: { runId: string; onBack: () => voi
   const runStartedAt = status?.started_at ?? result?.started_at ?? null;
   const runFinishedAt = status?.finished_at ?? result?.finished_at ?? null;
   const runDurationLabel = formatRunDuration(runStartedAt, runFinishedAt);
-  console.log(result);
+  const resultErrorMessage = typeof result?.error === "string" ? result.error : result?.error?.error;
+  const resultErrorLogs =
+    result?.logs && result.logs.length > 0
+      ? result.logs
+      : result?.error !== null && typeof result?.error === "object"
+        ? result.error.logs
+        : undefined;
   // "Use as defaults for next run" hands the config back to the live dashboard's
   // Add-run wizard via a one-shot sessionStorage handoff, then navigates home.
   const handleUseAsDefaults = () => {
@@ -141,9 +147,8 @@ function RunResultsSurface({ runId, onBack }: { runId: string; onBack: () => voi
           methodLabel={modelLabel}
           datasetLabel={runDatasetLabel}
           errorCode={status?.error?.code}
-          errorMessage={status?.error?.message ?? status?.message ?? result?.error}
-          // @ts-expect-error - logs is not always present
-          logs={result?.error?.logs}
+          errorMessage={status?.error?.message ?? status?.message ?? resultErrorMessage}
+          logs={resultErrorLogs}
           paramsSlot={
             runMethodKey ? (
               <RunParamsPanel
