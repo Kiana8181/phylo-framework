@@ -2,7 +2,10 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Unified Run Result",
   "type": "object",
-  "required": ["ok", "trees"],
+  "required": [
+    "ok",
+    "trees"
+  ],
   "properties": {
     "ok": {
       "type": "boolean"
@@ -11,16 +14,29 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["id", "newick", "has_lineage_plot", "has_service_image"],
+        "required": [
+          "id",
+          "newick",
+          "has_lineage_plot",
+          "has_service_image"
+        ],
         "properties": {
-          "id": { "type": "string" },
+          "id": {
+            "type": "string"
+          },
           "newick": {
             "type": "string",
             "pattern": ";\\s*$"
           },
-          "original_newick": { "type": "string" },
-          "has_lineage_plot": { "type": "boolean" },
-          "has_service_image": { "type": "boolean" }
+          "original_newick": {
+            "type": "string"
+          },
+          "has_lineage_plot": {
+            "type": "boolean"
+          },
+          "has_service_image": {
+            "type": "boolean"
+          }
         },
         "additionalProperties": false
       }
@@ -30,7 +46,10 @@
     "annotations": {
       "type": "array",
       "items": {
-        "type": ["array", "null"],
+        "type": [
+          "array",
+          "null"
+        ],
         "items": {
           "type": "object",
           "additionalProperties": true
@@ -38,28 +57,50 @@
       }
     },
     "figures": {
-      "type": ["object", "null"],
+      "type": [
+        "object",
+        "null"
+      ],
       "additionalProperties": true
     },
     "collapse_mapping": {
-      "type": ["object", "null"],
+      "type": [
+        "object",
+        "null"
+      ],
       "description": "Optional. Present only for methods that collapse identical input sequences (e.g. Dowser formatClones). Maps each folded-away input identifier to the retained record representing it, so every observed input sequence stays inspectable. Methods that do not collapse are not required to emit this field.",
       "additionalProperties": true,
       "properties": {
-        "artifact_tsv": { "type": "string" },
-        "artifact_json": { "type": "string" },
-        "n_collapsed": { "type": "integer" },
-        "n_dropped_no_alignment_match": { "type": "integer" },
-        "n_ambiguous": { "type": "integer" },
+        "artifact_tsv": {
+          "type": "string"
+        },
+        "artifact_json": {
+          "type": "string"
+        },
+        "n_collapsed": {
+          "type": "integer"
+        },
+        "n_dropped_no_alignment_match": {
+          "type": "integer"
+        },
+        "n_ambiguous": {
+          "type": "integer"
+        },
         "entries": {
           "type": "array",
           "items": {
             "type": "object",
             "additionalProperties": true,
             "properties": {
-              "collapsed": { "type": "string" },
-              "representative": { "type": "string" },
-              "reason": { "type": "string" }
+              "collapsed": {
+                "type": "string"
+              },
+              "representative": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
             }
           }
         }
@@ -69,14 +110,25 @@
       "type": "array",
       "items": {
         "anyOf": [
-          { "type": "string" },
+          {
+            "type": "string"
+          },
           {
             "type": "object",
-            "required": ["code", "message"],
+            "required": [
+              "code",
+              "message"
+            ],
             "properties": {
-              "code": { "type": "string" },
-              "message": { "type": "string" },
-              "treeId": { "type": "string" },
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "treeId": {
+                "type": "string"
+              },
               "details": {}
             },
             "additionalProperties": true
@@ -84,7 +136,12 @@
         ]
       }
     },
-    "render": { "type": ["string", "null"] },
+    "render": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "logs": {
       "type": "array",
       "items": {
@@ -94,7 +151,123 @@
     },
     "artifact_zip_b64": {},
     "artifact_name": {
-      "type": ["string", "null"]
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "version_info": {
+      "type": "object",
+      "description": "Environment identity captured at build/deploy time and copied in when the run was persisted. Optional: runs recorded before this feature carry no version_info, and any field the deployment could not determine is null with a reason listed under `unavailable`.",
+      "properties": {
+        "schema_version": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "method_id": {
+          "type": "string"
+        },
+        "captured_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "framework": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "version": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "git_commit": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "git_branch": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "git_dirty": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": true
+        },
+        "service": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "image_name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "image_digest": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "base_image": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "build_args": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "tool_versions": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": true
+        },
+        "service_reported": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "reference_data": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unavailable": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true
     }
   },
   "additionalProperties": true

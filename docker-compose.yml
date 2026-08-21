@@ -1,5 +1,9 @@
 x-api-common-env: &api_common_env
   CONTRACTS_DIR: /contracts
+  # Environment identity written by `npm run version:capture` at build/deploy
+  # time and copied into each run's result. A missing file costs the
+  # version_info block and nothing else — the run still completes.
+  PHYLO_VERSION_INFO_PATH: /version-info.json
   CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
   STRICT_CONTRACT_ROUTES: ${STRICT_CONTRACT_ROUTES:-true}
   HOST_RUNTIME_SHARED_ROOT: ${HOST_RUNTIME_SHARED_ROOT:-/runtime/storage}
@@ -231,6 +235,10 @@ services:
       - type: bind
         source: ${STORAGE_LOCAL_PATH:-runtime/storage}
         target: /runtime/storage
+      - type: bind
+        source: ./runtime/version-info.json
+        target: /version-info.json
+        read_only: true
     command: sh -lc "python -m apps.api.workers.run_worker"
     profiles: ["dev"]
 
@@ -299,6 +307,10 @@ services:
       - type: bind
         source: ${STORAGE_LOCAL_PATH:-runtime/storage}
         target: /runtime/storage
+      - type: bind
+        source: ./runtime/version-info.json
+        target: /version-info.json
+        read_only: true
     command: sh -lc "python -m apps.api.workers.run_worker"
     profiles: ["prod"]
 
