@@ -148,5 +148,20 @@ df5 <- data.frame(sequence = c("ACGT", "ACGT"))
 aligned_bad <- validate_aligned_imgt_gapped(df5, "sequence")
 assert_true(!isTRUE(aligned_bad$ok), "ungapped rejected for aligned mode")
 
+# Alignment-length equality applies only in aligned_imgt_gapped mode, where the
+# alignment is consumed as given. Under the default raw_sequence mode Clustal
+# re-aligns, so ragged input never reaches this function.
+df6 <- data.frame(sequence = c("ACGT.ACGT", "ACGT.ACGTA", "ACGT.ACGT"))
+ragged <- validate_aligned_imgt_gapped(df6, "sequence")
+assert_true(!isTRUE(ragged$ok), "unequal lengths rejected for aligned mode")
+assert_true(
+  grepl("not all the same length", ragged$error, fixed = TRUE),
+  "unequal-length error names the cause"
+)
+assert_true(
+  grepl("raw_sequence", ragged$error, fixed = TRUE),
+  "unequal-length error points at the raw_sequence alternative"
+)
+
 cat("\n", failures, " failure(s)\n", sep = "")
 if (failures > 0L) quit(status = 1)

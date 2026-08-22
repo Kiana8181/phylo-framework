@@ -114,7 +114,7 @@ def test_format_conversion_logs_the_resulting_file_type(tmp_path: Path):
 def test_csv_to_tsv_conversion_is_logged(tmp_path: Path):
     src = tmp_path / "repertoire.csv"
     src.write_text(
-        "sequence_id,sequence\ns1,ACGT\ns2,ACGA\n", encoding="utf-8"
+        "sequence_id,sequence_alignment\ns1,ACGT\ns2,ACGA\n", encoding="utf-8"
     )
 
     prepared = prepare_input_for_method(
@@ -132,7 +132,7 @@ def test_sanitization_statistics_are_recorded(tmp_path: Path):
     """A semicolon export with a BOM and blank padding rows reports all three."""
     src = tmp_path / "excel.csv"
     src.write_bytes(
-        b"\xef\xbb\xbfsequence_id;sequence\n"
+        b"\xef\xbb\xbfsequence_id;sequence_alignment\n"
         b"s1;ACGT\n"
         b"s2;ACGA\n"
         b";\n"
@@ -182,7 +182,7 @@ def test_a_step_that_changed_nothing_is_distinct_from_a_skipped_step(tmp_path: P
 def test_warnings_are_not_converted_into_logs(tmp_path: Path):
     """Blank-row dropping stays a warning as well as being logged."""
     src = tmp_path / "excel.csv"
-    src.write_bytes(b"sequence_id;sequence\ns1;ACGT\n;\n")
+    src.write_bytes(b"sequence_id;sequence_alignment\ns1;ACGT\n;\n")
 
     prepared = prepare_input_for_method(
         "clonaltree", src, params={}, work_dir=tmp_path / "w"
@@ -194,10 +194,16 @@ def test_warnings_are_not_converted_into_logs(tmp_path: Path):
 
 
 def test_a_steps_own_warnings_are_traceable_from_its_log_entry(tmp_path: Path):
-    """Unexpected alignment characters warn AND appear against the step."""
+    """Unexpected alignment characters warn AND appear against the step.
+
+    'R' is a valid IUPAC ambiguity code, so framework validation accepts it,
+    but it falls outside the narrower set GCtree's FASTA export recognises —
+    which is exactly the warn-not-fail case this test is about. A character
+    that is invalid outright (Z, X, a digit) is now rejected before dispatch.
+    """
     src = tmp_path / "aligned.tsv"
     src.write_text(
-        "sequence_id\tsequence_alignment\ns1\tACGTZZZZ\ns2\tACGTACGA\n",
+        "sequence_id\tsequence_alignment\ns1\tACGTRRRR\ns2\tACGTACGA\n",
         encoding="utf-8",
     )
 
@@ -323,6 +329,7 @@ async def test_preprocess_entries_persist_and_survive_completion(session, tmp_pa
     steps = _steps(final.result["logs"])
     assert steps == [
         "preprocess.normalize_table_delimiter",
+        "preprocess.validate_input_table",
         "preprocess.rename_table_columns",
         "preprocess.summary",
         "dowser.buildTrees",

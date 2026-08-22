@@ -236,3 +236,40 @@ def test_required_columns_constant_is_the_expected_set():
         "v_call",
         "j_call",
     }
+
+
+# ---- Alignment-length equality: fatal only when the input alignment is used ----
+#
+# Without `use_input_alignment` MUSCLE re-aligns, so ragged input is legitimate
+# and must stay a warning (see docs/validation-coverage.md). With the flag set
+# the alignment is consumed as given, so unequal lengths are fatal. The check
+# lives here rather than in the orchestrator because the answer depends on this
+# method's parameters.
+
+def _ragged(tmp_path: Path) -> Path:
+    rows = [_row("seq1", "ACGTACGT"), _row("seq2", "ACGTACGTA"), _row("seq3", "ACGTACGT")]
+    return _write_tsv(tmp_path / "ragged.tsv", _FULL_COLUMNS, rows)
+
+
+def test_ragged_alignment_is_a_warning_when_muscle_realigns(tmp_path):
+    result = validate_clonaltree_input(_ragged(tmp_path), {})
+    assert result.ok is True
+    assert any("re-align" in w for w in result.warnings)
+
+
+def test_ragged_alignment_is_fatal_when_use_input_alignment_is_set(tmp_path):
+    result = validate_clonaltree_input(
+        _ragged(tmp_path), {"use_input_alignment": True}
+    )
+    assert result.ok is False
+    assert result.error_details.get("code") == "alignment_length_mismatch"
+    # Names the lengths and points at the way out.
+    assert "8" in result.error and "9" in result.error
+    assert "use_input_alignment" in result.error
+
+
+def test_uniform_alignment_passes_with_use_input_alignment(tmp_path):
+    result = validate_clonaltree_input(
+        _golden(tmp_path), {"use_input_alignment": True}
+    )
+    assert result.ok is True

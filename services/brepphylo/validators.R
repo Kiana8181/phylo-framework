@@ -244,6 +244,33 @@ validate_aligned_imgt_gapped <- function(df, seq_col) {
       )
     ))
   }
+
+  # In this mode the alignment is consumed as given, so unequal widths corrupt
+  # the tree silently rather than failing. Under the default 'raw_sequence'
+  # mode Clustal re-aligns and ragged input is legitimate, which is why this
+  # check belongs here and not in the caller.
+  widths <- nchar(seqs)
+  distinct <- sort(unique(widths))
+  if (length(distinct) > 1L) {
+    modal <- as.integer(names(which.max(table(widths)))[1])
+    odd <- which(widths != modal)
+    return(list(
+      ok = FALSE,
+      error = sprintf(
+        paste0(
+          "input_sequence_mode is 'aligned_imgt_gapped' but sequences are not all the ",
+          "same length (found %d distinct lengths: %s). Most rows have length %d; ",
+          "row(s) %s differ. Either supply an alignment of uniform length, or use ",
+          "input_sequence_mode='raw_sequence' so the sequences are aligned first."
+        ),
+        length(distinct),
+        paste(distinct, collapse = ", "),
+        modal,
+        paste(utils::head(odd, 10L), collapse = ", ")
+      )
+    ))
+  }
+
   list(ok = TRUE, error = NULL)
 }
 
