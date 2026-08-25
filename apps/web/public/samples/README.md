@@ -13,6 +13,11 @@ refinement step is on by default). Conditional-only columns that are off by
 default — Dowser paired-chain (`cell_id`, `locus`) and region columns, isotype
 `c_call` — are intentionally omitted; add them only if you enable those options.
 
+GCtree additionally needs a germline row to root on, which an AIRR export does
+not usually carry. It does not have to be in the file: on the tabular-adapter
+scenario, answer that the table has no germline row and give an ID and an aligned
+germline sequence instead — the framework adds the row before conversion.
+
 BrepPhylo names its input columns via `*_column` params rather than an AIRR
 `column_map`; point those params at the canonical columns here
 (`sequence_column → sequence_alignment`, `clone_id_column → clone_id`,

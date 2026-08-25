@@ -29,6 +29,15 @@ for each. The stage inspects rather than transforms, so it logs
 | **Alignment-length equality** | Dowser `validators.R`; GCtree table→FASTA adapter; ClonalTree `validators.py` (fatal only when `use_input_alignment`); brepphylo `validate_aligned_imgt_gapped` (fatal only in `aligned_imgt_gapped` mode) |
 | **Identifier uniqueness** | Dowser `validate_sequence_id_uniqueness`; GCtree `validate_fasta_record_ids` + FASTA adapter; ClonalTree `validators.py` (global); brepphylo `precheck_label_uniqueness` (per clone) |
 
+One transforming step also validates, because it is the only place that can: when GCtree's
+tabular adapter is told the table has no germline row, `insert_root_row`
+(`apps/api/preprocess/converters.py`) rejects a germline sequence whose length differs from the
+table's modal alignment length (`ROOT_SEQUENCE_LENGTH_MISMATCH`) and an ID already used by a row
+(`ROOT_ID_ALREADY_PRESENT`). Both are hard errors, raised before the structural stage so the
+message names the sequence the user pasted rather than a row number they did not write. The row
+is inserted *before* `validate_input_table`, so it then goes through checks 4–6 above like any
+other row.
+
 Both ClonalTree and brepphylo re-align by default — MUSCLE and Clustal respectively — so ragged
 input is legitimate for them and a blanket framework-level hard-fail would reject valid data.
 

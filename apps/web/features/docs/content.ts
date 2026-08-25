@@ -173,7 +173,7 @@ const METHOD_CONTENT: Record<MethodId, MethodContent> = {
       {
         type: "CSV / TSV",
         handling:
-          "Tabular AIRR/Change-O-style input. The framework converts the aligned-sequence column to FASTA before inference — enabling GCtree on tabular data it cannot natively read.",
+          "Tabular AIRR/Change-O-style input. The framework converts the aligned-sequence column to FASTA before inference — enabling GCtree on tabular data it cannot natively read. The table does not have to contain the germline row: say so and the framework writes one in from an ID and aligned sequence you provide.",
       },
       {
         type: "ZIP",
@@ -198,10 +198,17 @@ const METHOD_CONTENT: Record<MethodId, MethodContent> = {
       apply_isotype: "Invokes GCtree's isotype-annotation utility (idmap + isotype map bundle).",
       at_abundance:
         "Not a GCtree CLI flag. Answering Yes makes the framework build the `abundances.csv` that GCtree consumes from the numbers in your headers; answering No sends the IDs through the usual GCtree-safe renaming instead.",
+      germline_row_present:
+        "Not a GCtree CLI flag. Answering Yes means the germline row is already in your table, so Root sequence ID simply names it. Answering No makes the framework write the row for you before converting the table to FASTA.",
+      root_sequence_id:
+        "Not a GCtree CLI flag. The identifier written into the germline row the framework adds; it then becomes the root GCtree is pointed at (`--root`), in place of Root sequence ID.",
+      root_sequence_alignment:
+        "Not a GCtree CLI flag. The aligned germline sequence written into the row the framework adds.",
     },
     conditionalNotes: [
       "The column-mapping toggle and fields appear only for CSV/TSV input (the FASTA-conversion path).",
       "Root sequence ID, quick search and jumble apply only to the FASTA-derived scenarios; the extra coloring mode appears only when coloring settings are enabled.",
+      "GCtree roots the tree on a germline sequence that has to be part of the alignment, but an AIRR / Change-O export usually holds only observed sequences. So the tabular-adapter scenario asks whether your table already includes that row. Answer yes and you just name it in Root sequence ID, as before. Answer no and Root sequence ID is replaced by two fields — an ID and an aligned germline sequence — which the framework writes into your table as one extra first row before converting it to FASTA, leaving every other column of that row empty. The sequence joins the same alignment, so its length must equal the other aligned sequences', gap characters included, and its ID must not already be in use. If you have column mapping switched on, the row is written under the columns you mapped `sequence_id` and `sequence_alignment` to, not under those names.",
       "GCtree writes sequence IDs as `name@abundance` (for example `seq3@9`) in its own output, but it cannot read that form back — its deduplicate step counts only IDs that are entirely digits, and the `@` breaks the DNAPARS root lookup. So when every header in your FASTA looks like `name@N`, an extra question appears asking whether N is an abundance count. Answer Yes and the framework builds the abundance file from those numbers; answer No and the IDs are replaced with short GCtree-safe IDs, with the originals kept in the ID map.",
     ],
     zipBundle: {
