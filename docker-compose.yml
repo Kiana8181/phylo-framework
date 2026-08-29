@@ -359,6 +359,7 @@ services:
       - ./.env
     environment:
       <<: *method_common_env
+      PYTHONHASHSEED: "0"
     volumes:
       - type: bind
         source: ./packages/contracts

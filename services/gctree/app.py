@@ -87,6 +87,7 @@ DEFAULT_ENV = {
     "XDG_RUNTIME_DIR": "/tmp/runtime-gctree",
     "LC_ALL": "C",
     "LANG": "C",
+    "PYTHONHASHSEED": "0",
 }
 
 RENDER_ERROR_PYQT_QTSVG = "ModuleNotFoundError: No module named 'PyQt5.QtSvg'"
