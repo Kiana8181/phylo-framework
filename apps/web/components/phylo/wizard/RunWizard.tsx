@@ -25,6 +25,7 @@ export default function RunWizard({
   initialMethodId,
   initialParams,
   initialFileId,
+  prefillNote,
 }: {
   methods: MethodInfo[];
   onSubmitDone: (runId: string) => void;
@@ -32,6 +33,8 @@ export default function RunWizard({
   initialMethodId?: string | null;
   initialParams?: Record<string, unknown> | null;
   initialFileId?: string | null;
+  /** Banner copy explaining where the pre-filled values came from. */
+  prefillNote?: string | null;
 }) {
   const initialMethod = useMemo(
     () => (initialMethodId ? (methods.find((m) => m.id === initialMethodId) ?? null) : null),
@@ -98,7 +101,7 @@ export default function RunWizard({
       {prefilled && (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-primary/30 bg-primary/5 px-4 py-2.5">
           <p className="text-sm text-muted-foreground">
-            Settings carried over from a previous run — tweak anything, or start from scratch.
+            {prefillNote ?? "Settings carried over — tweak anything, or start from scratch."}
           </p>
           <Button type="button" variant="outline" size="sm" className="gap-1.5" onClick={startOver}>
             <RotateCcw className="size-4" />

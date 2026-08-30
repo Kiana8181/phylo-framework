@@ -309,6 +309,22 @@ def validate_clonaltree_input(input_path: Path, params: Dict[str, Any]) -> Valid
             examples=duplicate_examples,
         )
 
+    # Fatal only when the input alignment is consumed as given. Without
+    # `use_input_alignment` MUSCLE re-aligns, so unequal lengths are legitimate
+    # and stay a warning below.
+    if len(alignment_lengths) > 1 and _truthy(
+        params.get("use_input_alignment"), default=False
+    ):
+        return result._fail(
+            "use_input_alignment is enabled, so sequence_alignment values are used as "
+            f"given, but they are not all the same length (found {len(alignment_lengths)} "
+            f"distinct lengths: {', '.join(str(n) for n in sorted(alignment_lengths))}). "
+            "Either supply an aligned input of uniform length or disable "
+            "use_input_alignment so MUSCLE re-aligns the sequences.",
+            code="alignment_length_mismatch",
+            distinct_lengths=sorted(alignment_lengths),
+        )
+
     # ---- Warnings (never block the run) ----
 
     missing_recommended = [c for c in RECOMMENDED_BASE_COLUMNS if c not in header_set]
@@ -335,6 +351,8 @@ def validate_clonaltree_input(input_path: Path, params: Dict[str, Any]) -> Valid
                 f"before clustering."
             )
 
+    # Reached only when use_input_alignment is off; with it on, the check above
+    # has already failed the run.
     if len(alignment_lengths) > 1:
         result.warnings.append(
             "sequence_alignment values are not all the same length "

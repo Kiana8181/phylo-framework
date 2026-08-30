@@ -3,6 +3,7 @@
   "maxFiles": 1,
   "uploadGuidance": [
     "Aligned FASTA, or CSV/TSV with an aligned sequence column (framework converts to FASTA).",
+    "A CSV/TSV does not have to contain the germline row — answer “no” to the germline question and the framework adds it from an ID and aligned sequence you provide.",
     "Single GCtree forest pickle (.p) for re-rank/re-render — set input scenario to gctree_forest_pickle.",
     "For DNAPARS outfile + abundances (and optional idmap, position maps), upload a single .zip containing manifest.json plus the files listed in the manifest (see docs).",
     "If you want to compare across methods, upload a format accepted by all desired methods."
@@ -16,7 +17,10 @@
     "doMapping",
     "column_map.sequence_id",
     "column_map.sequence_alignment",
+    "germline_row_present",
     "root",
+    "root_sequence_id",
+    "root_sequence_alignment",
     "at_abundance",
     "frame",
     "frame2",
@@ -45,7 +49,10 @@
         "doMapping",
         "column_map.sequence_id",
         "column_map.sequence_alignment",
+        "germline_row_present",
         "root",
+        "root_sequence_id",
+        "root_sequence_alignment",
         "at_abundance"
       ]
     },
@@ -79,7 +86,12 @@
   ],
   "placeholders": {
     "column_map.sequence_id": "e.g. sequence_id",
-    "column_map.sequence_alignment": "e.g. sequence_alignment"
+    "column_map.sequence_alignment": "e.g. sequence_alignment",
+    "root_sequence_id": "e.g. GL",
+    "root_sequence_alignment": "e.g. GAGGTGCAGCTGGTGGAGTCTGGGGGA…"
+  },
+  "widgets": {
+    "root_sequence_alignment": "textarea"
   },
   "visibility": {
     "doMapping": { "when": { "$inputFormat": ["csv", "tsv"] } },
@@ -90,11 +102,29 @@
       "whenAll": [{ "doMapping": true }, { "$inputFormat": ["csv", "tsv"] }]
     },
 
+    "germline_row_present": {
+      "when": { "input_scenario": "airr_or_changeo_table_adapter" }
+    },
     "root": {
       "whenAny": [
         { "input_scenario": "aligned_fasta_with_root" },
-        { "input_scenario": "airr_or_changeo_table_adapter" }
+        {
+          "input_scenario": "airr_or_changeo_table_adapter",
+          "germline_row_present": "yes"
+        }
       ]
+    },
+    "root_sequence_id": {
+      "when": {
+        "input_scenario": "airr_or_changeo_table_adapter",
+        "germline_row_present": "no"
+      }
+    },
+    "root_sequence_alignment": {
+      "when": {
+        "input_scenario": "airr_or_changeo_table_adapter",
+        "germline_row_present": "no"
+      }
     },
     "quick": {
       "whenAny": [
@@ -118,6 +148,22 @@
         "field": "at_abundance",
         "when": { "$fastaIdStyle": "at_abundance" },
         "message": "Please answer — GCtree cannot interpret “@N” IDs on its own."
+      },
+      {
+        "field": "root_sequence_id",
+        "when": {
+          "input_scenario": "airr_or_changeo_table_adapter",
+          "germline_row_present": "no"
+        },
+        "message": "Name the germline row the framework will add — it becomes the ID GCtree roots on."
+      },
+      {
+        "field": "root_sequence_alignment",
+        "when": {
+          "input_scenario": "airr_or_changeo_table_adapter",
+          "germline_row_present": "no"
+        },
+        "message": "Paste the aligned germline sequence — it must be the same length as the other aligned sequences."
       }
     ]
   }

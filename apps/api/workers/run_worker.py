@@ -43,6 +43,7 @@ from apps.api.services.run_staging import (
 )
 from apps.api.services.stage_map import progress_for_stage
 from apps.api.services.tree_contract import assemble_unified_tree_result
+from apps.api.services.version_info import attach_version_info
 from apps.api.storage import get_storage
 
 POLL_INTERVAL = float(os.getenv("WORKER_POLL_INTERVAL", "3"))
@@ -165,6 +166,11 @@ async def _persist_done(
         unified_result = _merge_preprocess_logs(
             unified_result, await run_repo.get_by_id(run_id)
         )
+        # Record the environment identity alongside the result. Degrades to a
+        # no-op when the deployment carries no version-information file.
+        unified_result = attach_version_info(unified_result, method_id)
+        if "version_info" not in unified_result:
+            _log("version info unavailable", run_id=run_id, method_id=method_id)
         await run_repo.set_result(run_id, unified_result, RunStatus.DONE)
         tree_repo = RunTreeRepository(db)
         await tree_repo.replace_for_run(run_id, tree_rows)

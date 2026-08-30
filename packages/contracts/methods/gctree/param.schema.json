@@ -36,11 +36,30 @@
         }
       }
     },
+    "germline_row_present": {
+      "type": "string",
+      "title": "Does your table already include the germline / root row?",
+      "description": "GCtree needs a germline (root / outgroup) sequence in the alignment it infers from. Yes — the row is already in your table, so just name it below. No — the framework adds it for you from the ID and sequence you provide below, writing one extra row into the table before converting it to FASTA.",
+      "enum": ["yes", "no"],
+      "default": "yes"
+    },
     "root": {
       "type": "string",
       "title": "Root sequence ID",
       "description": "Original uploaded ID of the germline / outgroup sequence in the input FASTA alignment (FASTA-derived scenarios). It may be remapped internally to a short PHYLIP/GCtree-safe ID.",
       "default": "GL"
+    },
+    "root_sequence_id": {
+      "type": "string",
+      "title": "Root sequence ID to add",
+      "description": "Identifier for the germline row the framework will add. It is written into your table's sequence_id column — or into whichever column you mapped that key to — and becomes the FASTA header GCtree roots on.",
+      "default": "GL"
+    },
+    "root_sequence_alignment": {
+      "type": "string",
+      "title": "Root (germline) aligned sequence",
+      "description": "Aligned germline sequence for the row the framework will add, written into your table's sequence_alignment column (or the column you mapped that key to). It joins the same alignment as the other sequences, so its length must equal theirs — gap characters included.",
+      "default": ""
     },
     "at_abundance": {
       "type": "string",

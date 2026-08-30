@@ -1,26 +1,34 @@
-# Sample datasets
+# Sample dataset
 
-`phylo-runner-sample.tsv` is an **empty template**. Its header row is the union
-of every column the four methods require between them (in canonical AIRR names),
-so a file with these columns — filled with your data — runs through Dowser,
-GCtree, BrepPhylo and ClonalTree with their default settings.
+`ExampleAirr_clone_3128.tsv` is **clone 3128 of the official Dowser example
+dataset** (`ExampleAirr`), extracted as a standalone AIRR rearrangement table:
+43 sequences, one clone, canonical AIRR column names.
 
-The header set is derived from the single source of truth,
-`packages/contracts/methods/<method>/columns.json` (the same files the API
-upload validator and the Data requirements docs page read). It includes each
-method's always-required columns plus ClonalTree's refinement columns (its
-refinement step is on by default). Conditional-only columns that are off by
-default — Dowser paired-chain (`cell_id`, `locus`) and region columns, isotype
-`c_call` — are intentionally omitted; add them only if you enable those options.
+It is the file the Data requirements and Try it yourself docs pages hand out, and
+the one the "Try it yourself" button uploads on the reader's behalf.
 
-BrepPhylo names its input columns via `*_column` params rather than an AIRR
-`column_map`; point those params at the canonical columns here
-(`sequence_column → sequence_alignment`, `clone_id_column → clone_id`,
-`germline_id_column → germline_alignment_d_mask`).
+## Why only one clone
 
-## TODO (author) — before release
+GCtree accepts **one clone per run** — that is a limitation of GCtree itself, not
+of this framework. Restricting the file to a single clone is what lets the *same*
+file be pushed through all four methods, so their trees can be compared side by
+side. For Dowser, BrepPhylo and ClonalTree a multi-clone dataset is perfectly
+fine, as long as it carries the columns that method needs.
 
-The committed file has the header row and blank rows only. Optionally replace the
-blank rows with a small, **de-identified** example dataset (a few filled rows)
-cleared for public distribution. No code change is needed when you swap the
-contents — the download button references this same file.
+## Provenance
+
+Produced by the reproducibility harness in `article-tests/`. The copies here are
+verbatim:
+
+| File | Source (`article-tests/tests-results/ExampleAirr_clone_3128/`) |
+|---|---|
+| `ExampleAirr_clone_3128.tsv` | `ExampleAirr_clone_3128.tsv` |
+| `trees/dowser.png` | `dowser/Run 1/tree.png` |
+| `trees/gctree.png` | `gctree/Run 1/tree.png` |
+| `trees/brepphylo.png` | `brepphylo/Run 1/tree.png` |
+| `trees/clonaltree.png` | `clonaltree/Run 1/tree.png` |
+
+The parameters that produced each tree live in the matching `Run 1/inputs.json`
+and are transcribed into `apps/web/features/docs/sample.ts`. Runs 1–3 of each
+method use identical parameters, so Run 1 is the canonical one. If the harness is
+re-run and the outputs change, re-copy the PNGs and update `sample.ts` together.

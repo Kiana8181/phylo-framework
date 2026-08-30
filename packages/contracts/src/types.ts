@@ -292,6 +292,46 @@ export type RunProvenance = {
   [key: string]: any;
 };
 
+/** Build-time identity of the framework itself. */
+export type VersionInfoFramework = {
+  version?: string | null;
+  git_commit?: string | null;
+  git_branch?: string | null;
+  git_dirty?: boolean | null;
+};
+
+/** Build-time identity of the one method service that ran. */
+export type VersionInfoService = {
+  image_name?: string | null;
+  image_digest?: string | null;
+  base_image?: string | null;
+  /** Pins declared as `ARG` in the service Dockerfile, e.g. BREPPHYLO_COMMIT. */
+  build_args?: Record<string, string>;
+  /** Pinned tool versions parsed from the service's build definition. */
+  tool_versions?: Record<string, string>;
+};
+
+/**
+ * Environment identity recorded with a run.
+ *
+ * Written by `scripts/generate-version-info.mjs` at build/deploy time and
+ * copied into the result when the run is persisted. Optional throughout: runs
+ * recorded before this feature carry no `version_info`, and any field the
+ * deployment could not determine is `null` with a reason in `unavailable`.
+ */
+export type VersionInfo = {
+  schema_version?: number | null;
+  method_id?: string;
+  captured_at?: string | null;
+  framework?: VersionInfoFramework | null;
+  service?: VersionInfoService | null;
+  /** What the service reported about itself while running. */
+  service_reported?: RunProvenance | null;
+  reference_data?: string | null;
+  /** Field path -> why it could not be captured. */
+  unavailable?: Record<string, string>;
+};
+
 export type BrepPhyloRowDiagnostic = {
   row_index: number;
   sequence_id?: string | null;
@@ -638,6 +678,7 @@ export type RunResult = {
   diagnostics?: BrepPhyloDiagnostics;
   tables?: RunTables;
   provenance?: RunProvenance;
+  version_info?: VersionInfo;
   warnings?: RunWarning[];
   logs?: RunLogEntry[];
   error?: string | RunErrorDetails | null;

@@ -4,6 +4,7 @@ FROM python:3.11-slim-bookworm
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
+    PYTHONHASHSEED=0 \
     PYTHONPATH=/usr/lib/python3/dist-packages \
     QT_QPA_PLATFORM=offscreen \
     MPLBACKEND=agg \

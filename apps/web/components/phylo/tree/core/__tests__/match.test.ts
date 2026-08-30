@@ -64,3 +64,50 @@ describe("computeMatchIds — exact identifier matching", () => {
     expect([...computeMatchIds(model, "IGH001", phylo).values()].sort()).toEqual(["n1", "n2"]);
   });
 });
+
+// root n0 ─ n1(leaf, "id1|id2|id3")
+//        └ n2(leaf, "other|id20")   <- id2 is a prefix of id20; must NOT match
+function pipeFixture(nodeAttributes?: Record<string, TreeNodeAttrs>) {
+  const nodes: LineagePlot["nodes"] = [
+    { id: "n0", label: "germline", x: 0, y: 0, isLeaf: false, abundance: 1 },
+    { id: "n1", label: "id1|id2|id3", x: 1, y: 1, isLeaf: true, abundance: 1 },
+    { id: "n2", label: "other|id20", x: 1, y: 2, isLeaf: true, abundance: 1 },
+  ];
+  const edges: LineagePlot["edges"] = [
+    { source: "n0", target: "n1" },
+    { source: "n0", target: "n2" },
+  ];
+  return fromLineagePlot({ format: "lineage-plot-v1", nodes, edges }, nodeAttributes);
+}
+
+describe("computeMatchIds — pipe-delimited identifiers", () => {
+  it("matches any single |-separated part", () => {
+    const model = pipeFixture();
+    expect([...computeMatchIds(model, "id1", phylo)]).toEqual(["n1"]);
+    expect([...computeMatchIds(model, "id2", phylo)]).toEqual(["n1"]);
+    expect([...computeMatchIds(model, "id3", phylo)]).toEqual(["n1"]);
+  });
+
+  it("still matches the whole pipe-delimited identifier", () => {
+    const model = pipeFixture();
+    expect([...computeMatchIds(model, "id1|id2|id3", phylo)]).toEqual(["n1"]);
+    expect([...computeMatchIds(model, "  ID1|Id2|id3 ", phylo)]).toEqual(["n1"]);
+  });
+
+  it("keeps each part exact — no prefix or infix hits", () => {
+    const model = pipeFixture();
+    expect(computeMatchIds(model, "id", phylo).size).toBe(0);
+    expect(computeMatchIds(model, "id2|id3", phylo).size).toBe(0); // partial run of parts
+    expect(computeMatchIds(model, "id2", phylo).has("n2")).toBe(false); // id20 ≠ id2
+  });
+
+  it("matches parts of a pipe-delimited sequence_id attribute", () => {
+    const model = pipeFixture({ n2: { sequence_id: "alpha|beta" } });
+    expect([...computeMatchIds(model, "beta", phylo)]).toEqual(["n2"]);
+  });
+
+  it("ignores whitespace padding around parts", () => {
+    const model = pipeFixture({ n2: { sequence_id: "alpha | beta" } });
+    expect([...computeMatchIds(model, "beta", phylo)]).toEqual(["n2"]);
+  });
+});

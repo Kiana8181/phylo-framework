@@ -87,6 +87,7 @@ DEFAULT_ENV = {
     "XDG_RUNTIME_DIR": "/tmp/runtime-gctree",
     "LC_ALL": "C",
     "LANG": "C",
+    "PYTHONHASHSEED": "0",
 }
 
 RENDER_ERROR_PYQT_QTSVG = "ModuleNotFoundError: No module named 'PyQt5.QtSvg'"
@@ -1859,6 +1860,26 @@ def _parse_frame(params: Mapping[str, Any]) -> str:
     return str(frame)
 
 
+def resolve_root_id(params: Mapping[str, Any]) -> str:
+    """The ID of the sequence to root on, in the FASTA that reaches this service.
+
+    On the tabular-adapter path the user may have told the framework their table
+    has no germline row, in which case preprocessing appended one built from
+    `root_sequence_id` / `root_sequence_alignment` — and the form, having hidden
+    `root`, did not submit it. That synthesized ID is the one to root on.
+
+    A missing answer means "the row is already there", which is what params from
+    before the question existed imply.
+    """
+    scenario = str(params.get("input_scenario") or SC_ALIGNED).strip()
+    answer = str(params.get("germline_row_present") or "yes").strip().lower()
+    if scenario == SC_AIRR and answer == "no":
+        synthesized = str(params.get("root_sequence_id") or "").strip()
+        if synthesized:
+            return synthesized
+    return str(params.get("root") or "GL").strip() or "GL"
+
+
 def extend_infer_cmd_base(
     cmd: List[str],
     *,
@@ -2058,7 +2079,7 @@ async def run_handler(request: Request):
 
         apply_isotype = _truthy(p.get("apply_isotype"))
 
-        root = str(p.get("root") or "GL").strip() or "GL"
+        root = resolve_root_id(p)
 
         dedup_phylip = tmp / "deduplicated.phylip"
         abund_csv = tmp / "abundances.csv"

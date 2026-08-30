@@ -420,6 +420,141 @@ def rename_table_columns(
     }
 
 
+def insert_root_row(
+    input_path: Path,
+    output_path: Path,
+    *,
+    delimiter: Literal["csv", "tsv"] | None = None,
+    normalize_headers: bool = True,
+    id_column: str,
+    sequence_column: str,
+    root_id: str,
+    root_sequence: str,
+) -> dict[str, Any]:
+    """Write the table back with one extra row carrying a germline / root sequence.
+
+    For a tabular input whose rows are all observed sequences, the germline the
+    tree is rooted on may simply not be in the file. Rather than send the user
+    away to edit their table, the row is synthesized here from an ID and an
+    aligned sequence they supplied.
+
+    Only `id_column` and `sequence_column` are filled; every other column is left
+    empty, because nothing else about the germline is known and inventing values
+    would put fabricated metadata in the user's data. The row is written first so
+    the root leads the alignment, as it conventionally does.
+
+    Column names are resolved through `_resolve_column_name`, the same matcher
+    `rename_table_columns` uses, so the row lands under the user's own headers
+    when they have mapped these keys onto differently named columns.
+    """
+    delimiter_char = _table_delimiter(input_path, delimiter=delimiter)
+    header, body, blank_rows_dropped = _read_table(
+        input_path, delimiter_char=delimiter_char
+    )
+    if not header:
+        raise ConversionError(
+            code="EMPTY_HEADER",
+            message="Input table has no header row.",
+            details={"input_path": str(input_path)},
+        )
+
+    resolved_id = _resolve_column_name(
+        header, id_column, normalize_headers=normalize_headers, required=True
+    )
+    resolved_sequence = _resolve_column_name(
+        header, sequence_column, normalize_headers=normalize_headers, required=True
+    )
+    assert resolved_id is not None and resolved_sequence is not None
+    id_index = header.index(resolved_id)
+    sequence_index = header.index(resolved_sequence)
+
+    if not body:
+        raise ConversionError(
+            code="EMPTY_TABLE",
+            message="Input table has a header but no data rows.",
+            details={"input_path": str(input_path)},
+        )
+
+    for row_number, row in enumerate(body, start=2):
+        if row[id_index].strip() == root_id:
+            raise ConversionError(
+                code="ROOT_ID_ALREADY_PRESENT",
+                message=(
+                    f"Identifier {root_id!r} is already used by row {row_number} of the "
+                    "input table, so adding a germline row with that ID would collide "
+                    "with it."
+                ),
+                details={
+                    "root_id": root_id,
+                    "row_number": row_number,
+                    "id_column": resolved_id,
+                },
+            )
+
+    # Modal length, matching how `validate_airr_table` reports alignment length:
+    # a ragged table is the method's problem to reject, not this step's, so the
+    # comparison is against the length most rows agree on.
+    lengths: dict[int, int] = {}
+    for row in body:
+        length = len(row[sequence_index])
+        lengths[length] = lengths.get(length, 0) + 1
+    alignment_length = max(lengths, key=lambda k: lengths[k])
+
+    if len(root_sequence) != alignment_length:
+        raise ConversionError(
+            code="ROOT_SEQUENCE_LENGTH_MISMATCH",
+            message=(
+                f"The germline sequence is {len(root_sequence)} character(s) long but the "
+                f"aligned sequences in column '{resolved_sequence}' are {alignment_length}. "
+                "It joins the same alignment, so the lengths must match."
+            ),
+            details={
+                "root_sequence_length": len(root_sequence),
+                "alignment_length": alignment_length,
+                "sequence_column": resolved_sequence,
+                "distinct_alignment_lengths": len(lengths),
+            },
+        )
+
+    root_row = [""] * len(header)
+    root_row[id_index] = root_id
+    root_row[sequence_index] = root_sequence
+    body.insert(0, root_row)
+
+    output_ext = output_path.suffix.lower().lstrip(".") or (
+        "tsv" if delimiter_char == "\t" else "csv"
+    )
+    output_delimiter_char = canonical_delimiter_for_extension(output_ext)
+    _write_table(
+        output_path=output_path,
+        delimiter_char=output_delimiter_char,
+        header=header,
+        body=body,
+    )
+
+    logger.info(
+        "Inserted germline root row into table",
+        extra={
+            "rows": len(body),
+            "columns": len(header),
+            "root_id": root_id,
+            "input_path": str(input_path),
+        },
+    )
+
+    return {
+        "rows": len(body),
+        "cols": len(header),
+        "root_id": root_id,
+        "id_column": resolved_id,
+        "sequence_column": resolved_sequence,
+        "alignment_length": alignment_length,
+        "input_delimiter": delimiter_char,
+        "output_delimiter": output_delimiter_char,
+        "blank_rows_dropped": blank_rows_dropped,
+    }
+
+
 def convert_table_to_aligned_fasta(
     input_path: Path,
     output_path: Path,

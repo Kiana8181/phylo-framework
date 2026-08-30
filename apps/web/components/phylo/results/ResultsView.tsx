@@ -13,6 +13,7 @@ import BrepphyloResults from "./BrepphyloResults";
 import MetricGrid from "./shared/MetricGrid";
 import WarningsCallout from "./shared/WarningsCallout";
 import LogsSection from "./shared/LogsSection";
+import VersionInfoSection from "./shared/VersionInfoSection";
 
 /** Renders the results page: the per-method sections + the shared general
  *  section (trees, warnings, logs, artifacts). */
@@ -70,6 +71,8 @@ export default function ResultsView({
         unknownValue={unknownValue}
         showInternalNodesDefault={showInternalNodesDefault}
       />
+
+      <VersionInfoSection versionInfo={result.version_info} />
 
       <LogsSection logs={result.logs} />
 

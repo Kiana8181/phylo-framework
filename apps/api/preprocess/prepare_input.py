@@ -20,9 +20,14 @@ from apps.api.preprocess.converters import (
     convert_csv_to_tsv,
     convert_table_to_aligned_fasta,
     convert_tsv_to_csv,
+    insert_root_row,
     normalize_table_delimiter,
     rename_table_columns,
     _table_delimiter,
+)
+from apps.api.preprocess.validate_input import (
+    InputValidationError,
+    validate_airr_table,
 )
 from apps.api.preprocess.method_capabilities import (
     describe_safe_paths,
@@ -45,6 +50,7 @@ GCTREE_ALIGNED_COLUMN_KEYS = (
     "alignment_column",
 )
 GCTREE_ID_COLUMN_KEYS = ("id_column", "sequence_id_column", "fasta_id_column")
+GCTREE_TABLE_ADAPTER_SCENARIO = "airr_or_changeo_table_adapter"
 GCTREE_ALIGNED_COLUMN_SYNONYMS = (
     "sequence_alignment",
     "aligned_sequence",
@@ -59,9 +65,12 @@ GCTREE_ALIGNMENT_CONVERTER_CODES = {
     "AMBIGUOUS_COLUMN",
     "MISSING_ALIGNED_SEQUENCE",
     "ALIGNMENT_LENGTH_MISMATCH",
-    "EMPTY_ID",
-    "DUPLICATE_IDS",
 }
+# Identifier defects on the GCtree table->FASTA path. Kept out of the set above
+# because folding them into the generic "requires an aligned sequence column"
+# message named the wrong cause: a duplicated ID has nothing to do with the
+# alignment. FASTA headers must be unique, so these stay fatal here.
+GCTREE_IDENTIFIER_CONVERTER_CODES = {"EMPTY_ID", "DUPLICATE_IDS"}
 
 
 @dataclass
@@ -244,6 +253,88 @@ def _gctree_aligned_seq_column(params: dict[str, Any]) -> str:
 
 def _gctree_id_column(params: dict[str, Any]) -> str | None:
     return _string_param(params, GCTREE_ID_COLUMN_KEYS)
+
+
+def _gctree_root_row_to_add(
+    method: str, params: dict[str, Any]
+) -> tuple[str, str] | None:
+    """The (id, aligned sequence) of a germline row the user asked us to add.
+
+    None when the table already carries its germline row, which is both the
+    default and what an older run's params imply — they predate the question, so
+    a missing answer must keep meaning "the row is already there".
+    """
+    if method != "gctree":
+        return None
+    scenario = str(params.get("input_scenario") or "").strip()
+    if scenario != GCTREE_TABLE_ADAPTER_SCENARIO:
+        return None
+    answer = str(params.get("germline_row_present") or "yes").strip().lower()
+    if answer != "no":
+        return None
+
+    root_id = str(params.get("root_sequence_id") or "").strip()
+    root_sequence = str(params.get("root_sequence_alignment") or "").strip()
+    missing = [
+        name
+        for name, value in (
+            ("root_sequence_id", root_id),
+            ("root_sequence_alignment", root_sequence),
+        )
+        if not value
+    ]
+    if missing:
+        raise PreprocessError(
+            code="MISSING_ROOT_SEQUENCE",
+            message=(
+                "You indicated the input table has no germline row, so GCtree needs "
+                "both an identifier and an aligned sequence for the row to add."
+            ),
+            details={
+                "method_id": method,
+                "step": "insert_root_row",
+                "missing_params": missing,
+                "next_actions": [
+                    "Fill in the root sequence ID and the aligned germline sequence.",
+                    "Or answer that the table already includes the germline row and name it instead.",
+                ],
+            },
+        )
+    return root_id, root_sequence
+
+
+def _validation_columns(method: str, params: dict[str, Any]) -> dict[str, str]:
+    """Resolve the (id, sequence) column names as they appear in the *uploaded*
+    file, so structural validation can run before any renaming.
+
+    This is name resolution, not policy: each method simply calls these columns
+    something different. GCtree names them through its aligned-column params,
+    BrepPhylo through flat `*_column` params, and the column-mapping methods
+    through `column_map` (canonical key -> source header).
+
+    Whether a given table property is *acceptable* is not decided here — see
+    the module docstring of `validate_input.py`.
+    """
+    if method == "gctree":
+        id_column = _gctree_id_column(params) or "sequence_id"
+        sequence_column = _gctree_aligned_seq_column(params)
+    elif method == "brepphylo":
+        id_column = (
+            _string_param(params, ("tip_id_column", "label_column")) or "sequence_id"
+        )
+        sequence_column = (
+            _string_param(params, ("sequence_column",)) or "sequence_alignment"
+        )
+    else:
+        id_column = "sequence_id"
+        sequence_column = "sequence_alignment"
+
+    column_map = _get_column_map(params)
+    if column_map and should_apply_column_mapping(method, "tsv", params):
+        id_column = column_map.get(id_column, id_column)
+        sequence_column = column_map.get(sequence_column, sequence_column)
+
+    return {"id_column": id_column, "sequence_column": sequence_column}
 
 
 def _table_stats(path: Path, ext: str) -> dict[str, int]:
@@ -477,6 +568,28 @@ def prepare_input_for_method(
     # BOM-prefixed headers silently miss required-column checks, and
     # empty `;;;;;;...` rows trip validators downstream.
     if current_ext in TABULAR_EXTENSIONS:
+        # An empty upload is checked before delimiter normalization, which would
+        # otherwise reject it first with a message about the normalization step
+        # rather than about the file.
+        try:
+            upload_is_empty = current_path.stat().st_size == 0
+        except OSError:
+            upload_is_empty = False
+        if upload_is_empty:
+            raise PreprocessError(
+                code="INPUT_EMPTY_FILE",
+                message=(
+                    "The input file is empty (0 bytes). Upload a table with a "
+                    "header row and at least one data row."
+                ),
+                details={
+                    "method_id": method,
+                    "step": "validate_input_table",
+                    "path": current_path.name,
+                    "next_actions": ["Correct the input table and re-upload it."],
+                },
+            )
+
         delimiter_hint: Literal["csv", "tsv"] = (
             "csv" if current_ext == "csv" else "tsv"
         )
@@ -555,6 +668,145 @@ def prepare_input_for_method(
         )
         current_path = output_path
 
+        # Add the germline row when the user told us their table lacks one. This
+        # runs before validation so the synthesized row is checked for stray
+        # characters alongside every other row, and before `rename_table_columns`
+        # so the row is written under the user's own headers — `_validation_columns`
+        # already resolves the column-mapped names, so nothing here has to know
+        # about mapping.
+        root_row = _gctree_root_row_to_add(method, params)
+        if root_row is not None:
+            root_id, root_sequence = root_row
+            columns = _validation_columns(method, params)
+            step_offset += 1
+            step_name = "insert_root_row"
+            output_path = work_dir / f"{step_offset:02d}_{step_name}.{current_ext}"
+            try:
+                root_stats = insert_root_row(
+                    current_path,
+                    output_path,
+                    delimiter="csv" if current_ext == "csv" else "tsv",
+                    id_column=columns["id_column"],
+                    sequence_column=columns["sequence_column"],
+                    root_id=root_id,
+                    root_sequence=root_sequence,
+                )
+            except ConversionError as exc:
+                if exc.code == "ROOT_SEQUENCE_LENGTH_MISMATCH":
+                    next_actions = [
+                        "Check the germline sequence you pasted — gap characters count towards its length.",
+                        "Or answer that the table already includes the germline row and name it instead.",
+                    ]
+                elif exc.code == "ROOT_ID_ALREADY_PRESENT":
+                    next_actions = [
+                        "Choose an identifier that no row in the table uses.",
+                        "Or answer that the table already includes the germline row and name that row instead.",
+                    ]
+                else:
+                    next_actions = [
+                        "Verify the input table has the identifier and aligned sequence columns.",
+                        "If you enabled column mapping, check both mapped columns exist in the table.",
+                    ]
+                mapped_code = (
+                    "INVALID_FILE"
+                    if exc.code in INVALID_FILE_CONVERTER_CODES
+                    else exc.code
+                )
+                raise _conversion_error(
+                    method_id=method,
+                    input_ext=current_ext,
+                    message=exc.message,
+                    converter_error=exc,
+                    code=mapped_code,
+                    step=step_name,
+                    extra_details={"next_actions": next_actions},
+                ) from exc
+
+            stats[f"step_{step_offset}_root_row"] = {
+                "rows": root_stats.get("rows", 0),
+                "cols": root_stats.get("cols", 0),
+                "root_id": root_stats.get("root_id"),
+                "id_column": root_stats.get("id_column"),
+                "sequence_column": root_stats.get("sequence_column"),
+                "alignment_length": root_stats.get("alignment_length"),
+            }
+            log_entries.append(
+                _preprocess_log(
+                    step_name,
+                    "file={name}; added germline row id='{root}' into column "
+                    "'{idc}' with {length} aligned characters in column '{seqc}'; "
+                    "rows={rows} columns={cols}".format(
+                        name=current_path.name,
+                        root=root_stats.get("root_id"),
+                        idc=root_stats.get("id_column"),
+                        length=root_stats.get("alignment_length"),
+                        seqc=root_stats.get("sequence_column"),
+                        rows=root_stats.get("rows", 0),
+                        cols=root_stats.get("cols", 0),
+                    ),
+                )
+            )
+            applied_steps.append(
+                {
+                    "step": step_name,
+                    "from": current_ext,
+                    "to": current_ext,
+                    "input_path": str(current_path),
+                    "output_path": str(output_path),
+                }
+            )
+            current_path = output_path
+
+        # Uniform structural validation, before any method-specific handling
+        # and before dispatch. Runs for all four methods so the same defect is
+        # rejected identically whichever tool the user picked.
+        #
+        # It inspects rather than transforms, so it logs but is deliberately
+        # kept out of `applied_steps` and out of the step numbering — both of
+        # which describe the conversion chain.
+        step_name = "validate_input_table"
+        try:
+            validation_stats = validate_airr_table(
+                current_path,
+                delimiter="," if current_ext == "csv" else "\t",
+                **_validation_columns(method, params),
+            )
+        except InputValidationError as exc:
+            raise PreprocessError(
+                code=exc.code,
+                message=exc.message,
+                details={
+                    "method_id": method,
+                    "step": step_name,
+                    **exc.details,
+                    "next_actions": ["Correct the input table and re-upload it."],
+                },
+            ) from exc
+
+        stats["input_validation"] = validation_stats
+        log_entries.append(
+            _preprocess_log(
+                step_name,
+                "file={name}; rows={rows} columns={cols}; alignment length={length}"
+                "{ragged}; id column='{idc}' sequence column='{seqc}'; "
+                "checks passed={checks}".format(
+                    name=current_path.name,
+                    rows=validation_stats["rows"],
+                    cols=validation_stats["columns"],
+                    length=validation_stats["alignment_length"],
+                    ragged=(
+                        " (modal; {n} distinct lengths)".format(
+                            n=validation_stats["distinct_alignment_lengths"]
+                        )
+                        if validation_stats["distinct_alignment_lengths"] > 1
+                        else ""
+                    ),
+                    idc=validation_stats["id_column"],
+                    seqc=validation_stats["sequence_column"],
+                    checks=len(validation_stats["checked"]),
+                ),
+            )
+        )
     if should_apply_column_mapping(method, current_ext, params):
         required_keys = active_required_keys(method, params)
         if current_ext not in TABULAR_EXTENSIONS:
@@ -769,6 +1021,37 @@ def prepare_input_for_method(
                     details={"method_id": method, "input_ext": current_ext},
                 )
         except ConversionError as exc:
+            if (
+                method == "gctree"
+                and step_name == "convert_table_to_aligned_fasta"
+                and exc.code in GCTREE_IDENTIFIER_CONVERTER_CODES
+            ):
+                details = exc.details or {}
+                if exc.code == "DUPLICATE_IDS":
+                    message = (
+                        "GCtree converts the table to FASTA, where every record header must "
+                        "be unique, but identifier {id!r} appears on rows {first} and {second}."
+                    ).format(
+                        id=details.get("id"),
+                        first=details.get("first_row_number"),
+                        second=details.get("duplicate_row_number"),
+                    )
+                else:
+                    message = (
+                        "GCtree converts the table to FASTA, where every record needs a header, "
+                        "but column '{column}' is empty on row {row}."
+                    ).format(
+                        column=details.get("id_column"),
+                        row=details.get("row_number"),
+                    )
+                raise _conversion_error(
+                    method_id=method,
+                    input_ext=current_ext,
+                    message=message,
+                    converter_error=exc,
+                    code=exc.code,
+                    step=step_name,
+                ) from exc
             if (
                 method == "gctree"
                 and step_name == "convert_table_to_aligned_fasta"

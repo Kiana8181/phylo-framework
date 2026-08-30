@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowRight, Download } from "lucide-react";
+import { ArrowRight, Download, PlayCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -10,9 +10,8 @@ import {
 } from "@/features/docs/compatibility";
 import { getMethodDocModel } from "@/features/docs/loader";
 import { getMethodContent } from "@/features/docs/content";
+import { SAMPLE_FILENAME, SAMPLE_HREF, SAMPLE_SEQUENCE_COUNT } from "@/features/docs/sample";
 import { METHOD_IDS } from "@/features/docs/types";
-
-const SAMPLE_HREF = "/samples/phylo-runner-sample.tsv";
 
 function StatusCell({ status }: { status: ColumnStatus }) {
   switch (status) {
@@ -182,14 +181,15 @@ export function DataRequirementsDoc() {
 
       <Separator />
 
-      {/* Sample dataset */}
+      {/* Test dataset */}
       <section className="space-y-6">
         <div className="space-y-1">
-          <h2 className="text-2xl font-semibold tracking-tight">Sample dataset</h2>
+          <h2 className="text-2xl font-semibold tracking-tight">Test dataset</h2>
           <p className="text-muted-foreground">
-            A ready-to-fill template whose header row is every column the four methods require between them
-            (in canonical AIRR names). Fill in your rows and the same file runs through all four methods with
-            their default settings — no per-method reshaping.
+            <code className="rounded bg-muted px-1 py-0.5 font-mono text-sm">{SAMPLE_FILENAME}</code>{" "}
+            is <strong>clone 3128 of the official Dowser test dataset</strong>, extracted as a
+            standalone AIRR rearrangement table: {SAMPLE_SEQUENCE_COUNT} sequences, one clone. It
+            has the columns all four methods need, so the same file runs through every one of them.
           </p>
         </div>
 
@@ -197,19 +197,42 @@ export function DataRequirementsDoc() {
           <Button asChild className="gap-2">
             <a href={SAMPLE_HREF} download>
               <Download className="h-4 w-4" />
-              Download template (.tsv)
+              Download test dataset (.tsv)
             </a>
           </Button>
           <span className="text-sm text-muted-foreground">
-            TSV · required headers for all four methods · empty rows
+            TSV · {SAMPLE_SEQUENCE_COUNT} sequences · one clone
           </span>
+        </div>
+
+        <div className="space-y-3 text-sm text-muted-foreground">
+          <p>
+            <strong className="text-foreground">Why only one clone?</strong> GCtree accepts a single
+            clone per run. That is an internal limitation of GCtree itself and has nothing to do
+            with the framework — but it means a file meant to go through all four methods has to
+            stay at one clone.
+          </p>
+          <p>
+            If you do not need GCtree, a dataset with <strong>more than one clone is fine</strong>{" "}
+            for the other three, provided it carries the columns that method requires (see the
+            matrix above). Do note that you can only see results from different runs side by side
+            when they came from the <strong>same dataset</strong>, so pick one file and run
+            everything from it.
+          </p>
         </div>
 
         <p className="text-sm text-muted-foreground">
           Once uploaded, map each method&apos;s expected inputs on the run form, or read a specific
           method&apos;s field reference below.
         </p>
-        <div className="flex flex-wrap gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <Link
+            href="/documents/try-it-yourself"
+            className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline"
+          >
+            <PlayCircle className="h-3.5 w-3.5" />
+            Try it yourself
+          </Link>
           {METHOD_IDS.map((id) => (
             <Link
               key={id}
