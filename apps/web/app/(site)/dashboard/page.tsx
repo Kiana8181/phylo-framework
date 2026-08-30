@@ -7,10 +7,21 @@ import RunWizard from "@/components/phylo/wizard/RunWizard";
 import RunParamsPanel from "@/components/runs/RunParamsPanel";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Loading } from "@/components/ui/loading";
 import { SpinnerIllustration } from "@/components/ui/spinner-illustration";
+import {
+  SAMPLE_FILENAME,
+  SAMPLE_HREF,
+  SAMPLE_MIME,
+  TRY_SAMPLE_KEY,
+  type TrySampleIntent,
+} from "@/features/docs/sample";
+import { FilesApi } from "@/features/files/api";
+import { FILES_LIST_QUERY_KEY } from "@/features/files/hooks";
 import { useContractSpec, useMethods } from "@/features/methods/hooks";
 import { RunsApi } from "@/features/runs/api";
 import { useCancelQueuedRun, useDashboardRuns, useRunResult, useRunStatus } from "@/features/runs/hooks";
+import { useUploadSession } from "@/features/uploads/hooks";
 import { notify } from "@/lib/notify";
 import { formatRunDuration } from "@/lib/runDuration";
 import { type MethodInfo, type RunSummary } from "@phylo/contracts";
@@ -28,7 +39,13 @@ type WizardDefaults = {
   methodId: string;
   params: Record<string, unknown>;
   fileId?: string | null;
+  /** Banner copy explaining where the pre-filled values came from. */
+  note?: string;
 };
+
+const RERUN_NOTE = "Settings carried over from a previous run — tweak anything, or start from scratch.";
+const TRY_SAMPLE_NOTE =
+  "Loaded from the Try it yourself example — tweak anything, or start from scratch.";
 
 function _datasetLabel(datasetName?: string | null, datasetFiles?: string[] | null): string {
   if (datasetName && datasetName.trim()) return datasetName;
@@ -292,6 +309,8 @@ function LiveDashboard({ onViewResults }: { onViewResults: (runId: string) => vo
 
   const [showAddRun, setShowAddRun] = useState(false);
   const [wizardDefaults, setWizardDefaults] = useState<WizardDefaults | null>(null);
+  const [preparingSample, setPreparingSample] = useState(false);
+  const uploadSession = useUploadSession();
 
   // Pick up wizard defaults handed off from the results surface (one-shot).
   useEffect(() => {
@@ -299,13 +318,65 @@ function LiveDashboard({ onViewResults }: { onViewResults: (runId: string) => vo
       const raw = sessionStorage.getItem(WIZARD_DEFAULTS_KEY);
       if (raw) {
         sessionStorage.removeItem(WIZARD_DEFAULTS_KEY);
-        setWizardDefaults(JSON.parse(raw) as WizardDefaults);
+        const handoff = JSON.parse(raw) as WizardDefaults;
+        setWizardDefaults({ ...handoff, note: RERUN_NOTE });
         setShowAddRun(true);
       }
     } catch {
       /* ignore */
     }
   }, []);
+
+  // Resolve a "Try it yourself" click from the docs (one-shot). The docs button
+  // only records which method and parameters to use; here we make sure the
+  // example dataset is uploaded (reusing it if the reader already has it) and
+  // open the wizard on it.
+  const trySampleRef = useRef(false);
+  const uploadSample = uploadSession.upload;
+  useEffect(() => {
+    if (trySampleRef.current) return;
+
+    let intent: TrySampleIntent | null = null;
+    try {
+      const raw = sessionStorage.getItem(TRY_SAMPLE_KEY);
+      if (raw) {
+        sessionStorage.removeItem(TRY_SAMPLE_KEY);
+        intent = JSON.parse(raw) as TrySampleIntent;
+      }
+    } catch {
+      /* ignore */
+    }
+    if (!intent) return;
+
+    trySampleRef.current = true;
+    const { methodId, params } = intent;
+    setPreparingSample(true);
+
+    void (async () => {
+      try {
+        const list = await FilesApi.list({ limit: 100 });
+        let fileId = list.files.find((f) => f.original_filename === SAMPLE_FILENAME)?.id ?? null;
+
+        if (!fileId) {
+          const res = await fetch(SAMPLE_HREF);
+          if (!res.ok) throw new Error(`Example dataset unavailable (HTTP ${res.status}).`);
+          const file = new File([await res.blob()], SAMPLE_FILENAME, { type: SAMPLE_MIME });
+          fileId = (await uploadSample(file)).file_id;
+          queryClient.invalidateQueries({ queryKey: FILES_LIST_QUERY_KEY });
+        }
+
+        setWizardDefaults({ methodId, params, fileId, note: TRY_SAMPLE_NOTE });
+      } catch (e: unknown) {
+        notify.error(
+          "Could not load the example",
+          (e as Error)?.message ?? "The example dataset could not be prepared.",
+        );
+      } finally {
+        setPreparingSample(false);
+        setShowAddRun(true);
+      }
+    })();
+  }, [uploadSample, queryClient]);
 
   // Completion detection: a finished run drops out of /runs/dashboard (non-terminal
   // only). Diff tracked ids against the previous poll, fetch each dropped run's final
@@ -379,19 +450,30 @@ function LiveDashboard({ onViewResults }: { onViewResults: (runId: string) => vo
     </header>
   );
 
+  const preparingSampleCard = (
+    <Card className="p-6">
+      <Loading label="Preparing the example dataset…" />
+    </Card>
+  );
+
   // Empty state: no active run and empty queue → the wizard is the primary form.
   if (!hasAnything) {
     return (
       <main className="mx-auto max-w-6xl w-full p-4 sm:p-6 space-y-6 sm:space-y-8">
         {header}
-        <RunWizard
-          key={wizardKey}
-          methods={methods ?? []}
-          initialMethodId={wizardDefaults?.methodId}
-          initialParams={wizardDefaults?.params}
-          initialFileId={wizardDefaults?.fileId}
-          onSubmitDone={() => closeWizard()}
-        />
+        {preparingSample ? (
+          preparingSampleCard
+        ) : (
+          <RunWizard
+            key={wizardKey}
+            methods={methods ?? []}
+            initialMethodId={wizardDefaults?.methodId}
+            initialParams={wizardDefaults?.params}
+            initialFileId={wizardDefaults?.fileId}
+            prefillNote={wizardDefaults?.note}
+            onSubmitDone={() => closeWizard()}
+          />
+        )}
       </main>
     );
   }
@@ -471,7 +553,9 @@ function LiveDashboard({ onViewResults }: { onViewResults: (runId: string) => vo
 
       {/* Add run */}
       <section className="space-y-3">
-        {!showAddRun ? (
+        {preparingSample ? (
+          preparingSampleCard
+        ) : !showAddRun ? (
           <Button
             variant="outline"
             className="gap-1.5"
@@ -496,6 +580,7 @@ function LiveDashboard({ onViewResults }: { onViewResults: (runId: string) => vo
               initialMethodId={wizardDefaults?.methodId}
               initialParams={wizardDefaults?.params}
               initialFileId={wizardDefaults?.fileId}
+              prefillNote={wizardDefaults?.note}
               onSubmitDone={() => closeWizard()}
             />
           </Card>

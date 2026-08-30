@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BookOpen, Database, GitBranch, Network, Table2 } from "lucide-react";
+import { BookOpen, Database, GitBranch, Network, PlayCircle, Table2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { METHOD_IDS } from "@/features/docs/types";
 import { getMethodContent } from "@/features/docs/content";
@@ -14,6 +14,7 @@ const ITEMS: Item[] = [
   { href: "/documents/architecture", label: "Architecture", icon: Network },
   { href: "/documents/data-model", label: "Data model", icon: Database },
   { href: "/documents/data-requirements", label: "Data requirements", icon: Table2 },
+  { href: "/documents/try-it-yourself", label: "Try it yourself", icon: PlayCircle },
   ...METHOD_IDS.map((id) => ({
     href: `/documents/${id}`,
     label: getMethodContent(id).displayName,
