@@ -230,7 +230,7 @@ export function newickExportEntries(args: {
     });
   }
   entries.push({
-    label: "Newick",
+    label: "Newick (internal labels)",
     description: "Tree topology (.nwk)",
     filename: `${args.filename}.internal.nwk`,
     newick: args.internalNewick,
