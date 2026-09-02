@@ -683,3 +683,30 @@ docs/
 #   scripts/reset-local.sh     # clean-slate reset (DB + MinIO + staging)
 #   scripts/storage-check.mjs  # storage connectivity / bucket check
 ```
+
+---
+
+## License
+
+Phylo-Framework is released under the **MIT License** — see [LICENSE](LICENSE).
+
+The datasets and run outputs archived alongside the paper are released
+separately under **CC-BY-4.0**, and are deposited on Zenodo at
+[10.5281/zenodo.22233538](https://doi.org/10.5281/zenodo.22233538).
+
+### Third-party components
+
+The framework orchestrates four independently developed reconstruction tools,
+which are **not** covered by this licence. Each runs inside its own container
+image and retains the licence of its upstream project:
+
+| Component | Upstream project |
+|---|---|
+| GCtree | [matsengrp/gctree](https://github.com/matsengrp/gctree) |
+| ClonalTree | [julibinho/ClonalTree](https://github.com/julibinho/ClonalTree) (git submodule) |
+| Dowser | [Immcantation](https://immcantation.readthedocs.io/) suite |
+| BrepPhylo | [Fraternalilab/BrepPhylo](https://github.com/Fraternalilab/BrepPhylo) |
+| PHYLIP (`dnapars`) | [PHYLIP 3.697](https://phylipweb.github.io/phylip/) |
+| MUSCLE | [rcedgar/muscle](https://github.com/rcedgar/muscle) |
+
+Consult each project's own licence before redistributing its image.
