@@ -312,7 +312,9 @@ if (requireNamespace("dowser", quietly = TRUE)) {
   p_size <- list(analysis_mode = "tree_only", tipsize = 2, tip_size_by = "duplicate_count")
   fig_size <- render_tree_figures(ex_trees, p_size, NULL, FALSE, "c_call")
   assert_true(
-    !is.null(fig_size$figures_b64) && length(fig_size$figures_b64) > 0,
+    !is.null(fig_size$figure_paths) &&
+      length(fig_size$figure_paths) > 0 &&
+      file.exists(fig_size$figure_paths[[1]]),
     "tip_size_by duplicate_count renders PNG previews"
   )
 }
