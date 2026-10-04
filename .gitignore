@@ -12,3 +12,13 @@ venv/
 !.env.example
 
 runtime/
+
+# Generated test reports and browser/build caches
+coverage/
+test-results/
+playwright-report/
+.coverage
+.coverage.*
+.pytest_cache/
+apps/web/.next/
+*.tsbuildinfo

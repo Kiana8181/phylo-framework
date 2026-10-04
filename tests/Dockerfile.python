@@ -1,0 +1,5 @@
+ARG BASE_IMAGE=phylo-api:latest
+FROM ${BASE_IMAGE}
+RUN pip install --no-cache-dir coverage==7.10.6
+# Auto-instrument Python job subprocesses as well as the API/worker parent.
+RUN python -c "import site,pathlib; pathlib.Path(site.getsitepackages()[0], 'phylo_test_coverage.pth').write_text('import coverage; coverage.process_startup()\n')"

@@ -1,0 +1,17 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import {createRequire} from 'node:module';
+const require = createRequire(import.meta.url);
+const {createCoverageMap} = require('istanbul-lib-coverage');
+const {createSourceMapStore} = require('istanbul-lib-source-maps');
+const {createContext} = require('istanbul-lib-report');
+const reports = require('istanbul-reports');
+const browser = createCoverageMap({});
+const files = fs.readdirSync('coverage/browser-raw').filter(f => f.endsWith('.json'));
+if (!files.length) throw new Error('No browser coverage collected');
+for (const file of files) browser.merge(JSON.parse(fs.readFileSync(path.join('coverage/browser-raw', file))));
+const mapped = await createSourceMapStore().transformCoverage(browser);
+const combined = createCoverageMap(JSON.parse(fs.readFileSync('coverage/web/coverage-final.json')));
+combined.merge(mapped);
+const context = createContext({dir: 'coverage/web-combined', coverageMap: combined});
+for (const name of ['html', 'lcovonly', 'json-summary', 'text-summary']) reports.create(name).execute(context);

@@ -209,3 +209,42 @@ async def test_partial_unique_index_rejects_second_active_turn(session):
         )
         await session.flush()
     await session.rollback()
+
+
+async def test_concurrent_workers_claim_distinct_runs(session):
+    """Separate connections contend on real PostgreSQL row locks."""
+    import asyncio
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+    repo = RunRepository(session)
+    expected = set()
+    for i in range(4):
+        user = await make_user(session, f'parallel-{i}')
+        expected.add((await enqueue(repo, user.id)).id)
+    maker = async_sessionmaker(session.bind, expire_on_commit=False)
+    async def claim(worker):
+        async with maker() as db:
+            run = await RunRepository(db).claim_next_run(worker, lease_seconds=60)
+            return run.id if run else None
+    claims = await asyncio.gather(*(claim(f'w{i}') for i in range(8)))
+    assert {r for r in claims if r} == expected
+    assert sum(r is not None for r in claims) == 4
+
+
+async def test_expired_lease_reclaimed_and_old_worker_cannot_renew(session):
+    from datetime import timedelta
+    from apps.api.utils.datetime_util import utc_now
+    repo = RunRepository(session)
+    user = await make_user(session, 'lease')
+    run = await enqueue(repo, user.id)
+    claimed = await repo.claim_next_run('old', lease_seconds=60)
+    run_id = claimed.id
+    started = claimed.started_at
+    await repo.set_method_job_id(run_id, 'durable-job')
+    assert await repo.claim_next_run('new', lease_seconds=60) is None
+    await repo.update(run_id, worker_lease_until=utc_now() - timedelta(seconds=1))
+    reclaimed = await repo.claim_next_run('new', lease_seconds=60)
+    assert reclaimed.id == run_id
+    assert reclaimed.started_at == started
+    assert reclaimed.method_job_id == 'durable-job'
+    assert not await repo.renew_lease(run_id, 'old')
+    assert await repo.renew_lease(run_id, 'new')

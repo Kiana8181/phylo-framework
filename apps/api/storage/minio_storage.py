@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 from typing import AsyncIterator, BinaryIO, Optional
 from urllib.parse import urljoin
 
@@ -167,7 +168,7 @@ class MinIOStorage(StorageInterface):
                 url = self.client.presigned_get_object(
                     self.bucket_name,
                     key,
-                    expires_in=expires_in,
+                    expires=timedelta(seconds=expires_in),
                 )
             else:
                 # Public URL (if bucket policy allows)

@@ -16,7 +16,15 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from job_manager import JobManager  # noqa: E402
+import importlib.util
+
+@pytest.fixture(params=["gctree", "clonaltree"])
+def manager_class(request):
+    module_path = Path(__file__).resolve().parents[2] / request.param / "job_manager.py"
+    spec = importlib.util.spec_from_file_location(f"{request.param}_manager", module_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.JobManager
 
 
 def _write_runner(tmp_path: Path, body: str) -> str:
@@ -25,7 +33,7 @@ def _write_runner(tmp_path: Path, body: str) -> str:
     return str(runner)
 
 
-def _wait_for_status(mgr: JobManager, job_id: str, statuses, timeout=10.0):
+def _wait_for_status(mgr, job_id: str, statuses, timeout=10.0):
     deadline = time.time() + timeout
     last = None
     while time.time() < deadline:
@@ -75,9 +83,9 @@ time.sleep(60)
 """
 
 
-def test_submit_returns_quickly_and_reaches_done(tmp_path):
+def test_submit_returns_quickly_and_reaches_done(tmp_path, manager_class):
     runner = _write_runner(tmp_path, DONE_RUNNER)
-    mgr = JobManager("gctree", jobs_dir=str(tmp_path / "jobs"), runner_path=runner)
+    mgr = manager_class("gctree", jobs_dir=str(tmp_path / "jobs"), runner_path=runner)
 
     t0 = time.time()
     job_id = mgr.submit(file_path="/tmp/in.fasta", params={"k": 1}, run_id="run-1")
@@ -101,9 +109,9 @@ def test_submit_returns_quickly_and_reaches_done(tmp_path):
 
 
 @pytest.mark.skipif(os.name != "posix", reason="process-group cancel is POSIX-only")
-def test_cancel_terminates_long_running_job(tmp_path):
+def test_cancel_terminates_long_running_job(tmp_path, manager_class):
     runner = _write_runner(tmp_path, LONG_RUNNER)
-    mgr = JobManager("gctree", jobs_dir=str(tmp_path / "jobs"), runner_path=runner)
+    mgr = manager_class("gctree", jobs_dir=str(tmp_path / "jobs"), runner_path=runner)
 
     job_id = mgr.submit(file_path=None, params={}, run_id="run-2")
     running = _wait_for_status(mgr, job_id, {"RUNNING"})
@@ -133,3 +141,24 @@ def test_cancel_terminates_long_running_job(tmp_path):
             break
         time.sleep(0.2)
     assert terminated, "cancelled job child process did not terminate"
+
+
+def test_unknown_job_and_incomplete_result(tmp_path, manager_class):
+    mgr = manager_class("test", jobs_dir=str(tmp_path))
+    assert mgr.status("missing") is None
+    assert mgr.result("missing") == (None, 404)
+    assert mgr.cancel("missing") is None
+
+
+def test_terminal_states_survive_manager_restart(tmp_path, manager_class):
+    import json
+    mgr = manager_class("test", jobs_dir=str(tmp_path))
+    state = mgr.jobs_root / "job"
+    state.mkdir()
+    (state / "status.json").write_text(json.dumps({"status": "DONE"}))
+    (state / "result.json").write_text(json.dumps({"trees": ["(a,b);"]}))
+    restarted = manager_class("test", jobs_dir=str(tmp_path))
+    assert restarted.result("job") == ({"trees": ["(a,b);"]}, 200)
+    assert restarted.cancel("job")["status"] == "DONE"
+    (state / "result.json").write_text("broken JSON")
+    assert restarted.result("job") == (None, 409)

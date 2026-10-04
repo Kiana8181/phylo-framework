@@ -1,0 +1,47 @@
+# Apply after docker-compose.test.yml to capture real Python E2E subprocess coverage.
+services:
+  api:
+    image: phylo-api:test-coverage
+    build:
+      context: .
+      dockerfile: tests/Dockerfile.python
+      args: {BASE_IMAGE: 'phylo-api:latest'}
+    environment: &api-coverage
+      COVERAGE_PROCESS_START: /test-config/coverage-process.ini
+      COVERAGE_SOURCE: /repo/apps/api
+      COVERAGE_FILE: /coverage/api-e2e/.coverage
+    volumes:
+      - ./tests:/test-config:ro
+      - ./coverage:/coverage
+  worker:
+    image: phylo-api:test-coverage
+    environment: *api-coverage
+    volumes:
+      - ./tests:/test-config:ro
+      - ./coverage:/coverage
+  gctree:
+    image: phylo-gctree:test-coverage
+    build:
+      context: .
+      dockerfile: tests/Dockerfile.python
+      args: {BASE_IMAGE: 'phylo-gctree:latest'}
+    environment:
+      COVERAGE_PROCESS_START: /test-config/coverage-process.ini
+      COVERAGE_SOURCE: /srv
+      COVERAGE_FILE: /coverage/gctree-e2e/.coverage
+    volumes:
+      - ./tests:/test-config:ro
+      - ./coverage:/coverage
+  clonaltree:
+    image: phylo-clonaltree:test-coverage
+    build:
+      context: .
+      dockerfile: tests/Dockerfile.python
+      args: {BASE_IMAGE: 'phylo-clonaltree:latest'}
+    environment:
+      COVERAGE_PROCESS_START: /test-config/coverage-process.ini
+      COVERAGE_SOURCE: /srv/clonaltree
+      COVERAGE_FILE: /coverage/clonaltree-e2e/.coverage
+    volumes:
+      - ./tests:/test-config:ro
+      - ./coverage:/coverage

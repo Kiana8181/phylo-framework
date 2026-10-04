@@ -1,0 +1,16 @@
+.git
+.env
+.env.*
+!.env.example
+**/node_modules
+.venv
+**/.pytest_cache
+**/__pycache__
+**/.next
+**/*.tsbuildinfo
+.coverage
+.coverage.*
+coverage
+test-results
+playwright-report
+runtime/storage

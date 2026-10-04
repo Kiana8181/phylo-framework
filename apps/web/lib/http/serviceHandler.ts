@@ -37,7 +37,7 @@ export async function serviceHandler<TResp = any, TBody = unknown>({
   onFailure,
   onFinal,
 }: ServiceHandlerParams<TBody>): Promise<TResp> {
-  const isFD = typeof FormData !== "undefined" && data instanceof FormData;
+  let isFD = typeof FormData !== "undefined" && data instanceof FormData;
 
   // 🔁 Only transform to FormData when caller passed a plain object + hasFile=true
   if (!isFD && data && hasFile) {
@@ -48,11 +48,12 @@ export async function serviceHandler<TResp = any, TBody = unknown>({
       else form.append(k, v as Blob);
     });
     data = form as any;
+    isFD = true;
   }
 
   // ❌ Do NOT set Content-Type for FormData; let axios/browser set boundaries
   if (isFD) {
-    config = { ...(config ?? {}) };
+    config = { ...(config ?? {}), headers: { ...(config?.headers ?? {}) } };
     if (config.headers && "Content-Type" in config.headers) {
       delete config.headers["Content-Type"];
     }
@@ -80,7 +81,6 @@ export async function serviceHandler<TResp = any, TBody = unknown>({
         onSuccess?.(raw.data);
         return raw.data as TResp;
       }
-      onFailure?.(raw);
       throw new Error(raw.message || "Request failed");
     }
 

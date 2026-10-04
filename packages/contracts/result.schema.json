@@ -16,9 +16,7 @@
         "type": "object",
         "required": [
           "id",
-          "newick",
-          "has_lineage_plot",
-          "has_service_image"
+          "has_lineage_plot"
         ],
         "properties": {
           "id": {
@@ -36,9 +34,16 @@
           },
           "has_service_image": {
             "type": "boolean"
+          },
+          "clone_id": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "description": "Lightweight tree summary. Fetch Newick and node data from /runs/{run_id}/trees/{tree_id}."
       }
     },
     "clones": {},

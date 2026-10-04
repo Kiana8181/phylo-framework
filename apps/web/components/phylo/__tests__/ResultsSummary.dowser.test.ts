@@ -67,18 +67,3 @@ describe("readDowserResult", () => {
     expect(result.inputQc?.n_excluded_trait_missing).toBe(1);
   });
 });
-
-describe("Dowser results presentation contracts", () => {
-  it("includes canonical_ids in stats for label warning visibility", () => {
-    const stats = { canonical_ids: "sequence_id", label_field: "sample_id" };
-    expect(stats.canonical_ids).toBe("sequence_id");
-  });
-
-  it("artifact list supports download links when present", () => {
-    const artifacts = [
-      { name: "all_sequences.fasta", path: "all_sequences.fasta", kind: "fasta" },
-      { name: "input_qc.json", path: "input_qc.json", kind: "json" },
-    ];
-    expect(artifacts.every((a) => a.name && a.kind)).toBe(true);
-  });
-});

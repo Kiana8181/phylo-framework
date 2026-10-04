@@ -321,8 +321,12 @@ async def refresh_token(
             detail="Invalid token payload",
         )
     
+    try:
+        parsed_user_id = UUID(user_id)
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(status_code=401, detail="Invalid token payload")
     user_repo = UserRepository(db)
-    user = await user_repo.get_by_id(UUID(user_id))
+    user = await user_repo.get_by_id(parsed_user_id)
     
     if not user or not user.is_active:
         raise HTTPException(

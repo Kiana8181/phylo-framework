@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import inspect
 import shutil
 from pathlib import Path
 from typing import AsyncIterator, BinaryIO, Optional
@@ -26,6 +27,13 @@ class LocalStorage(StorageInterface):
         self.base_url = base_url
         self.base_path.mkdir(parents=True, exist_ok=True)
 
+    def _resolve_key(self, file_path: str) -> tuple[str, Path]:
+        key = file_path.lstrip("/")
+        full_path = (self.base_path / key).resolve()
+        if not full_path.is_relative_to(self.base_path) or full_path == self.base_path:
+            raise ValueError("Storage key must stay within the storage directory")
+        return key, full_path
+
     async def upload(
         self,
         file_content: bytes | BinaryIO,
@@ -34,8 +42,7 @@ class LocalStorage(StorageInterface):
     ) -> str:
         """Upload file to local storage."""
         # Ensure file_path is relative and safe
-        safe_path = file_path.lstrip("/")
-        full_path = self.base_path / safe_path
+        safe_path, full_path = self._resolve_key(file_path)
         
         # Create parent directories
         full_path.parent.mkdir(parents=True, exist_ok=True)
@@ -47,7 +54,9 @@ class LocalStorage(StorageInterface):
         else:
             async with aiofiles.open(full_path, "wb") as f:
                 while True:
-                    chunk = await file_content.read(1024 * 1024)  # 1MB chunks
+                    chunk = file_content.read(1024 * 1024)
+                    if inspect.isawaitable(chunk):
+                        chunk = await chunk
                     if not chunk:
                         break
                     await f.write(chunk)
@@ -62,16 +71,14 @@ class LocalStorage(StorageInterface):
         content_type: Optional[str] = None,
     ) -> str:
         """Copy a file from disk into local storage (test/dev backend)."""
-        safe_path = file_path.lstrip("/")
-        full_path = self.base_path / safe_path
+        safe_path, full_path = self._resolve_key(file_path)
         full_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(local_path, full_path)
         return safe_path
 
     async def download(self, file_path: str) -> bytes:
         """Download file from local storage."""
-        safe_path = file_path.lstrip("/")
-        full_path = self.base_path / safe_path
+        safe_path, full_path = self._resolve_key(file_path)
 
         if not full_path.exists():
             raise FileNotFoundError(f"File not found: {file_path}")
@@ -85,8 +92,7 @@ class LocalStorage(StorageInterface):
         chunk_size: int = 1024 * 1024,
     ) -> AsyncIterator[bytes]:
         """Stream a local file in chunks."""
-        safe_path = file_path.lstrip("/")
-        full_path = self.base_path / safe_path
+        safe_path, full_path = self._resolve_key(file_path)
 
         if not full_path.exists():
             raise FileNotFoundError(f"File not found: {file_path}")
@@ -100,8 +106,7 @@ class LocalStorage(StorageInterface):
 
     async def delete(self, file_path: str) -> bool:
         """Delete file from local storage."""
-        safe_path = file_path.lstrip("/")
-        full_path = self.base_path / safe_path
+        safe_path, full_path = self._resolve_key(file_path)
         
         try:
             if full_path.exists():
@@ -117,22 +122,21 @@ class LocalStorage(StorageInterface):
         expires_in: Optional[int] = None,
     ) -> str:
         """Get URL for local file."""
-        safe_path = file_path.lstrip("/")
+        safe_path, _ = self._resolve_key(file_path)
         return urljoin(self.base_url.rstrip("/") + "/", safe_path)
 
     async def exists(self, file_path: str) -> bool:
         """Check if file exists."""
-        safe_path = file_path.lstrip("/")
-        full_path = self.base_path / safe_path
+        safe_path, full_path = self._resolve_key(file_path)
         return full_path.exists()
 
     async def move(self, src_path: str, dst_path: str) -> str:
         """Rename a file within local storage (atomic on same filesystem)."""
-        src = self.base_path / src_path.lstrip("/")
-        dst = self.base_path / dst_path.lstrip("/")
+        _, src = self._resolve_key(src_path)
+        dst_key, dst = self._resolve_key(dst_path)
         dst.parent.mkdir(parents=True, exist_ok=True)
         os.replace(src, dst)
-        return dst_path.lstrip("/")
+        return dst_key
 
     def get_storage_type(self) -> str:
         """Get storage type."""

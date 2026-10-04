@@ -1,0 +1,138 @@
+# Independent project, ports and disposable volumes. Never loads the developer .env.
+name: phylo-tests
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: phylo_test
+      POSTGRES_PASSWORD: phylo_test
+      POSTGRES_DB: phylo_test
+    ports: ["127.0.0.1:55432:5432"]
+    tmpfs: [/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U phylo_test -d phylo_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: phylo_test
+      MINIO_ROOT_PASSWORD: phylo_test_secret
+    ports: ["127.0.0.1:59000:9000"]
+    tmpfs: [/data]
+  api:
+    image: phylo-api:latest
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    profiles: [full]
+    working_dir: /repo
+    environment: &test-api-env
+      DATABASE_URL: postgresql+asyncpg://phylo_test:phylo_test@postgres:5432/phylo_e2e_test
+      STORAGE_BACKEND: minio
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_ACCESS_KEY_ID: phylo_test
+      S3_SECRET_ACCESS_KEY: phylo_test_secret
+      S3_BUCKET_DATASETS: phylo-test-datasets
+      S3_BUCKET_ARTIFACTS: phylo-test-artifacts
+      S3_FORCE_PATH_STYLE: "true"
+      HOST_RUNTIME_SHARED_ROOT: /runtime/storage
+      STORAGE_LOCAL_PATH: /runtime/storage
+      METHOD_SERVICE_FILE_PREFIX: /runtime/storage
+      CONTRACTS_DIR: /repo/packages/contracts
+      METHOD_GCTREE_URL: http://gctree:8002
+      METHOD_CLONALTREE_URL: http://clonaltree:8004
+      METHOD_DOWSER_URL: http://dowser:8001
+      METHOD_BREPPHYLO_URL: http://brepphylo:8003
+      JWT_SECRET_KEY: test-only-key-not-for-deployment
+      RESEND_API_KEY: ""
+      GOOGLE_CLIENT_ID: ""
+      GOOGLE_CLIENT_SECRET: ""
+      CORS_ORIGINS: http://127.0.0.1:53000
+      PUBLIC_API_BASE_URL: http://127.0.0.1:58000
+      WORKER_POLL_INTERVAL: "0.2"
+      WORKER_METHOD_POLL_INTERVAL: "0.2"
+      ENV: test
+    volumes:
+      - ./apps:/repo/apps:ro
+      - ./packages:/repo/packages:ro
+      - ./alembic.ini:/repo/alembic.ini:ro
+      - test-workspace:/runtime/storage
+    ports: ["127.0.0.1:58000:8000"]
+    depends_on:
+      postgres: {condition: service_healthy}
+    command: [sh, -c, "alembic upgrade head && exec uvicorn apps.api.main:app --host 0.0.0.0 --port 8000"]
+    healthcheck:
+      test: [CMD, curl, -fsS, "http://127.0.0.1:8000/health"]
+      interval: 2s
+      timeout: 3s
+      retries: 40
+  worker:
+    image: phylo-api:latest
+    profiles: [full]
+    working_dir: /repo
+    environment: *test-api-env
+    volumes:
+      - ./apps:/repo/apps:ro
+      - ./packages:/repo/packages:ro
+      - test-workspace:/runtime/storage
+    depends_on:
+      api: {condition: service_healthy}
+    command: [python, -m, apps.api.workers.run_worker]
+  gctree:
+    image: phylo-gctree:latest
+    build: ./services/gctree
+    profiles: [full]
+    environment: &test-method-env
+      CONTRACTS_DIR: /contracts
+      METHOD_JOBS_DIR: /tmp/phylo-test-jobs
+      METHOD_SERVICE_FILE_PREFIX: /runtime/storage
+      RUNS_DIR: /runtime/storage
+      STORAGE_BACKEND: minio
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_ACCESS_KEY_ID: phylo_test
+      S3_SECRET_ACCESS_KEY: phylo_test_secret
+      S3_BUCKET_ARTIFACTS: phylo-test-artifacts
+      S3_FORCE_PATH_STYLE: "true"
+      PYTHONHASHSEED: "0"
+    volumes:
+      - ./services/gctree:/srv:ro
+      - ./packages/contracts:/contracts:ro
+      - test-workspace:/runtime/storage:ro
+    ports: ["127.0.0.1:58002:8002"]
+  clonaltree:
+    image: phylo-clonaltree:latest
+    build: ./services/clonaltree
+    profiles: [full]
+    environment: *test-method-env
+    volumes:
+      - ./services/clonaltree:/srv/clonaltree:ro
+      - ./packages/contracts:/contracts:ro
+      - test-workspace:/runtime/storage:ro
+    ports: ["127.0.0.1:58004:8004"]
+  dowser:
+    image: phylo-dowser:latest
+    build: ./services/dowser
+    platform: linux/amd64
+    profiles: [full]
+    environment: *test-method-env
+    volumes:
+      - ./services/dowser:/srv:ro
+      - ./packages/contracts:/contracts:ro
+      - test-workspace:/runtime/storage:ro
+    ports: ["127.0.0.1:58001:8001"]
+  brepphylo:
+    image: phylo-brepphylo:latest
+    build: ./services/brepphylo
+    platform: linux/amd64
+    profiles: [full]
+    environment: *test-method-env
+    volumes:
+      - ./services/brepphylo:/srv:ro
+      - ./packages/contracts:/contracts:ro
+      - test-workspace:/runtime/storage:ro
+    ports: ["127.0.0.1:58003:8003"]
+volumes:
+  test-workspace:

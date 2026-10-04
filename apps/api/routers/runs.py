@@ -212,6 +212,8 @@ async def _load_run_with_access(
     if not run:
         raise HTTPException(404, "Run not found")
 
+    if run.user_id is not None and current_user is None:
+        raise HTTPException(401, "Authentication required", headers={"WWW-Authenticate": "Bearer"})
     if current_user and not current_user.is_admin and run.user_id != current_user.id:
         raise HTTPException(403, "Access denied")
     return run

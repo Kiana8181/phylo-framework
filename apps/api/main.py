@@ -66,7 +66,10 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     else:
         msg = str(detail) if detail else "Error"
         data = None
-    return err(msg, status_code=exc.status_code, data=data)
+    response = err(msg, status_code=exc.status_code, data=data)
+    if exc.headers:
+        response.headers.update(exc.headers)
+    return response
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):

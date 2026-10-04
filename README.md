@@ -36,6 +36,7 @@ A one-page UI to run phylogeny/lineage tree methods behind a simple orchestrator
 - [Manual Run (Developers)](#manual-run-developers)
 - [Clean Reset (wipe local DB + storage)](#clean-reset-wipe-local-db--storage)
 - [Environment Variables](#environment-variables)
+- [Testing and Coverage](#testing-and-coverage)
 - [Troubleshooting](#troubleshooting)
 - [Extend: Add a New Method](#extend-add-a-new-method)
 - [Repository Layout](#repository-layout)
@@ -501,7 +502,7 @@ Notice: default `tree_type=dnapars` expects `dnapars` on `PATH` (or `DNAPARS_PAT
 
 ```bash
 Rscript services/brepphylo/tests/run_validators.R
-Rscript services/brepphylo/tests/runtime/run_smoke.R
+npm run test:all  # includes real BrepPhylo scientific execution
 ```
 
 
@@ -633,6 +634,65 @@ All runtime configuration should live in root `.env` (copied from
 - `IGPHYML_BIN` / `IGPHYML_MOTIFS` / `IGPHYML_PATH` / `DNAPARS_PATH` — optional method runtime overrides
 
 `apps/api/.env` and `apps/web/.env` are now legacy compatibility files and should stay empty.
+
+---
+
+## Testing and Coverage
+
+The test suite covers the shared contracts, frontend unit/component behavior,
+FastAPI routes, real PostgreSQL migrations and queue concurrency, local/S3/MinIO
+storage, worker transitions, and all four Python/R scientific services. Chromium
+also exercises signup/login, file deletion and each method's documented example
+through form submission to rendered tree results.
+
+```bash
+# Once, after npm ci and creating .venv:
+.venv/bin/python -m pip install -r requirements-test.txt
+npx playwright install chromium
+
+npm test                         # Unit + DB/storage integration + coverage
+npm run test:all -- --build       # First complete run, builds scientific images
+npm run test:all                  # Complete run reusing existing image dependencies
+```
+
+Docker Desktop must be running. Tests use the independent `phylo-tests` Compose
+project, disposable databases/buckets and loopback ports 55432, 59000, 58000–58004
+and 53000. They do not use the application's `.env`, database or MinIO volumes.
+The runner cleans up its test containers/volumes on completion or failure.
+No local R installation is needed.
+
+Reports are generated under `coverage/`: contracts and frontend HTML/LCOV;
+Python HTML/XML with branch coverage from unit tests and real subprocesses;
+separate R covr reports; scientific result/checksum evidence; Playwright reports
+and failure traces. Missing infrastructure and coverage regressions fail the
+run. Executable shared contracts have a 100% coverage gate; other layers enforce
+measured baselines and report uncovered code explicitly.
+
+The verified complete run passed **287 Python tests**, **121 contract tests**,
+**156 frontend tests**, **8 scientific E2E scenarios**, **6 browser scenarios**,
+and both R suites. Measured line coverage from that run:
+
+| Layer | Line coverage |
+|---|---:|
+| Executable shared contracts | 100% |
+| API (unit/integration + real E2E processes) | 75.75% |
+| GCtree service wrapper | 62.99% |
+| ClonalTree service wrapper | 79.02% |
+| Frontend (unit + Chromium) | 42.98% |
+| Dowser R modules | 44.24% |
+| BrepPhylo R modules | 61.67% |
+
+R percentages exclude executable entrypoints; Python service percentages exclude
+upstream scientific packages/submodule code. Full scope and exclusions are in
+[TESTING.md](docs/TESTING.md). These are recorded results, not a claim of complete
+branch coverage; regenerated reports are authoritative after changes.
+
+[GitHub Actions](.github/workflows/tests.yml) runs both test stages on pushes,
+pull requests, manual dispatch and a weekly schedule, retaining reports for
+30 days. [Testing documentation](docs/TESTING.md) details every layer, commands,
+coverage exclusions, corrected defects and remaining scientific/browser scope.
+Coverage is not a claim that every biological configuration or upstream algorithm
+has been validated.
 
 ---
 

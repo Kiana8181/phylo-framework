@@ -1,0 +1,20 @@
+[run]
+branch = True
+source = apps/api, services/gctree, services/clonaltree
+omit =
+    */tests/*
+    */base-codes/*
+    */migrations/*
+    */sitecustomize.py
+
+[report]
+show_missing = True
+skip_empty = True
+precision = 2
+
+[html]
+directory = coverage/python/html
+
+[xml]
+output = coverage/python/coverage.xml
+

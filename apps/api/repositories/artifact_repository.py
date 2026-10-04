@@ -69,7 +69,7 @@ class ArtifactRepository:
             # full log file, etc.).
             stmt = stmt.where(
                 RunArtifact.tree_id.is_(None),
-                RunArtifact.artifact_role != "phylogeny",
+                (RunArtifact.artifact_role.is_(None) | (RunArtifact.artifact_role != "phylogeny")),
             )
         stmt = stmt.order_by(RunArtifact.created_at.asc())
         result = await self.session.execute(stmt)

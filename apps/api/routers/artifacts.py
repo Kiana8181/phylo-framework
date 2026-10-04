@@ -54,6 +54,8 @@ async def _run_owned_or_403(run_id: UUID, current_user: Optional[User], db: Asyn
     run = await RunRepository(db).get_by_id(run_id)
     if run is None:
         raise HTTPException(404, "Run not found")
+    if run.user_id is not None and current_user is None:
+        raise HTTPException(401, "Authentication required", headers={"WWW-Authenticate": "Bearer"})
     if current_user and not current_user.is_admin and run.user_id != current_user.id:
         raise HTTPException(403, "Access denied")
     return run
