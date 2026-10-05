@@ -54,13 +54,14 @@ export type TreeNodeModel = {
   /** Server-provided vertical position. USED ONLY AS A SIBLING SORT KEY.
    * null for phylogeny (sibling order = newick order). */
   ySourceOrder: number | null;
-  /** >= 1, existing toAbundance() semantics. */
-  abundance: number;
+  /** Semantic abundance. Zero is measured zero; undefined is not provided. */
+  abundance: number | undefined;
   attrs: TreeNodeAttrs | undefined;
   // Aggregates for collapsed rendering, precomputed once per model.
   subtreeLeafCount: number;
   subtreeNodeCount: number;
-  subtreeAbundanceSum: number;
+  /** Undefined when any value in the subtree is unknown. */
+  subtreeAbundanceSum: number | undefined;
   subtreeMaxX: number;
 };
 

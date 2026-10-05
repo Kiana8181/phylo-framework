@@ -151,6 +151,8 @@ export default function SvgTreeRenderer({
             <g
               key={n.id}
               role="button"
+              data-node-id={n.id}
+              data-node-abundance={n.abundance}
               aria-expanded={n.isCollapsible ? true : undefined}
               tabIndex={n.faded ? -1 : 0}
               style={{

@@ -35,9 +35,11 @@ const MAX = 5000;
 
 describe("abundance radius/colour snapshot (Phase 4 contract)", () => {
   it("nodeRadius(log1p) reproduces the original radiusForAbundance", () => {
-    for (const v of SWEEP) {
+    for (const v of SWEEP.filter((value) => value > 0)) {
       expect(nodeRadius(v, MIN, MAX, "log1p")).toBe(refRadius(v, MIN, MAX));
     }
+    expect(nodeRadius(0, MIN, MAX, "log1p")).toBe(3);
+    expect(nodeRadius(undefined, MIN, MAX, "log1p")).toBe(3);
   });
 
   it("colorForAbundance reproduces the original palette selection", () => {

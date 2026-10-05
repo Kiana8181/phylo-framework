@@ -259,7 +259,9 @@ export default function TreeView({
           striped: summary ? summary.multiple : false,
           isMatch: false,
           faded,
-          labelText: showLabels ? `n=${ln.node.subtreeLeafCount} · Σ=${ln.node.subtreeAbundanceSum}` : null,
+          labelText: showLabels
+            ? `n=${ln.node.subtreeLeafCount} · Σ=${ln.node.subtreeAbundanceSum ?? "unknown"}`
+            : null,
         });
         if (inFocus(ln.id)) grow(ln.xPixel, ln.y - hh, farX, ln.y + hh);
         continue;
@@ -274,6 +276,7 @@ export default function TreeView({
         const fill = colorScale.colorFor(ln.node);
         out.push({
           id: ln.id,
+          abundance: ln.node.abundance,
           cx: ln.xPixel,
           cy: ln.y,
           r: ln.radius,
@@ -299,6 +302,7 @@ export default function TreeView({
         const displayLabel = resolveTipDisplayLabel(label, anno, displayIdField ?? null);
         out.push({
           id: ln.id,
+          abundance: ln.node.abundance,
           cx: ln.xPixel,
           cy: ln.y,
           r: ln.radius,
@@ -322,6 +326,7 @@ export default function TreeView({
         internalCount += 1;
         out.push({
           id: ln.id,
+          abundance: ln.node.abundance,
           cx: ln.xPixel,
           cy: ln.y,
           r: showInternalNodes ? PHYLO_INTERNAL_RADIUS : PHYLO_INTERNAL_HIT_RADIUS,

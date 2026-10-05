@@ -9,9 +9,10 @@ export function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
-export function toAbundance(value: unknown, fallback = 1): number {
+export function toAbundance(value: unknown): number | undefined {
+  if (value == null || value === "") return undefined;
   const n = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(n) || n <= 0) return fallback;
+  if (!Number.isFinite(n) || n < 0) return undefined;
   return n;
 }
 

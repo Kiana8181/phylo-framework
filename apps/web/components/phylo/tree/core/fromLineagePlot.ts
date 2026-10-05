@@ -135,11 +135,11 @@ export function fromLineagePlot(
       depth: 0,
       xSource: src.x,
       ySourceOrder: src.y,
-      abundance: toAbundance(src.abundance ?? attrs?.abundance, 1),
+      abundance: toAbundance(src.abundance ?? attrs?.abundance),
       attrs,
       subtreeLeafCount: 0,
       subtreeNodeCount: 0,
-      subtreeAbundanceSum: 0,
+      subtreeAbundanceSum: undefined,
       subtreeMaxX: src.x,
     });
   }

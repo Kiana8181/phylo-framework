@@ -62,7 +62,7 @@ export function fromNewick(newick: string, options: FromNewickOptions = {}): Tre
     lengthById.set(id, len);
 
     const sizeVal = sizeField ? anno?.[sizeField] : undefined;
-    const abundance = toAbundance(sizeVal ?? anno?.abundance, 1);
+    const abundance = toAbundance(sizeVal ?? anno?.abundance);
 
     nodes.set(id, {
       id,
@@ -79,7 +79,7 @@ export function fromNewick(newick: string, options: FromNewickOptions = {}): Tre
       attrs: anno as unknown as TreeNodeAttrs | undefined,
       subtreeLeafCount: 0,
       subtreeNodeCount: 0,
-      subtreeAbundanceSum: 0,
+      subtreeAbundanceSum: undefined,
       subtreeMaxX: 0,
     });
 

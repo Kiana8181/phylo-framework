@@ -124,7 +124,7 @@ percentages use different instrumentation denominators; compare like with like.
 | R methods | Existing validators and Dowser scientific orchestration; both methods' disk state, manifests, real child completion and process-group cancellation |
 | React/frontend | Existing scientific tree/layout/trace tests; actual upload hook progress/abort/cleanup, stop-run interaction, confirmation locking/cleanup, auth storage, HTTP failures and multipart conversion |
 | Scientific E2E | All four methods run the documented ExampleAirr clone through API → database → worker → real method → MinIO → tree/artifact downloads; graph invariants/checksums/history, plus malformed dataset failure for each method |
-| Browser E2E | Protected navigation, signup/login/reload, actual dataset deletion, and each method's documented example through form submission to rendered SVG results |
+| Browser E2E | Protected navigation, signup/login/reload, actual dataset deletion, each method's documented example, and zero-abundance persistence through API and node details |
 
 The initial audit found that `npm test` ran only TS suites, 13 PostgreSQL tests
 were silently skipped, no CI/coverage/browser harness existed, and the R suites
@@ -164,37 +164,71 @@ Google and email boundaries are simulated; no real accounts or mail are used.
 The browser suite currently covers Chromium, not Firefox/WebKit/mobile. Remaining
 uncovered branches and UI flows stay visible in the reports.
 
-## Verified working-tree run (2026-10-04)
+## Verified working-tree run (2026-10-05)
 
-`npm run test:all` completed successfully with Python 3.12, pytest 8.4.1,
-pytest-asyncio 1.1.0, coverage.py 7.10.6, Vitest 3.2.4, Playwright 1.55.1 and covr
-3.6.5. Type checking also passed. The local host used Node 24; CI specifies Node 22.
-The run reused installed scientific image dependencies and mounted current sources;
-a clean hosted image rebuild has not been executed locally.
+The revised checkout at base commit
+`a596dbf0a01fd066d396be39a77f8cbb82e8c491` passed `npm run test:all` after a
+complete `npm run test:all -- --build` image rebuild. The rebuild used cached
+dependency layers and rebuilt the changed source layers; it was a local arm64
+Docker Desktop run, not hosted CI or an anonymous public checkout. The test run
+used Node 24.13.0, Python 3.12.12, Docker 29.6.2, Docker Compose 5.3.1, pytest
+8.4.1, pytest-asyncio 1.1.0, coverage.py 7.10.6, Vitest 3.2.4, Playwright
+1.55.1 and covr 3.6.5. Node 22 was not installed locally; CI remains configured
+for Node 22.
+
+`npm run lint` exited successfully with existing unused-disable warnings in two
+test files and one unused `vi` import warning. `npm run build` initially failed
+because the sandbox could not resolve `fonts.googleapis.com`; the same command
+passed with network access, compiling all 24 static/SSG routes. Type checking
+passed both in the suite and production build.
 
 | Suite | Result |
 |---|---:|
-| Python unit/integration | 287 passed, 0 skipped |
-| TS shared contracts | 121 passed |
-| Frontend unit/component | 156 passed |
+| Python unit/integration | 312 passed, 0 skipped |
+| TS shared contracts | 123 passed |
+| Frontend unit/component | 161 passed |
 | Real scientific success/failure scenarios | 8 passed |
-| Real Chromium workflows | 6 passed |
-| Dowser and BrepPhylo R tests | All validator/module/process assertions passed |
+| Real Chromium workflows | 7 passed |
+| Dowser and BrepPhylo R tests | All validator/module/process/lifecycle assertions passed |
 
 | Layer | Line coverage | Branch coverage |
 |---|---:|---:|
-| API, combined | 75.75% | 54.45% |
-| GCtree service, combined | 62.99% | 50.00% |
-| ClonalTree service, combined | 79.02% | 63.33% |
+| API, combined | 74.57% | 54.06% |
+| GCtree service, combined | 63.74% | 51.01% |
+| ClonalTree service, combined | 78.70% | 63.23% |
 | Executable TS contracts | 100% | 100% |
-| Frontend unit + browser | 42.98% | 59.86% |
-| Dowser R modules | 44.24% | Not measured by this covr report |
-| BrepPhylo R modules | 61.67% | Not measured by this covr report |
+| Frontend unit + browser | 43.60% | 60.57% |
+| Dowser R modules | 45.39% | Not measured by this covr report |
+| BrepPhylo R modules | 65.35% | Not measured by this covr report |
 
-The unit-only frontend line figure is 17.88%; the combined figure includes real
-page behavior and all four result views. Python's combined line-and-branch
-aggregate is 68.82%; the layer-specific figures above are more informative.
+The unit-only frontend line figure is 17.67%; the combined figure includes real
+page behavior, zero-abundance inspection and all four result views. Python's
+combined line-and-branch aggregate is 68.44%; the
+layer-specific figures above are more informative. One rebuilt run encountered a
+single Dowser browser timeout after the same method had passed the scientific
+suite; the immediately repeated complete suite passed all seven browser workflows.
 Generated reports, not these snapshots, are authoritative for subsequent runs.
+
+### Isolated production-profile clean start
+
+A scratch copy of the revised source was started as Compose project
+`phylo-nargab-clean` with separate container names, local image tags, ports,
+bind-mounted staging and named volumes. This isolation was necessary because the
+ordinary Compose definition contains fixed container names and image tags. The
+host was arm64. Changed source layers were rebuilt; dependency layers were partly
+cached, and the web image ran a fresh `npm ci` before its successful production
+build. This was a local-source exercise rather than an anonymous public checkout.
+
+`docker compose --profile prod up -d --build` applied all migrations, initialized
+both MinIO buckets and the scoped method user, started the worker, and reached
+healthy API, web and PostgreSQL states. The
+documented in-container storage check passed upload/exists/download/stream/delete
+round trips for both datasets and artifacts. A real Chromium flow completed a
+GCtree run with the documented 43-sequence sample, retrieved three trees and
+three API artifact entries, and downloaded `gctree_run_artifacts.zip`.
+
+The isolated containers, network and volumes were then removed. Ordinary
+developer and test volumes were not used or reset.
 
 Tool configuration references: [Vitest 3 coverage](https://v3.vitest.dev/guide/coverage/)
 and [Playwright web server lifecycle](https://playwright.dev/docs/test-webserver).

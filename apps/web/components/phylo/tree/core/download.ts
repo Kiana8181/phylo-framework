@@ -10,6 +10,8 @@ import { LABEL_FONT_SIZE } from "./constants";
  * export serialiser. Geometry + colour + label; framework-agnostic plain data. */
 export type NodeVisual = {
   id: string;
+  /** Semantic abundance retained for DOM inspection and accessibility tests. */
+  abundance?: number;
   cx: number;
   cy: number;
   r: number;

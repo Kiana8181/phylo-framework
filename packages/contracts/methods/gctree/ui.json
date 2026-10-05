@@ -3,6 +3,7 @@
   "maxFiles": 1,
   "uploadGuidance": [
     "Aligned FASTA, or CSV/TSV with an aligned sequence column (framework converts to FASTA).",
+    "For CSV/TSV, one row becomes one FASTA record. duplicate_count and other unused metadata are not sent as GCtree weights; use repeated aligned sequences with distinct IDs only when record multiplicity is intended.",
     "A CSV/TSV does not have to contain the germline row — answer “no” to the germline question and the framework adds it from an ID and aligned sequence you provide.",
     "Single GCtree forest pickle (.p) for re-rank/re-render — set input scenario to gctree_forest_pickle.",
     "For DNAPARS outfile + abundances (and optional idmap, position maps), upload a single .zip containing manifest.json plus the files listed in the manifest (see docs).",

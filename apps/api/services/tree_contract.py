@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -296,7 +297,7 @@ def _to_number(value: Any) -> float | None:
         out = float(value)
     except Exception:
         return None
-    if out < 0:
+    if not math.isfinite(out) or out < 0:
         return None
     return out
 
@@ -348,20 +349,18 @@ def _extract_tree_specific_map(raw_result: dict[str, Any], key: str, idx: int) -
     return {}
 
 
-def _derive_leaf_abundance_from_rows(rows: list[dict[str, Any]]) -> int:
-    dup_values = [_to_number(r.get("duplicate_count")) for r in rows]
-    dup_sum = sum(v for v in dup_values if v is not None)
-    if dup_sum > 0:
-        return max(1, int(round(dup_sum)))
-
-    umi_values = [_to_number(r.get("umi_count")) for r in rows]
-    umi_sum = sum(v for v in umi_values if v is not None)
-    if umi_sum > 0:
-        return max(1, int(round(umi_sum)))
-
+def _derive_leaf_abundance_from_rows(
+    rows: list[dict[str, Any]],
+) -> tuple[float | None, str | None]:
+    for field in ("duplicate_count", "umi_count"):
+        if any(field in row and row.get(field) not in (None, "") for row in rows):
+            values = [_to_number(row.get(field)) for row in rows]
+            if any(value is None for value in values):
+                return None, None
+            return sum(value for value in values if value is not None), field
     if rows:
-        return max(1, len(rows))
-    return 1
+        return float(len(rows)), "annotation_rows"
+    return None, None
 
 
 def _build_lineage_layout(
@@ -421,7 +420,7 @@ def _build_lineage_layout(
         if parent_id:
             node_obj["parentId"] = parent_id
             edges_out.append({"source": parent_id, "target": node.norm_label})
-        if abundance is not None and abundance >= 1:
+        if abundance is not None:
             node_obj["abundance"] = abundance
         nodes_out.append(node_obj)
 
@@ -511,10 +510,12 @@ def _build_node_attributes(
     idx: int,
     raw_result: dict[str, Any],
     label_aliases: dict[str, list[str]],
-) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
+) -> tuple[dict[str, dict[str, Any]], dict[str, str], list[dict[str, Any]]]:
     nodes_by_label, nodes = _index_nodes(root)
     node_attributes: dict[str, dict[str, Any]] = {label: {} for label in nodes_by_label}
     label_to_sequence_id: dict[str, str] = {}
+    abundance_warnings: list[dict[str, Any]] = []
+    service_abundances: dict[str, Any] = {}
     label_cursor, _ = _assignment_lookup(label_aliases)
 
     # 1) existing node_attributes from service (if present)
@@ -526,6 +527,8 @@ def _build_node_attributes(
         if not target or target not in node_attributes:
             continue
         node_attributes[target].update(attrs)
+        if "abundance" in attrs:
+            service_abundances[target] = attrs.get("abundance")
         seq = attrs.get("sequence_id")
         if isinstance(seq, str) and seq.strip():
             label_to_sequence_id[target] = seq.strip()
@@ -562,35 +565,57 @@ def _build_node_attributes(
         label_to_sequence_id[target] = seq_id.strip()
         node_attributes[target]["sequence_id"] = seq_id.strip()
 
-    # 4) abundance handling
+    # 4) abundance handling. Explicit method output wins over service
+    # attributes, which win over annotation values. Derivation is leaf-only and
+    # is used only when no value was supplied.
     provided_abundances_raw = _extract_tree_specific_map(raw_result, "node_abundances", idx)
     abundance_cursor, _ = _assignment_lookup(label_aliases)
+    explicit_abundances: dict[str, Any] = {}
     for raw_label, value in provided_abundances_raw.items():
-        abundance = _to_number(value)
-        if abundance is None:
-            continue
         target = raw_label if raw_label in nodes_by_label else _resolve_label(str(raw_label), label_aliases, abundance_cursor)
         if not target or target not in node_attributes:
             continue
-        node_attributes[target]["abundance"] = max(1.0, abundance)
+        explicit_abundances[target] = value
 
     method = (method_id or "").lower()
-    if method in {"dowser", "brepphylo"}:
-        for node in nodes:
-            if node.is_leaf:
-                abundance = _derive_leaf_abundance_from_rows(anno_grouped.get(node.norm_label, []))
-                node_attributes[node.norm_label]["abundance"] = max(1, abundance)
-            else:
-                node_attributes[node.norm_label]["abundance"] = 1
-    else:
-        for node in nodes:
-            existing_abund = _to_number(node_attributes[node.norm_label].get("abundance"))
-            if existing_abund is None:
-                node_attributes[node.norm_label]["abundance"] = 1
-            else:
-                node_attributes[node.norm_label]["abundance"] = max(1.0, existing_abund)
+    for node in nodes:
+        label = node.norm_label
+        attrs = node_attributes[label]
+        source: str | None = None
+        raw_value: Any = None
+        supplied = False
+        if label in explicit_abundances:
+            raw_value, source, supplied = explicit_abundances[label], "node_abundances", True
+        elif label in service_abundances:
+            raw_value, source, supplied = service_abundances[label], "service", True
+        elif "abundance" in attrs:
+            raw_value, source, supplied = attrs.get("abundance"), "annotation", True
 
-    return node_attributes, label_to_sequence_id
+        abundance = _to_number(raw_value) if supplied else None
+        if supplied and abundance is None:
+            attrs.pop("abundance", None)
+            attrs.pop("abundance_source", None)
+            abundance_warnings.append(
+                {
+                    "code": "INVALID_NODE_ABUNDANCE",
+                    "message": "A negative or non-finite node abundance was omitted.",
+                    "details": {"node": label, "source": source},
+                }
+            )
+            continue
+
+        if abundance is None and node.is_leaf and method in {"dowser", "brepphylo"}:
+            abundance, source = _derive_leaf_abundance_from_rows(anno_grouped.get(label, []))
+
+        if abundance is None:
+            attrs.pop("abundance", None)
+            attrs.pop("abundance_source", None)
+        else:
+            attrs["abundance"] = abundance
+            if source in {"duplicate_count", "umi_count", "annotation_rows"}:
+                attrs["abundance_source"] = source
+
+    return node_attributes, label_to_sequence_id, abundance_warnings
 
 
 def _normalize_tree_input(tree_item: Any) -> str | None:
@@ -681,13 +706,15 @@ def assemble_unified_tree_result(
             )
             continue
 
-        node_attributes, label_to_sequence_id = _build_node_attributes(
+        node_attributes, label_to_sequence_id, abundance_warnings = _build_node_attributes(
             method_id=method_id,
             root=parsed,
             idx=idx,
             raw_result=raw_result,
             label_aliases=label_aliases,
         )
+        for warning in abundance_warnings:
+            warnings_out.append({**warning, "treeId": tree_id})
 
         lineage_plot: dict[str, Any] | None = None
         try:

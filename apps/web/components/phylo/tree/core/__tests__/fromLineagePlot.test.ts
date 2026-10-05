@@ -30,6 +30,23 @@ function baseline(): LineagePlot {
 }
 
 describe("fromLineagePlot topology", () => {
+  it("preserves zero and distinguishes missing abundance", () => {
+    const plot: LineagePlot = {
+      format: "lineage-plot-v1",
+      nodes: [
+        { id: "GL", label: "GL", x: 0, y: 0, isLeaf: false, abundance: 0 },
+        { id: "A", label: "A", x: 1, y: 0, isLeaf: true, parentId: "GL", abundance: 4 },
+        { id: "B", label: "B", x: 1, y: 1, isLeaf: true, parentId: "GL" },
+      ],
+      edges: [],
+    };
+    const model = fromLineagePlot(plot);
+    expect(model.nodes.get("GL")?.abundance).toBe(0);
+    expect(model.nodes.get("A")?.abundance).toBe(4);
+    expect(model.nodes.get("B")?.abundance).toBeUndefined();
+    expect(model.nodes.get("GL")?.subtreeAbundanceSum).toBeUndefined();
+  });
+
   it("reproduces the input topology exactly (no node added or removed)", () => {
     const model = fromLineagePlot(baseline());
     expect(model.rootId).toBe("r");

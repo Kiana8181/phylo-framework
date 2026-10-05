@@ -1,0 +1,10 @@
+Base commit: a596dbf0a01fd066d396be39a77f8cbb82e8c491
+Dirty working tree: yes
+Digest algorithm: SHA-256
+Digest: 07adf3359b17de75dc2a347410c3fadd0a831f18b292825a7774285b23d41627
+
+Scope: the byte stream produced by `git diff --binary HEAD --`, followed by each
+untracked, non-ignored path in bytewise-sorted order as
+`UNTRACKED\0<path>\0<file-bytes>`. This evidence file is excluded from its own
+digest. The stream includes the pre-existing `package-lock.json` modification,
+which was preserved.

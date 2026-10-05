@@ -1,9 +1,10 @@
 # Deployment & Storage Operations
 
 This project stores **uploaded datasets** and **generated run artifacts** in a
-self-hosted, S3-compatible object store (**MinIO**) — not in the repository, not
-on the API's local disk, and never as base64 inside the database. The database
-holds only metadata + object references. No AWS or paid cloud storage is
+self-hosted, S3-compatible object store (**MinIO**) — not in the repository or
+on the API's local disk, and never as base64 inside the database. PostgreSQL
+holds relational metadata together with run parameters, result summaries,
+normalized trees, mappings and annotations. No AWS or paid cloud storage is
 required.
 
 The storage layer is S3-compatible, so a real S3 endpoint can be used later by
@@ -16,7 +17,8 @@ self-hosted MinIO via Docker Compose.
 
 - **Datasets** → MinIO bucket `S3_BUCKET_DATASETS` (key: `datasets/{user_id}/{upload_id}.{ext}`)
 - **Artifacts** → MinIO bucket `S3_BUCKET_ARTIFACTS` (key: `artifacts/{run_id}/{artifact_id}/{filename}`)
-- **Postgres** → run/file/artifact metadata only (lightweight `result` JSON)
+- **Postgres** → users, file/run/artifact metadata,
+  parameters, result JSON, normalized trees, mappings and annotations
 - **Shared staging volume** (`/runtime/storage`) → where the worker stages a
   dataset for a method service to read, and where method services write outputs.
   The worker uploads those outputs to MinIO; this volume is scratch space, not
@@ -113,22 +115,28 @@ Hardening notes:
 Back up the database and object storage **together** for a consistent snapshot
 (runs reference artifact objects by key).
 
+Create a restricted backup directory first. Database and object snapshots must
+come from the same maintenance window.
+
 **Database:**
 ```bash
-docker compose exec postgres pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" > backup_db.sql
+mkdir -p backups/minio
+docker compose exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' > backups/backup_db.sql
 # restore:
-cat backup_db.sql | docker compose exec -T postgres psql -U "$POSTGRES_USER" "$POSTGRES_DB"
+docker compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" "$POSTGRES_DB"' < backups/backup_db.sql
 ```
 
 **MinIO (object storage):** mirror both buckets with the `mc` client:
 ```bash
-docker run --rm --network=host -e MC_HOST_local="http://$S3_ACCESS_KEY_ID:$S3_SECRET_ACCESS_KEY@localhost:9000" \
+docker run --rm --network=host -v "$PWD/backups/minio:/backup" -e MC_HOST_local="http://$S3_ACCESS_KEY_ID:$S3_SECRET_ACCESS_KEY@localhost:9000" \
   minio/mc mirror --overwrite local/phylo-datasets  /backup/phylo-datasets
-docker run --rm --network=host -e MC_HOST_local="http://$S3_ACCESS_KEY_ID:$S3_SECRET_ACCESS_KEY@localhost:9000" \
+docker run --rm --network=host -v "$PWD/backups/minio:/backup" -e MC_HOST_local="http://$S3_ACCESS_KEY_ID:$S3_SECRET_ACCESS_KEY@localhost:9000" \
   minio/mc mirror --overwrite local/phylo-artifacts /backup/phylo-artifacts
 # restore = mirror the backup directory back into the bucket.
 ```
 Alternatively snapshot the `minio_data` volume while the stack is stopped.
+These commands do not capture copies already downloaded by users or versions
+retained by an externally configured versioned object store.
 
 ---
 

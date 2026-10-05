@@ -53,7 +53,10 @@ export function buildRows(node: TreeNodeModel): DetailRow[] {
   const rows: DetailRow[] = [{ key: "label", value: String(node.label ?? node.id) }];
   const seq = String(attrs?.sequence_id ?? "").trim();
   if (seq) rows.push({ key: "sequence_id", value: seq });
-  rows.push({ key: "abundance", value: String(node.abundance) });
+  rows.push({
+    key: "abundance",
+    value: node.abundance === undefined ? "Not provided" : String(node.abundance),
+  });
   if (node.parentId) rows.push({ key: "parentId", value: String(node.parentId) });
   rows.push({ key: "type", value: node.isLeaf ? "leaf" : "internal" });
   if (attrs && typeof attrs === "object") {

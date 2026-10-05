@@ -6,7 +6,7 @@ A one-page UI to run phylogeny/lineage tree methods behind a simple orchestrator
 - **API**: FastAPI (apps/api)
 - **Methods**: pluggable microservices (Dowser, GCtree, BrepPhylo, ClonalTree included)
 - **Contracts**: JSON schemas (packages/contracts) used by both UI & API to drive parameters, validation, and results
-- **Object storage**: self-hosted **MinIO** (S3-compatible) holds uploaded datasets and generated artifacts; the database stores only metadata + references
+- **Object storage**: self-hosted **MinIO** (S3-compatible) holds uploaded datasets and generated artifacts; PostgreSQL holds ownership metadata and scientific result/tree JSON, but no base64 binaries
 
 > **Heads-up**: Running with Docker for the first time is **time-consuming** because large R images and packages need to be downloaded and built.
 
@@ -46,12 +46,21 @@ A one-page UI to run phylogeny/lineage tree methods behind a simple orchestrator
 
 ## Quick Start
 
+The recommended first run requires Docker Desktop (or Docker Engine with the
+Compose plugin) and Git. Node, Python, R and LaTeX are needed only for the
+optional host-development paths below.
+
 1. **Clone with submodules** (required for ClonalTree base code):
 
 ```bash
-git clone --recurse-submodules <repo-url>
+git clone --recurse-submodules https://github.com/Kiana8181/phylo-framework.git
 cd phylo-framework
 ```
+
+Anonymous HTTPS access to the ClonalTree submodule was not available during the
+latest local verification. Until the owner makes both repositories public, a
+GitHub account authorized for `smhamidi/clonotype` is required. The submodule's
+identity and pinned commit have deliberately not been changed.
 
 If you already cloned without submodules:
 
@@ -59,57 +68,31 @@ If you already cloned without submodules:
 git submodule update --init --recursive
 ```
 
-2. **Install Node & workspace deps (root)** and **API Python deps**:
-
-```bash
-# Node deps (root — installs workspaces too)
-npm i
-
-# Python deps for the API
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -U pip
-pip install -r apps/api/requirements.txt
-```
-
-3. **Create your `.env`** (it is gitignored — never committed):
+2. **Create your `.env`** (it is gitignored — never committed):
 
 ```bash
 cp .env.example .env
-# then edit secrets (JWT_SECRET_KEY, MinIO credentials, OAuth/email keys, etc.)
+# replace the JWT and MinIO secrets
+# OAuth and email settings may stay empty for local use
 ```
 
-4. **Make helper scripts executable** (they are expected at the repo root):
+3. **Build and start the full container stack**:
 
 ```bash
-chmod +x ./run.sh ./scripts/dev-with-docker.sh ./scripts/dev-with-local-r.sh ./scripts/reset-local.sh
+docker compose --profile prod up -d --build
+docker compose --profile prod exec -T api-prod python -m apps.api.scripts.storage_check
 ```
 
-5. **Run the interactive menu** (uses Inquirer under the hood):
-
-```bash
-./run.sh
-```
-
-Pick:
-
-- **Dev → Docker** (no local R needed; slower first run)
-- **Dev → Local R** (fast if you already have R 4.3+ with packages)
-- **Prod → docker compose** (recommended for deployments)
-
-> All modes start **MinIO** automatically and create the `phylo-datasets` /
-> `phylo-artifacts` buckets on first run. The scripts perform port checks and
-> dependency checks and print **meaningful errors** if something is missing or a
-> port is busy.
-
-> Prefer everything in containers? Use the one-command
-> [Dev — Full Docker Compose](#dev--full-docker-compose-simplest) flow instead of `./run.sh`.
+Migrations run when the API starts, MinIO initialization creates both buckets,
+and the worker starts with the production profile. Open `http://localhost:3000`
+after the services become healthy.
 
 ---
 
 ## What You Get
 
 - **UI**: dynamic schema-driven form; upload data (CSV/TSV/RDS/RDA/FASTA for Dowser); display trees/results; lazy artifact downloads + image previews (no base64 in the browser).
+- **Sequence Trace**: identifier search and root-to-match context in lineage-tree views; retain mapping artifacts when an adapter changes identifiers.
 - **API** (FastAPI):
   - `GET /methods` — list methods
   - `GET /methods/{id}/spec` — method spec + UI hints
@@ -120,7 +103,7 @@ Pick:
   - `GET /artifacts/{id}/download` · `GET /artifacts/{id}/preview` — stream a file / inline preview
   - `GET /datasets/{id}/download` — download the original uploaded dataset
   - `DELETE /datasets/{id}` — hard-delete the stored object, soft-delete the metadata row (idempotent; preserves run history)
-- **Method services**: R/plumber (Dowser, BrepPhylo) and FastAPI (GCtree, ClonalTree) exposing `/spec` + the async `/jobs` contract. They write output files + a manifest; the worker uploads those to MinIO. No base64 crosses the service→API boundary.
+- **Method services**: R/plumber (Dowser, BrepPhylo) and FastAPI (GCtree, ClonalTree) exposing `/spec` plus the asynchronous `/jobs` lifecycle. They upload output files to MinIO and return a manifest; the worker validates it and records authorized artifact references. No base64 crosses the service→API boundary.
 
 ---
 
@@ -133,7 +116,7 @@ Pick:
   - `param.schema.json`: JSON-Schema parameters (drives UI)
   - `result.schema.json`: JSON-Schema results (validated by API)
   - `ui.json`: UI hints (required files, control order, etc.)
-  - `service.routes.json`: maps method endpoints (`/spec`, `/run`)
+  - `service.routes.json`: maps `/spec` and asynchronous `/jobs` lifecycle endpoints
 
 ---
 
@@ -146,14 +129,14 @@ real S3 endpoint can be used later by changing env vars only.
 | What | Where | Notes |
 | --- | --- | --- |
 | Uploaded datasets | MinIO bucket `S3_BUCKET_DATASETS` | key `datasets/{user}/{upload}.{ext}` |
-| Generated artifacts | MinIO bucket `S3_BUCKET_ARTIFACTS` | key `artifacts/{run}/{artifact}/{file}` |
-| Run/file/artifact metadata | PostgreSQL | lightweight `result` JSON; **no base64** |
+| Generated artifacts | MinIO bucket `S3_BUCKET_ARTIFACTS` | key `artifacts/{run}/{job}/{file}` |
+| Run/file/artifact records | PostgreSQL | metadata plus scientific result/tree JSON; **no base64 binaries** |
 | Staging scratch (`/runtime/storage`) | host bind / volume | where a dataset is staged for a method to read |
 | Method job outputs (`/runtime/method-jobs`) | host dir / volume | method writes files; the **worker** uploads them to MinIO |
 
 Flow: upload → object in `phylo-datasets`; the worker stages it for the method
-service, the method writes output **files + a manifest**, and the worker uploads
-those to `phylo-artifacts` and records `run_artifacts` rows. The browser fetches
+service, the method uploads output files to `phylo-artifacts` and returns a
+manifest, and the worker records `run_artifacts` rows. The browser fetches
 images/downloads by streaming through the API (`/artifacts/{id}/preview|download`) —
 MinIO is never exposed to the browser.
 
@@ -185,17 +168,17 @@ MinIO is never exposed to the browser.
 
 You do **not** need everything for every mode; the helper will tell you what’s missing.
 
-### macOS
+### macOS host-development extras
 
-- **Node.js 20+** (`brew install node@20`)
+- **Node.js 22** (matches CI; the earlier local report used Node 24)
 - **Python 3.10+** (3.12 OK)
 - **Docker Desktop** (for Docker modes)
 - **R 4.3+** (only for Local-R dev)
   - Helpful libs: `brew install pkg-config cairo pango harfbuzz fribidi libgit2 v8`
 
-### Linux (Ubuntu/Debian)
+### Linux host-development extras
 
-- **Node.js 20+**, **Python 3.10+**
+- **Node.js 22**, **Python 3.10+**
 - **Docker Engine + compose plugin** (for Docker modes)
 - **R 4.3+** (only for Local-R dev) + system libs:
   ```bash
@@ -204,7 +187,8 @@ You do **not** need everything for every mode; the helper will tell you what’s
 
 ### Windows
 
-- **Prod/Dev (Docker)**: Install **Docker Desktop**; run `./run.sh` using **Git Bash** or **PowerShell**.
+- **Docker path**: use Docker Desktop from PowerShell or a WSL2 shell; the Compose commands above work in either environment.
+- **Shell helper/development scripts**: use WSL2. They are Bash scripts, not PowerShell scripts.
 - **Dev (Local R)**: Recommended to use **WSL2 (Ubuntu)** and follow Linux steps. Native Windows R is possible but requires proper Rtools/toolchain setup.
 
 ---
@@ -217,16 +201,16 @@ You do **not** need everything for every mode; the helper will tell you what’s
 
 ### Dev — Full Docker Compose (simplest)
 
-Everything in containers, including the **run worker** (which shares the
-`method_jobs` volume to ingest artifacts). This is the most reliable developer
-path and the closest match to production.
+Everything runs in containers, including the run worker. Method services upload
+generated artifacts directly to MinIO and the worker records their manifest.
+This is the closest local path to the production profile.
 
 ```bash
 cp .env.example .env          # first time only
 docker compose --profile dev up -d --build
 # - postgres migrations run automatically (api runs `alembic upgrade head` on start)
 # - minio-init creates both buckets
-npm run storage:check:docker  # optional: verify storage
+docker compose --profile dev exec -T api python -m apps.api.scripts.storage_check
 ```
 
 - Web → http://localhost:3000 · API → http://localhost:8000 · MinIO console → http://localhost:9001
@@ -347,7 +331,7 @@ local development — change the credentials/buckets for anything shared.
 
 ```bash
 # Node deps (monorepo/workspaces)
-npm i
+npm ci
 
 # Python venv for API + migrations
 python3 -m venv .venv
@@ -445,6 +429,15 @@ Dowser requires aligned AIRR/Change-O input (not raw FASTA). Supported build met
 
 **GCtree (local Python)**
 
+CSV/TSV is a framework adapter, not a native GCtree input. The adapter writes
+the selected `sequence_id` and `sequence_alignment` fields, requires unique IDs
+and equal aligned lengths, and emits exactly one FASTA record per valid row.
+`duplicate_count` and other table metadata are not sent as record weights. If
+three records are intended, supply three identical aligned sequences with
+distinct IDs such as `cellA_copy1` through `cellA_copy3` and retain the mapping.
+The designated reference row is not itself counted as an observation; other
+records matching its sequence can contribute to the collapsed root genotype.
+
 ```bash
 set -a; source .env; set +a
 export CONTRACTS_DIR="$(python3 -c 'import os; p=os.environ.get("CONTRACTS_DIR","packages/contracts"); print(p if os.path.isabs(p) else os.path.realpath(p))')"
@@ -486,16 +479,8 @@ Notice: default `tree_type=dnapars` expects `dnapars` on `PATH` (or `DNAPARS_PAT
 
 **Alignment PDF / LaTeX (`make_alignment_pdf=true`)**
 
-- **Docker**: the `brepphylo` image installs TeX Live packages (with `tinytex` fallback if needed).
-- **macOS (local R)**: install [MacTeX](https://tug.org/mactex/) or TinyTeX:
-  ```bash
-  R -e "install.packages('tinytex'); tinytex::install_tinytex()"
-  ```
-- **Debian/Ubuntu (local R)**:
-  ```bash
-  sudo apt-get install -y texlive-latex-base texlive-latex-recommended \
-    texlive-latex-extra texlive-fonts-recommended latexmk
-  ```
+- The supported path is the `brepphylo` Docker image, which contains the needed
+  TeX packages. The full-Docker setup requires no LaTeX installation on the host.
 - If LaTeX is missing, tree inference still runs; the service reports `diagnostics.latex_available=false` and a warning (alignment PDF may fail without blocking trees).
 
 **BrepPhylo validator tests (local)**
@@ -700,7 +685,7 @@ has been validated.
 
 - **Ports busy** → stop other processes, or change ports in `.env` and compose files (MinIO: `MINIO_API_PORT` / `MINIO_CONSOLE_PORT`).
 - **Dowser schema errors in Local R** → ensure you started R in `services/dowser` (or set `CONTRACTS_DIR` correctly); Docker option mounts contracts automatically.
-- **`@phylo/contracts` not found** → run `npm i` at repo root; ensure `apps/web/package.json` depends on `"@phylo/contracts"`.
+- **`@phylo/contracts` not found** → run `npm ci` at repo root; ensure `apps/web/package.json` depends on `"@phylo/contracts"`.
 - **Docker is slow** → first run downloads large R images; subsequent runs are faster.
 - **CORS** → make sure `CORS_ORIGINS` in API includes your web origin.
 - **API/worker fails at startup with a MinIO connection error** → MinIO isn't up or the endpoint is wrong. Start it (`docker compose --profile dev up -d minio minio-init`) and confirm `S3_ENDPOINT_URL` is `http://localhost:9000` for host processes. Verify with `npm run storage:check`.
@@ -714,7 +699,7 @@ has been validated.
 
 1. Create `packages/contracts/methods/<id>/` with:
    - `spec.json`, `param.schema.json`, `result.schema.json`, `ui.json`, `service.routes.json`
-2. Provide a service exposing `/spec` and `/run` (containerized or remote).
+2. Provide a service exposing `/spec` and the asynchronous `/jobs` lifecycle (containerized or remote).
 3. Point the API to it via env: `METHOD_<METHODID_UPPER>_URL=http://host:port`.
 4. The UI auto-renders the new parameters and accepts formats from `spec.json`.
 
@@ -763,7 +748,7 @@ image and retains the licence of its upstream project:
 | Component | Upstream project |
 |---|---|
 | GCtree | [matsengrp/gctree](https://github.com/matsengrp/gctree) |
-| ClonalTree | [julibinho/ClonalTree](https://github.com/julibinho/ClonalTree) (git submodule) |
+| ClonalTree | [smhamidi/clonotype](https://github.com/smhamidi/clonotype) (pinned git submodule; publication/access remains an owner action) |
 | Dowser | [Immcantation](https://immcantation.readthedocs.io/) suite |
 | BrepPhylo | [Fraternalilab/BrepPhylo](https://github.com/Fraternalilab/BrepPhylo) |
 | PHYLIP (`dnapars`) | [PHYLIP 3.697](https://phylipweb.github.io/phylip/) |

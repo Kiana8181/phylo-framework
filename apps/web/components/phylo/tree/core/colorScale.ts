@@ -136,6 +136,7 @@ export function buildColorScale(
     let min = Number.POSITIVE_INFINITY;
     let max = Number.NEGATIVE_INFINITY;
     for (const n of model.nodes.values()) {
+      if (n.abundance === undefined || n.abundance <= 0) continue;
       if (n.abundance < min) min = n.abundance;
       if (n.abundance > max) max = n.abundance;
     }
@@ -146,10 +147,11 @@ export function buildColorScale(
     return {
       field,
       kind: "continuous",
-      colorFor: (n) => colorForAbundance(n.abundance, min, max),
+      colorFor: (n) =>
+        n.abundance === undefined ? UNKNOWN_COLOR : colorForAbundance(n.abundance, min, max),
       unknownColor: UNKNOWN_COLOR,
       germlineColor: GERMLINE_COLOR,
-      hasUnknown: false,
+      hasUnknown: Array.from(model.nodes.values()).some((n) => n.abundance === undefined),
       legend: { kind: "continuous", min, max, ramp: ABUNDANCE_PALETTE },
     };
   }

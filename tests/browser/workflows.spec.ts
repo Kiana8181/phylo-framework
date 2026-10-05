@@ -70,6 +70,32 @@ test(`documented ${method} example completes and renders its tree`, async ({page
   await expect(page.getByRole('heading', {name: 'Results', exact: true})).toBeVisible();
   await expect(page.getByText('Downloads', {exact: true})).toBeVisible();
   await expect(page.locator('svg').filter({has: page.locator('text')} ).first()).toBeVisible();
+
+  if (method === 'GCtree') {
+    const treeListResponse = await page.request.get(`${api}/runs/${run_id}/trees`, {
+      headers: {Authorization: `Bearer ${token}`},
+    });
+    expect(treeListResponse.ok()).toBe(true);
+    const treeList = await treeListResponse.json();
+    const treeId = treeList.trees[0].treeId;
+    const treeResponse = await page.request.get(`${api}/runs/${run_id}/trees/${treeId}`, {
+      headers: {Authorization: `Bearer ${token}`},
+    });
+    expect(treeResponse.ok()).toBe(true);
+    const treePayload = await treeResponse.json();
+    const zeroEntry = Object.entries(treePayload.node_attributes ?? {}).find(
+      ([, attrs]) => typeof attrs === 'object' && attrs !== null && 'abundance' in attrs
+        && (attrs as {abundance?: unknown}).abundance === 0,
+    );
+    expect(zeroEntry).toBeDefined();
+
+    const zeroNode = page.locator('svg g[data-node-abundance="0"]').first();
+    await zeroNode.focus();
+    await zeroNode.press('Enter');
+    const dialog = page.getByRole('dialog');
+    const abundanceRow = dialog.locator('tr').filter({hasText: /^abundance/i});
+    await expect(abundanceRow.getByTitle('0', {exact: true})).toBeVisible();
+  }
 });
 
 }

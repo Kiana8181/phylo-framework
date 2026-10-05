@@ -14,11 +14,12 @@ export type RadiusScaleType = "log1p" | "linear";
  * can opt back into min–max scaling if ever needed.
  */
 export function nodeRadius(
-  value: number,
+  value: number | undefined,
   min: number,
   max: number,
   scaleType: RadiusScaleType = "log1p",
 ): number {
+  if (value === undefined || value <= 0) return MIN_RADIUS;
   const t = scaleType === "linear" ? linNorm(value, min, max) : logNorm(value, min, max);
   return clamp(4 + t * 18, MIN_RADIUS, MAX_RADIUS);
 }

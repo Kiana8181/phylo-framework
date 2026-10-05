@@ -54,7 +54,11 @@ export function computeAggregates(nodes: Map<string, MutableNode>, order: readon
       if (!child) continue;
       leaves += child.subtreeLeafCount;
       count += child.subtreeNodeCount;
-      abundanceSum += child.subtreeAbundanceSum;
+      if (abundanceSum !== undefined && child.subtreeAbundanceSum !== undefined) {
+        abundanceSum += child.subtreeAbundanceSum;
+      } else {
+        abundanceSum = undefined;
+      }
       if (child.subtreeMaxX > maxX) maxX = child.subtreeMaxX;
     }
     // A node with no children is a terminal slot regardless of the isLeaf flag.

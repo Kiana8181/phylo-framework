@@ -996,7 +996,12 @@ def prepare_input_for_method(
                 )
                 stats[f"step_{index}_fasta"] = conversion_stats
                 for warning in conversion_stats.get("warnings", []):
-                    warnings.append({"code": "UNEXPECTED_ALIGNMENT_CHARACTER", "message": warning})
+                    if isinstance(warning, dict):
+                        warnings.append(warning)
+                    else:
+                        warnings.append(
+                            {"code": "UNEXPECTED_ALIGNMENT_CHARACTER", "message": warning}
+                        )
                 log_entries.append(
                     _preprocess_log(
                         step_name,

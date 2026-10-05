@@ -73,6 +73,7 @@ export function layoutTree(model: TreeModel, opts: LayoutOptions): TreeLayout {
   let abundanceMin = Number.POSITIVE_INFINITY;
   let abundanceMax = Number.NEGATIVE_INFINITY;
   for (const node of model.nodes.values()) {
+    if (node.abundance === undefined || node.abundance <= 0) continue;
     if (node.abundance < abundanceMin) abundanceMin = node.abundance;
     if (node.abundance > abundanceMax) abundanceMax = node.abundance;
   }

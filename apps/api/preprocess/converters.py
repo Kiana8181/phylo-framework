@@ -592,7 +592,26 @@ def convert_table_to_aligned_fasta(
     id_index = header.index(used_id_column)
     sequence_index = header.index(used_aligned_seq_column)
 
-    warnings: list[str] = []
+    warnings: list[str | dict[str, Any]] = []
+    duplicate_count_column = _resolve_column_name(
+        header,
+        "duplicate_count",
+        normalize_headers=normalize_headers,
+        required=False,
+    )
+    if duplicate_count_column is not None:
+        count_index = header.index(duplicate_count_column)
+        if any(row[count_index].strip() for row in body):
+            warnings.append(
+                {
+                    "code": "IGNORED_DUPLICATE_COUNT",
+                    "message": (
+                        "The duplicate_count column is not used by the GCtree table-to-FASTA "
+                        "adapter; each input row produces exactly one FASTA record."
+                    ),
+                    "details": {"column": duplicate_count_column},
+                }
+            )
     unique_ids: dict[str, int] = {}
     alignment_length: int | None = None
     records: list[tuple[str, str]] = []

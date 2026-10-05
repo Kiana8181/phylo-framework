@@ -35,7 +35,7 @@ export const VALUE_PROPS: ValueProp[] = [
     id: "any-input",
     title: "One dataset, every method",
     body:
-      "Upload TSV or CSV once and run all four methods — including GCtree, which natively accepts no tabular input — through behind-the-scenes conversion with no data loss.",
+      "Upload TSV or CSV once and run all four methods. GCtree receives an aligned FASTA adapter containing the selected identifier and aligned-sequence fields; unrelated table metadata is not transmitted to GCtree.",
     href: "/dashboard",
     linkLabel: "Start a run",
   },
@@ -209,6 +209,7 @@ const METHOD_CONTENT: Record<MethodId, MethodContent> = {
       "The column-mapping toggle and fields appear only for CSV/TSV input (the FASTA-conversion path).",
       "Root sequence ID, quick search and jumble apply only to the FASTA-derived scenarios; the extra coloring mode appears only when coloring settings are enabled.",
       "GCtree roots the tree on a germline sequence that has to be part of the alignment, but an AIRR / Change-O export usually holds only observed sequences. So the tabular-adapter scenario asks whether your table already includes that row. Answer yes and you just name it in Root sequence ID, as before. Answer no and Root sequence ID is replaced by two fields — an ID and an aligned germline sequence — which the framework writes into your table as one extra first row before converting it to FASTA, leaving every other column of that row empty. The sequence joins the same alignment, so its length must equal the other aligned sequences', gap characters included, and its ID must not already be in use. If you have column mapping switched on, the row is written under the columns you mapped `sequence_id` and `sequence_alignment` to, not under those names.",
+      "For CSV/TSV input, one valid row produces one FASTA record. A `duplicate_count` column and other unused metadata are not record weights on this path. If multiplicity three is scientifically intended, prepare three total records with the same aligned sequence and distinct IDs such as `cellA_copy1`, `cellA_copy2`, and `cellA_copy3`; do not add three more to an existing record. Keep the original-to-expanded mapping because generated IDs affect lineage Sequence Trace and output mapping. GCtree later collapses identical aligned sequences and counts supplied records, while the designated reference record itself is not an observation. Do not equate read, UMI, and cell counts unless that interpretation is intended for the analysis.",
       "GCtree writes sequence IDs as `name@abundance` (for example `seq3@9`) in its own output, but it cannot read that form back — its deduplicate step counts only IDs that are entirely digits, and the `@` breaks the DNAPARS root lookup. So when every header in your FASTA looks like `name@N`, an extra question appears asking whether N is an abundance count. Answer Yes and the framework builds the abundance file from those numbers; answer No and the IDs are replaced with short GCtree-safe IDs, with the originals kept in the ID map.",
     ],
     zipBundle: {
