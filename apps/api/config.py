@@ -15,6 +15,27 @@ if legacy_env.exists():
 # Repository root = .../phylo
 ROOT_DIR = Path(__file__).resolve().parents[2]
 
+# Deployment environment. Only the exact value "production" enables the
+# production safeguards (start-up secret checks, sanitized error responses);
+# docker-compose.yml sets it for the api-prod / api-worker-prod services.
+APP_ENV = (os.getenv("ENV") or "development").strip().lower()
+IS_PRODUCTION = APP_ENV == "production"
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+# Interactive API docs (/docs, /redoc, /openapi.json). On by default outside
+# production, off by default in production.
+API_DOCS_ENABLED = _env_flag("API_DOCS_ENABLED", default=not IS_PRODUCTION)
+
+# Minimum length for a password chosen at registration or password reset.
+PASSWORD_MIN_LENGTH = max(1, int(os.getenv("PASSWORD_MIN_LENGTH", "8")))
+
 # CONTRACTS_DIR can be absolute or relative to repo root
 _env_contracts = os.getenv("CONTRACTS_DIR", "packages/contracts")
 CONTRACTS_DIR = (Path(_env_contracts) if Path(_env_contracts).is_absolute()

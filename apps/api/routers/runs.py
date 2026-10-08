@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import traceback
 from datetime import date
 from typing import Any, Optional
 from uuid import UUID
@@ -10,7 +9,8 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apps.api.auth.dependencies import get_current_user, get_current_user_required
+from apps.api.auth.access import ensure_run_access
+from apps.api.auth.dependencies import get_current_user_required
 from apps.api.config import method_service_url
 from apps.api.contracts.loader import get_ui_hints
 from apps.api.database import get_db
@@ -19,6 +19,7 @@ from apps.api.repositories.artifact_repository import ArtifactRepository
 from apps.api.repositories.file_repository import FileRepository
 from apps.api.repositories.run_repository import RunRepository
 from apps.api.repositories.run_tree_repository import RunTreeRepository
+from apps.api.security.errors import internal_error
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
@@ -200,7 +201,7 @@ def _run_summary(run) -> dict:
 async def _load_run_with_access(
     run_id: str,
     *,
-    current_user: Optional[User],
+    current_user: User,
     run_repo: RunRepository,
 ) -> Run:
     try:
@@ -212,10 +213,7 @@ async def _load_run_with_access(
     if not run:
         raise HTTPException(404, "Run not found")
 
-    if run.user_id is not None and current_user is None:
-        raise HTTPException(401, "Authentication required", headers={"WWW-Authenticate": "Bearer"})
-    if current_user and not current_user.is_admin and run.user_id != current_user.id:
-        raise HTTPException(403, "Access denied")
+    ensure_run_access(run, current_user)
     return run
 
 
@@ -269,7 +267,7 @@ class CreateRunBody(BaseModel):
 async def create_run(
     method: str = Query(..., description="Method ID (e.g., 'dowser')"),
     body: CreateRunBody = Body(default_factory=CreateRunBody),
-    current_user: Optional[User] = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_required),
     db: AsyncSession = Depends(get_db),
 ):
     """Create a new run.
@@ -295,7 +293,9 @@ async def create_run(
     run_repo = RunRepository(db)
     file_repo = FileRepository(db)
 
-    user_id = current_user.id if current_user else None
+    # Run creation always belongs to an authenticated user: every quota and
+    # the per-user queue are keyed on this id.
+    user_id = current_user.id
 
     if requires_file and not file_id:
         raise HTTPException(
@@ -306,25 +306,22 @@ async def create_run(
     # Per-user queue quota: 1 active turn + up to MAX_QUEUED queued (MAX_QUEUED+1
     # non-terminal total). Enforced atomically here; the partial-unique index backs
     # the "one active turn" half.
-    if user_id:
-        nonterminal = await run_repo.count_nonterminal_for_user(user_id)
-        if nonterminal >= MAX_QUEUED + 1:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "QUEUE_FULL",
-                    "message": (
-                        f"Your run queue is full ({MAX_QUEUED} queued behind your active "
-                        "run). Wait for a run to finish or cancel a queued one."
-                    ),
-                    "limit": MAX_QUEUED,
-                },
-            )
+    nonterminal = await run_repo.count_nonterminal_for_user(user_id)
+    if nonterminal >= MAX_QUEUED + 1:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "QUEUE_FULL",
+                "message": (
+                    f"Your run queue is full ({MAX_QUEUED} queued behind your active "
+                    "run). Wait for a run to finish or cancel a queued one."
+                ),
+                "limit": MAX_QUEUED,
+            },
+        )
 
     existing_file = None
     if file_id:
-        if not user_id:
-            raise HTTPException(401, "Authentication required to use an uploaded file.")
         try:
             existing_file_id = UUID(file_id)
         except ValueError:
@@ -351,19 +348,15 @@ async def create_run(
         dataset_name=existing_file.original_filename if existing_file else None,
     )
 
-    # Promote so a user with a free turn dispatches immediately. Anonymous runs have
-    # no per-user serialization — promote the specific run so it becomes claimable.
-    if user_id:
-        await run_repo.promote_next_for_user(user_id)
-    else:
-        await run_repo.promote_run(run.id)
+    # Promote so a user with a free turn dispatches immediately.
+    await run_repo.promote_next_for_user(user_id)
 
     # Report whether this run became the active turn or is waiting in the personal
     # queue (and, if waiting, its 1-based position).
     fresh = await run_repo.get_by_id(run.id)
     is_active_turn = fresh is not None and fresh.dispatch_seq is not None
     queue_position: Optional[int] = None
-    if not is_active_turn and user_id:
+    if not is_active_turn:
         personal_queue = await run_repo.get_personal_queue_for_user(user_id)
         for idx, queued_run in enumerate(personal_queue):
             if queued_run.id == run.id:
@@ -380,7 +373,7 @@ async def create_run(
 @router.post("/{run_id}/cancel")
 async def cancel_run(
     run_id: str,
-    current_user: Optional[User] = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_required),
     db: AsyncSession = Depends(get_db),
 ):
     """Request cancellation of a run. Idempotent.
@@ -418,7 +411,7 @@ async def cancel_run(
 @router.post("/{run_id}/cancel-queued")
 async def cancel_queued_run(
     run_id: str,
-    current_user: Optional[User] = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_required),
     db: AsyncSession = Depends(get_db),
 ):
     """Cancel a QUEUED run the user owns — whether it is the promoted turn or a plain
@@ -428,9 +421,6 @@ async def cancel_queued_run(
     Cancelling a RUNNING run is not handled here — use POST /runs/{run_id}/cancel,
     which drives the graceful worker-cancellation flow.
     """
-    if not current_user:
-        raise HTTPException(status_code=401, detail="Authentication required")
-
     run_repo = RunRepository(db)
     file_repo = FileRepository(db)
     run = await _load_run_with_access(run_id, current_user=current_user, run_repo=run_repo)
@@ -465,13 +455,10 @@ async def cancel_queued_run(
 
 @router.get("/current")
 async def get_current_run(
-    current_user: Optional[User] = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_required),
     db: AsyncSession = Depends(get_db),
 ):
     """Get the current user's active run (PENDING, QUEUED, or RUNNING), if any."""
-    if not current_user:
-        raise HTTPException(status_code=401, detail="Authentication required")
-
     run_repo = RunRepository(db)
     file_repo = FileRepository(db)
     active = await run_repo.get_active_run_for_user(current_user.id)
@@ -489,16 +476,13 @@ async def get_current_run(
 
 @router.get("/dashboard")
 async def get_dashboard(
-    current_user: Optional[User] = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_required),
     db: AsyncSession = Depends(get_db),
 ):
     """Live dashboard payload for the run queue: the active-turn run, the personal
     queue (FIFO), and quota limits. Returns only non-terminal runs — a finished run
     simply drops out of the payload (the client detects completion by diffing ids).
     """
-    if not current_user:
-        raise HTTPException(status_code=401, detail="Authentication required")
-
     run_repo = RunRepository(db)
     file_repo = FileRepository(db)
 
@@ -531,7 +515,7 @@ async def get_dashboard(
 @router.get("/{run_id}/same-dataset")
 async def list_same_dataset_runs(
     run_id: str,
-    current_user: Optional[User] = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_required),
     db: AsyncSession = Depends(get_db),
 ):
     """List DONE runs that used the same input file (dataset) as the given run."""
@@ -548,26 +532,23 @@ async def list_same_dataset_runs(
             file_ids = [f.id for f in files]
         if not file_ids:
             return []
-        user_id = current_user.id if current_user else None
-        is_admin = getattr(current_user, "is_admin", False) if current_user else False
         same_runs = await run_repo.get_by_same_dataset_file_ids(
             file_ids,
             exclude_run_id=run.id,
-            current_user_id=user_id,
-            is_admin=is_admin,
+            current_user_id=current_user.id,
+            is_admin=bool(current_user.is_admin),
         )
         return [_run_summary(r) for r in same_runs]
     except HTTPException:
         raise
     except Exception as e:
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Same-dataset lookup failed: {e!s}")
+        raise internal_error("Same-dataset lookup failed.", e, context=f"run_id={run_id}")
 
 
 @router.get("/{run_id}/status")
 async def run_status(
     run_id: str,
-    current_user: Optional[User] = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_required),
     db: AsyncSession = Depends(get_db),
 ):
     """Get run status (status, progress, stage, stage_message, method_id, params, dataset, timestamps)."""
@@ -582,7 +563,7 @@ async def run_status(
 @router.get("/{run_id}/result")
 async def run_result(
     run_id: str,
-    current_user: Optional[User] = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_required),
     db: AsyncSession = Depends(get_db),
 ):
     """Get run result."""
@@ -647,7 +628,7 @@ async def run_result(
 @router.get("/{run_id}/trees")
 async def list_run_trees(
     run_id: str,
-    current_user: Optional[User] = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_required),
     db: AsyncSession = Depends(get_db),
 ):
     """List lightweight tree metadata for a completed run."""
@@ -674,7 +655,7 @@ async def list_run_trees(
 async def get_run_tree_payload(
     run_id: str,
     tree_id: str,
-    current_user: Optional[User] = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_required),
     db: AsyncSession = Depends(get_db),
 ):
     """Load full per-tree payload for a completed run."""

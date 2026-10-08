@@ -103,3 +103,23 @@ async def test_missing_method_service_marks_error_and_promotes_next(session, que
     await worker.process_run(queued, 'test-worker')
     assert (await fresh(session, queued)).status == RunStatus.ERROR
     assert (await fresh(session, waiting_id)).dispatch_seq is not None
+
+
+async def test_unexpected_worker_fault_stores_a_reference_not_the_exception(session, queued, monkeypatch, caplog):
+    """An orchestration fault is shown to the run owner, so it must not carry
+    internal detail; the cause stays in the worker log under the same reference."""
+    import logging
+    import re
+
+    internal = 'could not connect to 10.0.0.7:5432 as phylo_app'
+    monkeypatch.setattr(worker.jobs, 'submit_job', AsyncMock(side_effect=RuntimeError(internal)))
+    with caplog.at_level(logging.ERROR, logger='phylo.api.errors'):
+        await worker.process_run(queued, 'test-worker')
+    run = await fresh(session, queued)
+    assert run.status == RunStatus.ERROR
+    stored = ' '.join(str(v) for v in (run.error, run.message, run.stage_message, run.result))
+    assert internal not in stored
+    reference = re.search(r'reference ([0-9a-f]{12})', run.message).group(1)
+    record = next(r for r in caplog.records if reference in r.getMessage())
+    assert internal in str(record.exc_info[1])
+    assert str(queued) in record.getMessage()

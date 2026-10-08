@@ -1,9 +1,14 @@
+# Credentials have no fallback values: every `${VAR:?...}` below makes Compose
+# refuse to start until that variable is set in .env (copy .env.example first).
+# Host ports for Postgres/MinIO are NOT published here; local host-run
+# development adds them through docker-compose.dev.yml.
+
 x-api-common-env: &api_common_env
   CONTRACTS_DIR: /contracts
   # Environment identity written by `npm run version:capture` at build/deploy
   # time and copied into each run's result. A missing file costs the
   # version_info block and nothing else — the run still completes.
-  PHYLO_VERSION_INFO_PATH: /version-info/version-info.json
+  PHYLO_VERSION_INFO_PATH: /version-info.json
   CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
   STRICT_CONTRACT_ROUTES: ${STRICT_CONTRACT_ROUTES:-true}
   HOST_RUNTIME_SHARED_ROOT: ${HOST_RUNTIME_SHARED_ROOT:-/runtime/storage}
@@ -15,19 +20,28 @@ x-api-common-env: &api_common_env
   # S3_ENDPOINT_URL (localhost) is only for host-run scripts/dev.
   S3_ENDPOINT_URL: ${S3_ENDPOINT_URL_DOCKER:-http://minio:9000}
   S3_REGION: ${S3_REGION:-us-east-1}
-  S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-${MINIO_ROOT_USER:-phylo_minio}}
-  S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-${MINIO_ROOT_PASSWORD:-phylo_minio_secret}}
+  S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-${MINIO_ROOT_USER:?set MINIO_ROOT_USER in .env}}
+  S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}}
   S3_BUCKET_DATASETS: ${S3_BUCKET_DATASETS:-phylo-datasets}
   S3_BUCKET_ARTIFACTS: ${S3_BUCKET_ARTIFACTS:-phylo-artifacts}
   S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
   PUBLIC_API_BASE_URL: ${PUBLIC_API_BASE_URL:-http://localhost:8000}
   POSTGRES_HOST: postgres
   POSTGRES_PORT: "5432"
-  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-phylo_user}:${POSTGRES_PASSWORD:-phylo_pass}@postgres:5432/${POSTGRES_DB:-phylo_db}
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:?set POSTGRES_USER in .env}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB in .env}
   METHOD_DOWSER_URL: ${METHOD_DOWSER_URL_DOCKER:-http://dowser:8001}
   METHOD_GCTREE_URL: ${METHOD_GCTREE_URL_DOCKER:-http://gctree:8002}
   METHOD_BREPPHYLO_URL: ${METHOD_BREPPHYLO_URL_DOCKER:-http://brepphylo:8003}
   METHOD_CLONALTREE_URL: ${METHOD_CLONALTREE_URL_DOCKER:-http://clonaltree:8004}
+
+# Production API + worker. ENV=production switches on the start-up check that
+# refuses known-default or weak secrets (apps/api/security/production_config.py)
+# and stops internal error text from reaching clients. Set here, after
+# env_file, so a stray ENV in .env cannot turn it off.
+x-api-prod-env: &api_prod_env
+  <<: *api_common_env
+  ENV: production
+  JWT_SECRET_KEY: ${JWT_SECRET_KEY:?set JWT_SECRET_KEY in .env}
 
 x-method-common-env: &method_common_env
   CONTRACTS_DIR: /contracts
@@ -44,8 +58,8 @@ x-method-common-env: &method_common_env
   STORAGE_BACKEND: ${STORAGE_BACKEND:-minio}
   S3_ENDPOINT_URL: ${S3_ENDPOINT_URL_DOCKER:-http://minio:9000}
   S3_REGION: ${S3_REGION:-us-east-1}
-  S3_ACCESS_KEY_ID: ${MINIO_METHODS_USER:-phylo_methods}
-  S3_SECRET_ACCESS_KEY: ${MINIO_METHODS_PASSWORD:-phylo_methods_secret}
+  S3_ACCESS_KEY_ID: ${MINIO_METHODS_USER:?set MINIO_METHODS_USER in .env}
+  S3_SECRET_ACCESS_KEY: ${MINIO_METHODS_PASSWORD:?set MINIO_METHODS_PASSWORD in .env}
   S3_BUCKET_ARTIFACTS: ${S3_BUCKET_ARTIFACTS:-phylo-artifacts}
   S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
 
@@ -56,38 +70,41 @@ services:
     env_file:
       - ./.env
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-phylo_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-phylo_pass}
-      POSTGRES_DB: ${POSTGRES_DB:-phylo_db}
-    ports:
-      - "${POSTGRES_PORT:-5440}:5432"
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
+    # ports:
+    #   - "${POSTGRES_PORT:-5440}:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - phylo_postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-phylo_user} -d ${POSTGRES_DB:-phylo_db}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:?set POSTGRES_USER in .env} -d ${POSTGRES_DB:?set POSTGRES_DB in .env}"]
       interval: 10s
       timeout: 5s
       retries: 5
     profiles: ["dev", "prod"]
+    networks:
+      - phylo_framework
 
   minio:
     image: minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
     container_name: phylo-minio
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-phylo_minio}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-phylo_minio_secret}
-    ports:
-      # API port is published for the host-side storage-check script / local SDK use.
-      # In production, keep this internal and do not expose publicly.
-      - "${MINIO_API_PORT:-9000}:9000"
-      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER in .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
+    # Keep MinIO internal on the server; reach the console via SSH tunnel if needed.
+    # ports:
+    #   - "${MINIO_API_PORT:-9000}:9000"
+    #   - "${MINIO_CONSOLE_PORT:-9001}:9001"
     volumes:
-      - minio_data:/data
+      - phylo_minio_data:/data
     # No healthcheck: the minio server image ships no curl/mc client. The
     # minio-init service below retries until MinIO is reachable and the API
     # gates on minio-init completing successfully.
     profiles: ["dev", "prod"]
+    networks:
+      - phylo_framework
 
   # One-shot: waits for MinIO, then creates the dataset + artifact buckets.
   minio-init:
@@ -97,10 +114,10 @@ services:
       minio:
         condition: service_started
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-phylo_minio}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-phylo_minio_secret}
-      MINIO_METHODS_USER: ${MINIO_METHODS_USER:-phylo_methods}
-      MINIO_METHODS_PASSWORD: ${MINIO_METHODS_PASSWORD:-phylo_methods_secret}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER in .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
+      MINIO_METHODS_USER: ${MINIO_METHODS_USER:?set MINIO_METHODS_USER in .env}
+      MINIO_METHODS_PASSWORD: ${MINIO_METHODS_PASSWORD:?set MINIO_METHODS_PASSWORD in .env}
       S3_BUCKET_DATASETS: ${S3_BUCKET_DATASETS:-phylo-datasets}
       S3_BUCKET_ARTIFACTS: ${S3_BUCKET_ARTIFACTS:-phylo-artifacts}
     entrypoint: >
@@ -118,6 +135,8 @@ services:
       echo 'methods user ready';
       "
     profiles: ["dev", "prod"]
+    networks:
+      - phylo_framework
 
   web:
     build:
@@ -143,8 +162,11 @@ services:
         read_only: true
     command: sh -lc "npm -w web run dev -- -p ${WEB_PORT:-3000}"
     profiles: ["dev"]
+    networks:
+      - phylo_framework
 
   web-prod:
+    container_name: phylo-web-prod
     build:
       context: .
       dockerfile: apps/web/Dockerfile
@@ -160,8 +182,8 @@ services:
     depends_on:
       api-prod:
         condition: service_healthy
-    ports:
-      - "${WEB_PORT:-3000}:3000"
+    # ports:
+    #   - "${WEB_PORT:-3000}:3000"
     healthcheck:
       test:
         [
@@ -175,6 +197,9 @@ services:
       retries: 5
       start_period: 20s
     profiles: ["prod"]
+    networks:
+      - phylo_framework
+      - proxy_net
 
   api:
     build:
@@ -210,6 +235,8 @@ services:
         target: /runtime/storage
     command: sh -lc "alembic upgrade head && exec uvicorn apps.api.main:app --host 0.0.0.0 --port 8000 --reload"
     profiles: ["dev"]
+    networks:
+      - phylo_framework
 
   api-worker:
     image: phylo-api:latest
@@ -236,13 +263,16 @@ services:
         source: ${STORAGE_LOCAL_PATH:-runtime/storage}
         target: /runtime/storage
       - type: bind
-        source: ./runtime
-        target: /version-info
+        source: ./runtime/version-info.json
+        target: /version-info.json
         read_only: true
     command: sh -lc "python -m apps.api.workers.run_worker"
     profiles: ["dev"]
+    networks:
+      - phylo_framework
 
   api-prod:
+    container_name: phylo-api-prod
     build:
       context: .
       dockerfile: apps/api/Dockerfile
@@ -250,7 +280,7 @@ services:
     env_file:
       - ./.env
     environment:
-      <<: *api_common_env
+      <<: *api_prod_env
     depends_on:
       postgres:
         condition: service_healthy
@@ -264,8 +294,8 @@ services:
         condition: service_started
       clonaltree:
         condition: service_started
-    ports:
-      - "${API_PORT:-8000}:8000"
+    # ports:
+    #   - "${API_PORT:-8000}:8000"
     volumes:
       - type: bind
         source: ./packages/contracts
@@ -282,8 +312,12 @@ services:
       retries: 5
       start_period: 15s
     profiles: ["prod"]
+    networks:
+      - phylo_framework
+      - proxy_net
 
   api-worker-prod:
+    container_name: phylo-api-worker-prod
     image: phylo-api:latest
     build:
       context: .
@@ -291,7 +325,7 @@ services:
     env_file:
       - ./.env
     environment:
-      <<: *api_common_env
+      <<: *api_prod_env
     depends_on:
       postgres:
         condition: service_healthy
@@ -308,13 +342,16 @@ services:
         source: ${STORAGE_LOCAL_PATH:-runtime/storage}
         target: /runtime/storage
       - type: bind
-        source: ./runtime
-        target: /version-info
+        source: ./runtime/version-info.json
+        target: /version-info.json
         read_only: true
     command: sh -lc "python -m apps.api.workers.run_worker"
     profiles: ["prod"]
+    networks:
+      - phylo_framework
 
   dowser:
+    container_name: phylo-dowser
     platform: ${IMMCANTATION_PLATFORM:-linux/amd64}
     build:
       context: ./services/dowser
@@ -339,8 +376,8 @@ services:
         source: ${STORAGE_LOCAL_PATH:-runtime/storage}
         target: /runtime/storage
         read_only: true
-    expose:
-      - "${METHOD_DOWSER_CONTAINER_PORT:-8001}"
+    # expose:
+    #   - "${METHOD_DOWSER_CONTAINER_PORT:-8001}"
     command:
       [
         "R",
@@ -349,8 +386,11 @@ services:
         "port <- as.integer(Sys.getenv('METHOD_DOWSER_CONTAINER_PORT', '8001')); pr <- plumber::plumb('/srv/plumber.R'); pr$$run(host='0.0.0.0', port=port)",
       ]
     profiles: ["dev", "prod"]
+    networks:
+      - phylo_framework
 
   gctree:
+    container_name: phylo-gctree
     build:
       context: ./services/gctree
       dockerfile: Dockerfile
@@ -369,12 +409,15 @@ services:
         source: ${STORAGE_LOCAL_PATH:-runtime/storage}
         target: /runtime/storage
         read_only: true
-    expose:
-      - "${METHOD_GCTREE_CONTAINER_PORT:-8002}"
+    # expose:
+    #   - "${METHOD_GCTREE_CONTAINER_PORT:-8002}"
     command: sh -lc "uvicorn app:app --host 0.0.0.0 --port ${METHOD_GCTREE_CONTAINER_PORT:-8002}"
     profiles: ["dev", "prod"]
+    networks:
+      - phylo_framework
 
   brepphylo:
+    container_name: phylo-brepphylo
     platform: ${IMMCANTATION_PLATFORM:-linux/amd64}
     build:
       context: ./services/brepphylo
@@ -397,8 +440,8 @@ services:
         source: ${STORAGE_LOCAL_PATH:-runtime/storage}
         target: /runtime/storage
         read_only: true
-    expose:
-      - "${METHOD_BREPPHYLO_CONTAINER_PORT:-8003}"
+    # expose:
+    #   - "${METHOD_BREPPHYLO_CONTAINER_PORT:-8003}"
     command:
       [
         "R",
@@ -407,8 +450,11 @@ services:
         "port <- as.integer(Sys.getenv('METHOD_BREPPHYLO_CONTAINER_PORT', '8003')); pr <- plumber::plumb('/srv/plumber.R'); pr$$run(host='0.0.0.0', port=port)",
       ]
     profiles: ["dev", "prod"]
+    networks:
+      - phylo_framework
 
   clonaltree:
+    container_name: phylo-clonaltree
     build:
       context: ./services/clonaltree
       dockerfile: Dockerfile
@@ -426,11 +472,25 @@ services:
         source: ${STORAGE_LOCAL_PATH:-runtime/storage}
         target: /runtime/storage
         read_only: true
-    expose:
-      - "${METHOD_CLONALTREE_CONTAINER_PORT:-8004}"
+    # expose:
+    #   - "${METHOD_CLONALTREE_CONTAINER_PORT:-8004}"
     command: sh -lc "uvicorn app:app --host 0.0.0.0 --port ${METHOD_CLONALTREE_CONTAINER_PORT:-8004}"
     profiles: ["dev", "prod"]
+    networks:
+      - phylo_framework
 
 volumes:
-  postgres_data:
-  minio_data:
+  phylo_postgres_data:
+    name: phylo_postgres_data
+  phylo_minio_data:
+    name: phylo_minio_data
+
+networks:
+  # The reverse proxy's shared network: created and owned by the infrastructure
+  # team, so it stays external.
+  proxy_net:
+    external: true
+  # Project-internal network, created by Compose itself (no manual
+  # `docker network create`). Its real name is prefixed with the Compose
+  # project name, so it cannot collide with another project's network.
+  phylo_framework: {}

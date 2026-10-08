@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { authApi } from "@/features/auth/api";
 import { notify } from "@/lib/notify";
 import { getApiErrorMessage } from "@/lib/http/errors";
+import { PASSWORD_MIN_LENGTH } from "@/lib/auth/password";
 
 function ResetPasswordPageContent() {
   const router = useRouter();
@@ -33,8 +34,8 @@ function ResetPasswordPageContent() {
       notify.error("Passwords do not match");
       return;
     }
-    if (password.length < 6) {
-      notify.error("Password must be at least 6 characters");
+    if (password.length < PASSWORD_MIN_LENGTH) {
+      notify.error(`Password must be at least ${PASSWORD_MIN_LENGTH} characters`);
       return;
     }
     setSubmitting(true);
@@ -107,7 +108,7 @@ function ResetPasswordPageContent() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
-                minLength={6}
+                minLength={PASSWORD_MIN_LENGTH}
                 autoComplete="new-password"
               />
             </div>
@@ -119,7 +120,7 @@ function ResetPasswordPageContent() {
                 value={confirm}
                 onChange={(e) => setConfirm(e.target.value)}
                 required
-                minLength={6}
+                minLength={PASSWORD_MIN_LENGTH}
                 autoComplete="new-password"
               />
             </div>

@@ -5,7 +5,7 @@
 1. PostgreSQL 15 running in Docker:
 
 ```bash
-docker compose --profile dev up -d postgres
+docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile dev up -d postgres
 ```
 
 2. Environment variables in repo-root `.env`:

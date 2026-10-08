@@ -12,6 +12,7 @@ import { useAuth } from "@/features/auth/context";
 import { authApi } from "@/features/auth/api";
 import { notify } from "@/lib/notify";
 import { getApiErrorMessage } from "@/lib/http/errors";
+import { PASSWORD_MIN_LENGTH } from "@/lib/auth/password";
 
 type Mode = "login" | "signup";
 
@@ -139,8 +140,14 @@ function AuthPageContent() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
+                minLength={mode === "login" ? undefined : PASSWORD_MIN_LENGTH}
                 autoComplete={mode === "login" ? "current-password" : "new-password"}
               />
+              {mode !== "login" && (
+                <p className="text-xs text-muted-foreground">
+                  At least {PASSWORD_MIN_LENGTH} characters.
+                </p>
+              )}
             </div>
             <Button type="submit" className="w-full" disabled={submitting}>
               {submitting ? "Please wait..." : mode === "login" ? "Log in" : "Sign up"}

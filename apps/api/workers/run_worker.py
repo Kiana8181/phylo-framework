@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import os
 import socket
+import sys
 import traceback
 from typing import Any, Optional
 from uuid import UUID
@@ -35,6 +36,11 @@ from apps.api.services.artifact_service import (
     parse_manifest,
 )
 from apps.api.preprocess.prepare_input import PREPROCESS_LOG_PREFIX
+from apps.api.security.errors import log_internal_error
+from apps.api.security.production_config import (
+    InsecureConfigurationError,
+    enforce_production_config,
+)
 from apps.api.services.run_staging import (
     StagingError,
     cleanup_workspace,
@@ -372,14 +378,21 @@ async def process_run(run_id: UUID, worker_id: str) -> None:
     except jobs.MethodServiceUnavailable as exc:
         await _persist_error(run_id, error_message=str(exc))
     except Exception as exc:  # noqa: BLE001
-        traceback.print_exc()
+        # An orchestration fault (database, storage, network), not a scientific
+        # error. The run owner sees this message, so it carries a reference id
+        # instead of the exception text; the traceback goes to the worker log.
+        error_id = log_internal_error("Run failed in worker", exc, context=f"run_id={run_id}")
+        public_message = (
+            f"Run failed because of an internal error (reference {error_id}). "
+            "Please try again; if it keeps failing, contact support with this reference."
+        )
         await _persist_error(
             run_id,
-            error_message=f"Run failed: {exc!s}",
+            error_message=public_message,
             result_payload={
                 "ok": False,
-                "error": f"Run failed: {exc!s}",
-                "logs": [{"step": "api.worker.unhandled", "ok": False, "out": str(exc)}],
+                "error": public_message,
+                "logs": [{"step": "api.worker.unhandled", "ok": False, "out": public_message}],
             },
         )
     finally:
@@ -469,6 +482,8 @@ async def _poll_method_job(
 
 
 async def main() -> None:
+    # Same start-up gate as the API: never process runs on weak production secrets.
+    enforce_production_config()
     worker_id = f"{socket.gethostname()}:{os.getpid()}"
     _log("starting", worker_id=worker_id, max_concurrent=MAX_CONCURRENT, lease=LEASE_SECONDS)
     active: set[UUID] = set()
@@ -510,3 +525,6 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
+    except InsecureConfigurationError as exc:
+        print(f"[run_worker] {exc}", file=sys.stderr, flush=True)
+        sys.exit(1)

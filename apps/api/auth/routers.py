@@ -10,13 +10,19 @@ from pydantic import BaseModel, EmailStr
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.auth.dependencies import get_current_user, get_current_user_required
-from apps.api.auth.google_oauth import exchange_google_code, get_google_oauth_url, verify_google_token
+from apps.api.auth.google_oauth import exchange_google_code, get_google_oauth_url
 from apps.api.auth.jwt_handler import create_access_token, create_refresh_token, decode_token
-from apps.api.auth.password import hash_password, verify_password
+from apps.api.auth.password import (
+    hash_password,
+    password_policy_error,
+    unusable_password_hash,
+    verify_password,
+)
 from apps.api.config import FRONTEND_URL
 from apps.api.database import get_db
 from apps.api.database.models import User
 from apps.api.repositories.user_repository import UserRepository
+from apps.api.security.errors import internal_error
 from apps.api.services.email import send_email
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
@@ -37,8 +43,10 @@ class UserLogin(BaseModel):
 
 
 class GoogleAuthRequest(BaseModel):
+    # Authorization-code flow only. A raw Google token is not accepted: the
+    # userinfo endpoint cannot prove a token was issued to *this* application,
+    # so a token obtained by any other app would sign its bearer in here.
     code: Optional[str] = None
-    token: Optional[str] = None
 
 
 class TokenResponse(BaseModel):
@@ -62,6 +70,10 @@ async def register(
     db: AsyncSession = Depends(get_db),
 ):
     """Register a new user with username/password."""
+    policy_error = password_policy_error(user_data.password)
+    if policy_error:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=policy_error)
+
     user_repo = UserRepository(db)
     
     # Check if user already exists
@@ -116,6 +128,8 @@ async def login(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Incorrect email or password",
             )
+        # verify_password rejects an empty password and accounts without a
+        # usable password (Google sign-in) before any hash comparison.
         if not verify_password(credentials.password, user.password_hash):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -140,12 +154,7 @@ async def login(
     except HTTPException:
         raise
     except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Login failed: {e!s}",
-        )
+        raise internal_error("Login failed.", e)
 
 
 @router.get("/google")
@@ -154,11 +163,13 @@ async def google_oauth_url():
     try:
         url = get_google_oauth_url()
         return {"auth_url": url}
-    except Exception as e:
+    except HTTPException:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Google OAuth not configured: {e}",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Google sign-in is not available.",
         )
+    except Exception as e:
+        raise internal_error("Google sign-in is not available.", e)
 
 
 @router.post("/google", response_model=TokenResponse)
@@ -169,18 +180,14 @@ async def google_oauth(
     """Authenticate with Google OAuth."""
     user_repo = UserRepository(db)
     
-    # Get user info from Google
-    if auth_data.code:
-        # Exchange code for user info
-        user_info = await exchange_google_code(auth_data.code)
-    elif auth_data.token:
-        # Verify token directly
-        user_info = await verify_google_token(auth_data.token)
-    else:
+    # Exchange the authorization code (issued to this application's client id)
+    # for the user's identity.
+    if not auth_data.code:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Either 'code' or 'token' must be provided",
+            detail="An authorization 'code' must be provided",
         )
+    user_info = await exchange_google_code(auth_data.code)
     
     if not user_info or not user_info.get("email"):
         raise HTTPException(
@@ -204,11 +211,12 @@ async def google_oauth(
             username = f"{base_username}{counter}"
             counter += 1
         
-        # Create user without password (Google OAuth users)
+        # Google-only account: no password exists, so store a marker that no
+        # input can verify against (never a hash of the empty string).
         user = await user_repo.create_user(
             email=email,
             username=username,
-            password_hash=hash_password(""),  # Empty password for OAuth users
+            password_hash=unusable_password_hash(),
             is_active=True,
         )
     
@@ -294,6 +302,9 @@ async def reset_password(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid or expired reset token",
         )
+    policy_error = password_policy_error(body.new_password)
+    if policy_error:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=policy_error)
     password_hash = hash_password(body.new_password)
     await user_repo.update_password(user.id, password_hash)
     await user_repo.clear_password_reset_token(user.id)

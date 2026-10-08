@@ -56,15 +56,55 @@ Copy `.env.example` to `.env` and set real secrets. Storage-related variables:
 
 ---
 
+## Required production secrets
+
+`.env.example` ships public development values. A production deployment refuses
+to start until they are replaced:
+
+| Variable | Requirement |
+|---|---|
+| `POSTGRES_PASSWORD` | Not a value from `.env.example`; the same password must appear in `DATABASE_URL` if you set that yourself |
+| `MINIO_ROOT_PASSWORD` | Not a value from `.env.example` |
+| `S3_SECRET_ACCESS_KEY` | Must match `MINIO_ROOT_PASSWORD` (or belong to your own MinIO user) |
+| `MINIO_METHODS_PASSWORD` | Not a value from `.env.example` |
+| `JWT_SECRET_KEY` | Unique, random, at least 32 characters |
+
+Generate each one with `openssl rand -hex 32`.
+
+Two layers enforce this:
+
+1. **Docker Compose** stops with `required variable X is missing a value` when
+   `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `MINIO_ROOT_USER`,
+   `MINIO_ROOT_PASSWORD`, `MINIO_METHODS_USER`, `MINIO_METHODS_PASSWORD` or
+   `JWT_SECRET_KEY` is unset. There are no built-in fallback credentials.
+2. **The API and the worker** run with `ENV=production` (set by
+   `docker-compose.yml` for `api-prod` and `api-worker-prod`) and exit at
+   start-up when a secret is missing, equal to a known default, or too short.
+   The message lists the variable names, never their values:
+
+   ```bash
+   docker compose --profile prod logs api-prod api-worker-prod | grep -A8 "Refusing to start"
+   ```
+
+In production, error responses carry a fixed message and an `error_id`; the
+cause is in the container log under the same id. The interactive API docs
+(`/docs`, `/redoc`, `/openapi.json`) are off unless `API_DOCS_ENABLED=true`.
+
+---
+
 ## Local development
 
 ```bash
-cp .env.example .env            # then edit secrets
-docker compose --profile dev up -d --build
+cp .env.example .env            # the example values are fine for local development
+docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile dev up -d --build
 # The `api` service runs `alembic upgrade head` on start.
 # The `minio-init` service creates both buckets automatically.
 npm run storage:check:docker    # verifies connectivity + buckets
 ```
+
+`docker-compose.yml` publishes no host ports for Postgres or MinIO.
+`docker-compose.dev.yml` adds them for local development (the `./run.sh` dev
+modes pass both files for you). Never load the dev file on the server.
 
 A full clean-slate reset (wipes DB + MinIO + staging, recreates buckets):
 
@@ -81,7 +121,7 @@ The `prod` compose profile includes `postgres`, `minio`, `minio-init`,
 
 ```bash
 # On your server:
-cp .env.example .env            # set STRONG MINIO_ROOT_PASSWORD / S3 secrets, PUBLIC_API_BASE_URL, JWT_SECRET_KEY
+cp .env.example .env            # then replace every secret listed under "Required production secrets"
 docker compose --profile prod up -d --build
 docker compose exec api-prod alembic upgrade head   # (also runs automatically on start)
 npm run storage:check:docker
@@ -97,15 +137,15 @@ Hardening notes:
 - The MinIO **console** (`:9001`) is for ops only — restrict or keep it internal.
 - Use a dedicated MinIO access key with a policy scoped to the two buckets
   instead of the root credentials, if you need least privilege.
-- Persist `minio_data` on reliable storage (named volume by default; a host bind
+- Persist `phylo_minio_data` on reliable storage (named volume by default; a host bind
   mount under your data directory is fine).
 
 ### Persistent volumes
 
 | Volume | Holds |
 |---|---|
-| `postgres_data` | PostgreSQL data |
-| `minio_data` | All datasets + artifacts |
+| `phylo_postgres_data` | PostgreSQL data |
+| `phylo_minio_data` | All datasets + artifacts |
 | `method_jobs` | Per-job scratch/state (ephemeral; safe to lose) |
 
 ---
@@ -134,7 +174,7 @@ docker run --rm --network=host -v "$PWD/backups/minio:/backup" -e MC_HOST_local=
   minio/mc mirror --overwrite local/phylo-artifacts /backup/phylo-artifacts
 # restore = mirror the backup directory back into the bucket.
 ```
-Alternatively snapshot the `minio_data` volume while the stack is stopped.
+Alternatively snapshot the `phylo_minio_data` volume while the stack is stopped.
 These commands do not capture copies already downloaded by users or versions
 retained by an externally configured versioned object store.
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 import os
-import traceback
 
 # Force UTC for datetime/zoneinfo (avoids Windows Errno 22 with DB timestamps)
 if "TZ" not in os.environ:
@@ -13,7 +12,15 @@ from fastapi.exceptions import RequestValidationError
 from dotenv import load_dotenv
 load_dotenv()
 
-from apps.api.config import CORS_ORIGINS
+from apps.api.config import API_DOCS_ENABLED, CORS_ORIGINS, IS_PRODUCTION
+from apps.api.security.errors import log_internal_error
+from apps.api.security.production_config import enforce_production_config
+
+# Refuse to serve production traffic on missing, default or weak secrets. Runs
+# before the routers (and the JWT signing key) are imported, so a bad
+# configuration stops the process instead of starting a vulnerable API.
+enforce_production_config()
+
 from apps.api.routers import methods as methods_router
 from apps.api.routers import runs as runs_router
 from apps.api.routers import files as files_router
@@ -23,7 +30,14 @@ from apps.api.routers import artifacts as artifacts_router
 from apps.api.auth import auth_router
 from apps.api.database import init_db, close_db
 
-app = FastAPI(title="Phylo Orchestrator")
+app = FastAPI(
+    title="Phylo Orchestrator",
+    # The interactive docs describe every route; keep them off the public
+    # internet in production unless API_DOCS_ENABLED=true.
+    docs_url="/docs" if API_DOCS_ENABLED else None,
+    redoc_url="/redoc" if API_DOCS_ENABLED else None,
+    openapi_url="/openapi.json" if API_DOCS_ENABLED else None,
+)
 
 
 @app.on_event("shutdown")
@@ -77,9 +91,13 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
-    traceback.print_exc()
-    msg = str(exc).strip() if os.environ.get("ENV") != "production" else "Internal server error"
-    return err(msg or "Internal server error", status_code=500)
+    # The real cause goes to the server log under an error id; production
+    # clients only ever see a fixed message plus that id.
+    error_id = log_internal_error(
+        "Unhandled error", exc, context=f"{request.method} {request.url.path}"
+    )
+    msg = "Internal server error" if IS_PRODUCTION else (str(exc).strip() or "Internal server error")
+    return err(msg, status_code=500, data={"error_id": error_id})
 
 # Routers
 app.include_router(auth_router)

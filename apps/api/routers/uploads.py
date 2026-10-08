@@ -20,6 +20,7 @@ from apps.api.database import get_db
 from apps.api.database.models import StorageType, UploadSessionStatus, User
 from apps.api.repositories.file_repository import FileRepository
 from apps.api.repositories.upload_session_repository import UploadSessionRepository
+from apps.api.security.errors import internal_error
 from apps.api.storage import get_dataset_storage
 
 router = APIRouter(prefix="/uploads", tags=["uploads"])
@@ -157,7 +158,7 @@ async def upload_content(
     except Exception as exc:
         _safe_unlink(str(tmp_path))
         await repo.mark_error(upload_id, f"Upload failed: {exc!s}")
-        raise HTTPException(500, f"Upload failed: {exc!s}")
+        raise internal_error("Upload failed.", exc, context=f"upload_id={upload_id}")
 
     if bytes_received == 0:
         _safe_unlink(str(tmp_path))
@@ -180,7 +181,7 @@ async def upload_content(
     except Exception as exc:
         _safe_unlink(str(tmp_path))
         await repo.mark_error(upload_id, f"Failed to store upload: {exc!s}")
-        raise HTTPException(500, f"Failed to store upload: {exc!s}")
+        raise internal_error("Failed to store upload.", exc, context=f"upload_id={upload_id}")
 
     storage_url = await storage().get_url(final_storage_path)
     file_record = await file_repo.create_file(

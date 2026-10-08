@@ -350,7 +350,7 @@ set -a; source .env; set +a
 source .venv/bin/activate
 
 # Database + object storage (minio-init creates both buckets, then exits)
-docker compose --profile dev up -d postgres minio minio-init
+docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile dev up -d postgres minio minio-init
 docker wait phylo-minio-init 2>/dev/null || true   # block until buckets are ready (no-op if already done)
 
 npm run db:migrate             # applies migrations incl. 008 (run_artifacts, dataset soft-delete)
