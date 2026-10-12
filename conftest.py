@@ -13,7 +13,8 @@ os.environ.update({
     "METHOD_SERVICE_FILE_PREFIX": _runtime.name,
     "CONTRACTS_DIR": str(Path(__file__).parent / "packages/contracts"),
     "JWT_SECRET_KEY": "test-only-key-not-for-deployment",
-    "RESEND_API_KEY": "",
+    # Email stays switched off unless a test configures SMTP itself.
+    "SMTP_HOST": "",
     "GOOGLE_CLIENT_ID": "",
     "GOOGLE_CLIENT_SECRET": "",
     "ENV": "test",

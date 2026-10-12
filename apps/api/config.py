@@ -58,10 +58,9 @@ SPEC_TIMEOUT = int(os.getenv("SPEC_TIMEOUT", "60"))                  # seconds
 STORAGE_QUOTA_PER_USER_GB = float(os.getenv("STORAGE_QUOTA_PER_USER_GB", "2"))
 STORAGE_QUOTA_PER_USER_BYTES = int(STORAGE_QUOTA_PER_USER_GB * (1024**3))
 
-# Email (Resend) for password reset
-RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
+# Public address of the web app; used for the links in emails. The mail server
+# itself is configured through the SMTP_* variables (apps/api/services/email.py).
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000").rstrip("/")
-EMAIL_FROM = os.getenv("EMAIL_FROM", "Phylo Runner <onboarding@resend.dev>")
 
 # Database configuration
 def get_database_url() -> str:

@@ -12,7 +12,9 @@ A standalone process (separate from the API) that:
   - fails a run whose method job was lost or whose service stays unreachable,
   - confirms every artifact is in the object store before a run becomes DONE,
   - persists the final result/error using the existing contracts,
-  - resumes orphaned runs after a lease expires.
+  - resumes orphaned runs after a lease expires,
+  - delivers run notifications from the outbox (workers/notifier.py), as a
+    separate task that cannot affect run processing.
 
 Run with:  python -m apps.api.workers.run_worker
 """
@@ -29,7 +31,6 @@ from typing import Any, Optional
 from uuid import UUID
 
 import httpx
-from sqlalchemy.sql import func
 
 from apps.api.database.base import AsyncSessionLocal
 from apps.api.database.models import ArtifactKind, RunStatus
@@ -50,9 +51,12 @@ from apps.api.services.artifact_verification import (
 from apps.api.services.completion import (
     CODE_INCOMPLETE_RESULT,
     LOG_MISSING_WARNING,
+    NO_EXECUTION_RECORD,
     has_execution_log,
+    has_step_log,
     missing_requirements,
 )
+from apps.api.logging_setup import configure_logging
 from apps.api.preprocess.prepare_input import PREPROCESS_LOG_PREFIX
 from apps.api.security.errors import log_internal_error
 from apps.api.security.production_config import (
@@ -72,6 +76,7 @@ from apps.api.storage import get_artifact_storage, get_storage
 from apps.api.utils.datetime_util import utc_now
 from apps.api.workers import limits
 from apps.api.workers.capacity import CapacityTracker
+from apps.api.workers.notifier import notification_loop
 
 POLL_INTERVAL = float(os.getenv("WORKER_POLL_INTERVAL", "3"))
 METHOD_POLL_INTERVAL = float(os.getenv("WORKER_METHOD_POLL_INTERVAL", "10"))
@@ -309,6 +314,10 @@ async def _persist_done(
     #    reports success but declares nothing would pass the file check below
     #    with an empty list.
     missing = missing_requirements(method_id, result, tree_rows, artifact_rows)
+    log_stored = has_execution_log(artifact_rows)
+    if not log_stored and not has_step_log(result):
+        # Without the log file the step log is the only account of the run.
+        missing.append(NO_EXECUTION_RECORD)
     if missing:
         _log("result incomplete", run_id=run_id, method_id=method_id, missing="; ".join(missing))
         await _fail(
@@ -321,8 +330,9 @@ async def _persist_done(
             details={"method_id": method_id, "missing": missing},
         )
         return
-    if not has_execution_log(artifact_rows):
-        # The scientific output is complete; keep it and say what is missing.
+    if not log_stored:
+        # The scientific output is complete and the step log is stored with the
+        # run; keep it and say what is missing.
         unified_result = dict(unified_result)
         unified_result["warnings"] = [*(unified_result.get("warnings") or []), dict(LOG_MISSING_WARNING)]
 
@@ -407,41 +417,22 @@ async def _persist_error(
             default=str,
         )
     async with AsyncSessionLocal() as db:
-        run_repo = RunRepository(db)
-        updated = await run_repo.update(
-            run_id,
-            status=RunStatus.ERROR,
-            stage="ERROR",
-            error=stored_error,
-            message=normalized_error,
-            stage_message=normalized_error,
-            progress=100,
-            result=payload,
-            finished_at=func.now(),
-            worker_lease_until=None,
+        # One transaction: the run fails, its owner's next run moves up, and
+        # the owner's notification is queued.
+        await RunRepository(db).fail_run(
+            run_id, error=stored_error, message=normalized_error, result=payload
         )
-        # Free the owner's turn so their next queued run dispatches promptly.
-        await run_repo.promote_next_for_user(updated.user_id if updated else None)
     _log("run errored", run_id=run_id, code=code)
 
 
 async def _persist_staging_error(run_id: UUID, err: StagingError) -> None:
     async with AsyncSessionLocal() as db:
-        run_repo = RunRepository(db)
-        updated = await run_repo.update(
+        await RunRepository(db).fail_run(
             run_id,
-            status=RunStatus.ERROR,
-            stage="ERROR",
             error=json.dumps(err.error_payload, ensure_ascii=True, sort_keys=True),
             message=err.message,
-            stage_message=err.message,
-            progress=100,
             result=err.error_payload,
-            finished_at=func.now(),
-            worker_lease_until=None,
         )
-        # Free the owner's turn so their next queued run dispatches promptly.
-        await run_repo.promote_next_for_user(updated.user_id if updated else None)
     _log("run staging error", run_id=run_id, code=err.code)
 
 
@@ -1065,6 +1056,7 @@ async def dispatch_once(
 async def main() -> None:
     # Same start-up gate as the API: never process runs on weak production secrets.
     enforce_production_config()
+    configure_logging()
     worker_id = f"{socket.gethostname()}:{os.getpid()}"
     tracker = CapacityTracker(jobs.get_capacity, ttl_seconds=CAPACITY_REFRESH_SECONDS)
     configured = configured_max_concurrent()
@@ -1075,6 +1067,10 @@ async def main() -> None:
         lease=LEASE_SECONDS,
     )
     active: set[UUID] = set()
+    # Run emails are delivered by their own task. It shares nothing with run
+    # processing except the database, so a mail server that is down or slow
+    # cannot delay a run or change its outcome.
+    notifier = asyncio.create_task(notification_loop(), name="notifications")
 
     while True:
         try:
@@ -1087,6 +1083,7 @@ async def main() -> None:
             if not claimed:
                 await asyncio.sleep(POLL_INTERVAL)
         except asyncio.CancelledError:
+            notifier.cancel()
             break
         except Exception:  # noqa: BLE001
             traceback.print_exc()

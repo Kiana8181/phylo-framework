@@ -198,3 +198,24 @@ def test_jwt_key_has_no_builtin_default_outside_production():
     # A fresh random key per process, never a shared constant.
     show_key = ["-c", "import apps.api.auth.jwt_handler as j; print(j.JWT_SECRET_KEY)"]
     assert _run(show_key, env).stdout != _run(show_key, env).stdout
+
+
+# --------------------------------------------------------------------------- #
+# Email settings and production start-up
+# --------------------------------------------------------------------------- #
+def test_a_placeholder_mail_password_is_refused_like_any_other_secret():
+    assert collect_config_problems(_with(SMTP_PASSWORD="change-me-strong")) == [
+        "SMTP_PASSWORD is a known default or placeholder value"]
+    assert collect_config_problems(_with(SMTP_PASSWORD="unit-test-smtp-4b7e19c2a6d0f385")) == []
+
+
+@pytest.mark.parametrize("smtp", [
+    {},                                                               # email switched off
+    {"SMTP_HOST": "mail.example"},                                    # incomplete: no sender
+    {"SMTP_HOST": "mail.example", "SMTP_FROM": "a@b.example", "SMTP_SECURITY": "bogus"},
+])
+def test_missing_or_broken_mail_settings_never_block_start_up(smtp):
+    """Email is not needed to run analyses: a mail problem is reported in the
+    log and on each failed delivery, but the service still starts."""
+    assert collect_config_problems(_with(**smtp)) == []
+    enforce_production_config(_with(**smtp))

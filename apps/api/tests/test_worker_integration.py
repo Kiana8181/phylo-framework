@@ -54,6 +54,7 @@ async def test_worker_recovers_transient_poll_failure_persists_trees_and_artifac
         JobStatus(True, 'job-1', 'RUNNING', stage='BUILDING_TREES', progress=50),
         JobStatus(True, 'job-1', 'DONE')], {
         'ok': True, 'trees': ['(a:1,b:2)root:0;'], 'manifest_version': 1,
+        'logs': [{'step': 'gctree.infer', 'ok': True, 'out': 'done'}],
         'artifacts': [{'object_key': 'runs/test/tree.nwk', 'filename': 'tree.nwk', 'size_bytes': 18, 'kind': 'newick'},
                       {'object_key': 'runs/test/bundle.zip', 'filename': 'bundle.zip', 'size_bytes': 3,
                        'kind': 'zip', 'role': 'clone_bundle_zip'}],

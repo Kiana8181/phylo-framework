@@ -108,6 +108,11 @@ def collect_config_problems(env: Mapping[str, str] | None = None) -> list[str]:
         if is_insecure_secret(_value(env, name)):
             problems.append(f"{name} is a known default or placeholder value")
 
+    # A placeholder mail password protects nothing. (Whether email is configured
+    # at all, or correctly, never blocks start-up: see services/email.py.)
+    if is_insecure_secret(_value(env, "SMTP_PASSWORD")):
+        problems.append("SMTP_PASSWORD is a known default or placeholder value")
+
     origins = [o.strip() for o in _value(env, "CORS_ORIGINS").split(",") if o.strip()]
     if "*" in origins:
         problems.append("CORS_ORIGINS must list explicit origins, not '*'")

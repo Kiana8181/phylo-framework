@@ -509,13 +509,41 @@ async def test_a_tree_without_a_rendered_image_is_still_a_legitimate_result(work
     assert run.result["warnings"] == ["Figure rendering failed; tree returned without an image."]
 
 
+STEP_LOG = [{"step": "gctree.infer", "ok": True, "out": "inferred 3 trees"}]
+
+
 @pytest_integration
 async def test_a_complete_result_without_its_log_is_kept_and_says_so(worker_db, store, monkeypatch):
-    result = {"ok": True, "trees": ["(a,b);"], "manifest_version": 1, "artifacts": [BUNDLE]}
-    run = await finish_with(worker_db, store, monkeypatch, result, files=[BUNDLE])
+    """Kept as DONE only because its provenance is recorded independently of the log file."""
+    monkeypatch.setattr(worker, "attach_version_info",
+                        lambda result, method: {**result, "version_info": {"commit": "abc123", "method": method}})
+    result = {"ok": True, "trees": ["(a,b);"], "manifest_version": 1, "artifacts": [BUNDLE], "logs": STEP_LOG}
+    run_id = await running(worker_db)
+    await RunRepository(worker_db).update(run_id, params={"quick": True, "top_n": 3})
+    await store.upload(b"x" * BUNDLE["size_bytes"], BUNDLE["object_key"])
+    mock_jobs(monkeypatch, [JobStatus(True, "job-1", "DONE")], result)
+    await worker.process_run(run_id, "w")
+    run = await fresh(worker_db, run_id)
     assert run.status == RunStatus.DONE
     assert {"code": "EXECUTION_LOG_MISSING",
             "message": "The run completed, but its execution log could not be saved."} in run.result["warnings"]
+    # What the log file is not needed for: all of this is stored with the run.
+    assert run.method_id == "gctree" and run.params == {"quick": True, "top_n": 3}
+    assert run.started_at is not None and run.finished_at is not None
+    assert run.result["logs"] == STEP_LOG                                  # how it ran, step by step
+    assert run.result["version_info"] == {"commit": "abc123", "method": "gctree"}
+
+
+@pytest_integration
+@pytest.mark.parametrize("logs", [None, [], [{}], "not a list"])
+async def test_without_any_record_of_how_it_ran_a_result_is_not_done(worker_db, store, monkeypatch, logs):
+    """No log file AND no step log: nothing would say how the result was produced."""
+    result = {"ok": True, "trees": ["(a,b);"], "manifest_version": 1, "artifacts": [BUNDLE]}
+    if logs is not None:
+        result["logs"] = logs
+    run = await finish_with(worker_db, store, monkeypatch, result, files=[BUNDLE])
+    assert run.status == RunStatus.ERROR and error_code(run) == "INCOMPLETE_RESULT"
+    assert "no record of how the analysis ran" in run.message
 
 
 # ---- time limit ------------------------------------------------------------ #

@@ -17,8 +17,14 @@ Deliberately NOT required, because methods legitimately succeed without them:
   - rendered tree images (a method may fail to draw a tree it built; it says so
     in its warnings and the tree is still shown from its Newick);
   - method-specific extras (GCtree abundance charts, BrepPhylo PDFs, ...);
-  - the execution log: a run whose scientific output is complete and stored is
-    kept, and carries a warning that its log could not be saved.
+  - the execution log file: a run whose scientific output is complete and
+    stored is kept, and carries a warning that its log could not be saved —
+    but only while its provenance is still recorded independently of that
+    file. The run row always holds the method, the parameters, the input
+    dataset and the start and finish times, and the result holds the version
+    information of the deployment. What only the log file or the method's step
+    log can tell is *how the analysis ran*; if both are missing there is no
+    record of that at all, and the result is treated as incomplete.
 
 A method without a completion.json gets the default rule: at least one tree
 and at least one stored file besides the log.
@@ -104,3 +110,15 @@ def missing_requirements(
 
 def has_execution_log(artifact_rows: list[dict[str, Any]]) -> bool:
     return any(_is_log(row) for row in artifact_rows)
+
+
+def has_step_log(raw_result: dict[str, Any]) -> bool:
+    """True when the method's result carries its own step-by-step record (the
+    ``logs`` list every method returns), which is stored with the run."""
+    logs = raw_result.get("logs")
+    return isinstance(logs, list) and any(isinstance(entry, dict) and entry for entry in logs)
+
+
+NO_EXECUTION_RECORD = (
+    "no record of how the analysis ran was saved (neither its execution log nor its step log)"
+)

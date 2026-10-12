@@ -233,3 +233,82 @@ async def test_migration_neutralizes_only_empty_password_hashes(session):
     assert (await repo.get_by_email('g@example.org')).password_hash == UNUSABLE_PASSWORD_HASH
     assert (await repo.get_by_email('n@example.org')).password_hash == normal_hash
     assert (await repo.get_by_email('u@example.org')).password_hash == UNUSABLE_PASSWORD_HASH
+
+
+# --------------------------------------------------------------------------- #
+# Password reset email goes out through SMTP (no third-party mail API)
+# --------------------------------------------------------------------------- #
+def _use_mail_server(monkeypatch, sink, **extra):
+    env = {'SMTP_HOST': '127.0.0.1', 'SMTP_PORT': str(sink.port), 'SMTP_SECURITY': 'none',
+           'SMTP_FROM': 'Phylo Runner <phylo@lab.example>', 'SMTP_TIMEOUT_SECONDS': '2', **extra}
+    for name in ('SMTP_USERNAME', 'SMTP_PASSWORD', 'SMTP_TLS_VERIFY', 'SMTP_TLS_CA_FILE'):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+
+
+async def test_password_reset_email_is_delivered_over_smtp_with_a_working_link(client, account, session, monkeypatch):
+    from apps.api.auth import routers
+    from tests.support.smtp_sink import SmtpSink
+    monkeypatch.setattr(routers, 'FRONTEND_URL', 'https://phylo.lab.example')
+    async with SmtpSink() as sink:
+        _use_mail_server(monkeypatch, sink)
+        response = await client.post('/auth/forgot-password', json={'email': 'owner@example.org'})
+        assert response.status_code == 200
+        (mail,) = sink.messages
+    user = await UserRepository(session).get_by_email('owner@example.org')
+    assert mail['recipients'] == ['owner@example.org'] and mail['subject'] == 'Reset your Phylo Runner password'
+    link = f'https://phylo.lab.example/auth/reset-password?token={user.password_reset_token}'
+    assert link in mail['text'] and link in mail['html']
+    # The token in the email is the one that resets the password.
+    token = mail['text'].split('token=')[1].split()[0]
+    assert (await client.post('/auth/reset-password', json={'token': token, 'new_password': 'a-new-password-1'})).status_code == 200
+
+
+async def test_no_email_and_the_same_answer_for_an_unknown_address(client, account, monkeypatch):
+    from tests.support.smtp_sink import SmtpSink
+    async with SmtpSink() as sink:
+        _use_mail_server(monkeypatch, sink)
+        known = await client.post('/auth/forgot-password', json={'email': 'owner@example.org'})
+        unknown = await client.post('/auth/forgot-password', json={'email': 'nobody@example.org'})
+        assert known.status_code == unknown.status_code == 200 and known.json() == unknown.json()
+        assert [m['recipients'] for m in sink.messages] == [['owner@example.org']]
+
+
+@pytest.mark.parametrize('mode', ['refuse', 'tempfail', 'hang'])
+async def test_a_mail_server_problem_does_not_change_the_reset_answer(client, account, session, monkeypatch, mode):
+    """Down, failing or silent: the request still succeeds and the token is still valid."""
+    from tests.support.smtp_sink import SmtpSink
+    async with SmtpSink() as sink:
+        sink.mode = mode
+        _use_mail_server(monkeypatch, sink, SMTP_TIMEOUT_SECONDS='0.5')
+        response = await client.post('/auth/forgot-password', json={'email': 'owner@example.org'})
+    assert response.status_code == 200
+    assert 'If an account exists' in response.json()['message']
+    user = await UserRepository(session).get_by_email('owner@example.org')
+    assert user.password_reset_token
+
+
+async def test_without_a_mail_server_the_reset_request_still_answers_the_same(client, account, monkeypatch, caplog):
+    import logging
+    monkeypatch.setenv('SMTP_HOST', '')
+    with caplog.at_level(logging.WARNING, logger='phylo.api.auth'):
+        response = await client.post('/auth/forgot-password', json={'email': 'owner@example.org'})
+    assert response.status_code == 200
+    assert 'password reset email not sent to owner@example.org' in caplog.text
+
+
+async def test_the_reset_link_is_logged_for_developers_but_never_in_production(client, account, session, monkeypatch, caplog):
+    import logging
+    from apps.api.auth import routers
+    monkeypatch.setenv('SMTP_HOST', '')
+    with caplog.at_level(logging.WARNING, logger='phylo.api.auth'):
+        await client.post('/auth/forgot-password', json={'email': 'owner@example.org'})
+    token = (await UserRepository(session).get_by_email('owner@example.org')).password_reset_token
+    assert token in caplog.text                                      # development: the only way to continue
+    caplog.clear()
+    monkeypatch.setattr(routers, 'IS_PRODUCTION', True)
+    with caplog.at_level(logging.WARNING, logger='phylo.api.auth'):
+        await client.post('/auth/forgot-password', json={'email': 'owner@example.org'})
+    token = (await UserRepository(session).get_by_email('owner@example.org')).password_reset_token
+    assert token not in caplog.text and 'reset link' not in caplog.text

@@ -352,6 +352,16 @@ write("status.json", st)
 """
 
 
+def _wait_idle(mgr, timeout: float = 10.0) -> int:
+    """Wait for finished job processes to exit. A job writes its final status
+    first and exits a moment later, so "DONE" can be visible while the process
+    is still on its way out."""
+    deadline = time.time() + timeout
+    while mgr.running_jobs() and time.time() < deadline:
+        time.sleep(0.05)
+    return mgr.running_jobs()
+
+
 def _pid_gone(pid: int, timeout: float = 10.0) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -398,7 +408,7 @@ def test_a_job_that_finishes_in_time_is_not_touched_by_its_time_limit(tmp_path, 
     mgr = _manager(manager_module, tmp_path, DONE_RUNNER)
     job_id = mgr.submit(file_path=None, params={}, run_id="run-fast", timeout_seconds=30)
     assert _wait_for_status(mgr, job_id, {"DONE"})["status"] == "DONE"
-    assert mgr.running_jobs() == 0
+    assert _wait_idle(mgr) == 0
     assert job_id not in mgr._timers                        # the timer is cancelled with the job
 
 
@@ -413,7 +423,7 @@ def test_the_service_default_time_limit_applies_when_the_caller_sends_none(tmp_p
     assert limit_of(job_id) == 900
     assert _wait_for_status(mgr, job_id, {"DONE"})["timeout_seconds"] == 900
     monkeypatch.setenv("METHOD_JOB_TIMEOUT_SECONDS", "junk")     # a typo means "no limit", not a crash
-    assert mgr.running_jobs() == 0
+    assert _wait_idle(mgr) == 0
     other = mgr.submit(file_path=None, params={}, run_id="run-junk")
     assert limit_of(other) is None
     assert "timeout_seconds" not in _wait_for_status(mgr, other, {"DONE"})

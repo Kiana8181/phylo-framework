@@ -13,8 +13,12 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from apps.api.config import API_DOCS_ENABLED, CORS_ORIGINS, IS_PRODUCTION
+from apps.api.logging_setup import configure_logging
 from apps.api.security.errors import log_internal_error
 from apps.api.security.production_config import enforce_production_config
+from apps.api.services import email as mailer
+
+configure_logging()
 
 # Refuse to serve production traffic on missing, default or weak secrets. Runs
 # before the routers (and the JWT signing key) are imported, so a bad
@@ -38,6 +42,13 @@ app = FastAPI(
     redoc_url="/redoc" if API_DOCS_ENABLED else None,
     openapi_url="/openapi.json" if API_DOCS_ENABLED else None,
 )
+
+
+@app.on_event("startup")
+async def _report_email_configuration() -> None:
+    # Says at start-up whether password-reset and other account emails can be
+    # sent; a broken mail configuration never stops the API from starting.
+    mailer.log_configuration("api")
 
 
 @app.on_event("shutdown")

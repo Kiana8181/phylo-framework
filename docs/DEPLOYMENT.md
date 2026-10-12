@@ -480,6 +480,99 @@ What these tests do not cover: datasets larger than the samples, cgroup v1
 hosts, and an out-of-memory kill inside the R services (their handling of it is
 tested with a simulated kernel counter, not with a real kill).
 
+## Email and run notifications
+
+All email leaves through one SMTP server that you name in `.env`: password
+reset, account emails, and run notifications. No third-party mail API is used.
+The mail server and its credentials are provided by whoever runs it; nothing is
+built in.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `SMTP_HOST` | empty | Mail server. Empty switches email off |
+| `SMTP_PORT` | by security | 587 (`starttls`), 465 (`ssl`), 25 (`none`) |
+| `SMTP_SECURITY` | `starttls` | `starttls`, `ssl` or `none` |
+| `SMTP_USERNAME`, `SMTP_PASSWORD` | empty | Optional login; set both or neither |
+| `SMTP_FROM` | none | Sender, e.g. `Phylo Runner <phylo@example.org>`. Required with `SMTP_HOST` |
+| `SMTP_TIMEOUT_SECONDS` | `15` | Wait at each step of a delivery |
+| `SMTP_TLS_VERIFY` | `true` | Verify the server's certificate |
+| `SMTP_TLS_CA_FILE` | empty | CA bundle for a server with a private CA |
+| `FRONTEND_URL` | `http://localhost:3000` | Address users open; used for the links in emails |
+
+These reach only the API and the worker containers (through `.env`). The mail
+password is sent only over TLS: a login with `SMTP_SECURITY=none` is refused as
+a configuration error, and with `starttls` nothing is sent if the server does
+not offer it. The password never appears in logs.
+
+With `SMTP_HOST` empty, nothing is sent and nothing else changes. With an
+invalid configuration (for example no `SMTP_FROM`) the API and the worker still
+start; each logs one line at start-up saying that email cannot be sent and
+which variable is wrong. On a server, set `FRONTEND_URL` to the public address,
+or the links in emails will point to `localhost` (also reported at start-up).
+
+### Run notifications
+
+The owner of a run gets **one** email when the run ends by itself:
+
+| Run ends as | Email |
+|---|---|
+| `DONE` | "Your … run has finished", with a link to the results |
+| `ERROR` | "Your … run failed", with the code and reason shown in the app |
+| Expired in the queue (`QUEUE_TIMEOUT`) | "Your … run expired before it could start": it waited too long for a free slot, never started, computed nothing, and should be submitted again |
+| `CANCELLED` | none, however and whenever it was cancelled |
+
+**Email can never change a run.** The need to send an email is recorded in the
+database table `notification_outbox`, in the same transaction that gives the
+run its final status. A separate task of the worker delivers from that table.
+Run processing never waits for a mail server and never reads the result of a
+delivery, so an outage, a timeout or a refusal only ever changes the outbox
+row: a `DONE` run stays `DONE`.
+
+**Retries are bounded.** A delivery that fails for a reason that may pass (server
+unreachable, timeout, a temporary `4xx` answer, a rejected login) is tried
+again later; one that the server refuses for good (`5xx`) is not.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `RUN_NOTIFICATIONS_ENABLED` | `true` | `false` sends no run emails (password reset still works) |
+| `NOTIFICATION_MAX_ATTEMPTS` | `6` | Attempts per email |
+| `NOTIFICATION_RETRY_BASE_SECONDS` | `60` | Wait before the second attempt; each further wait is four times longer |
+| `NOTIFICATION_RETRY_MAX_SECONDS` | `21600` | Longest wait between attempts |
+| `NOTIFICATION_POLL_SECONDS` | `15` | How often the worker looks for emails to send |
+
+With the defaults an email is attempted about 0, 1, 5, 21 and 85 minutes and
+5.7 hours after the run ended, then given up. An email that could not be sent
+is not sent later: a row ends as `SENT`, `FAILED` (given up, with the reason in
+`last_error`) or `SKIPPED` (email was switched off when it came up).
+
+**No duplicates.** There is at most one outbox row per run (a unique constraint
+in the database), so repeated status writes, polling and worker restarts cannot
+queue a second email. A row is held by one sender at a time, so two workers do
+not send it twice. One case remains that SMTP cannot rule out: the mail server
+accepted the message and the worker died in the instant before recording it;
+that email is sent again when the row is next picked up.
+
+To see what happened to a run's notification:
+
+```sql
+SELECT outcome, status, attempts, next_attempt_at, sent_at, last_error
+FROM notification_outbox WHERE run_id = '<run id>';
+```
+
+Measured, with a local test mail server: each of `DONE`, `ERROR` and
+`QUEUE_TIMEOUT` produced exactly one email with the wording above and
+`CANCELLED` none (cancelled while queued, before submission, while running, and
+while the method service was unreachable). With the mail server refusing
+connections while a run finished, the run ended `DONE` with its trees, no email
+was sent, and one email arrived after the server was back. With the server
+answering "try again later" every time and three attempts allowed, delivery
+stopped after the third and the run stayed `DONE`. With a mail server that
+accepted connections and never answered, a complete run finished in under 1.5
+seconds while the delivery task waited for its timeout. Three senders working
+on six pending emails at once sent six emails. STARTTLS and implicit TLS were
+exercised with a real handshake, including refusal of an untrusted
+certificate.
+
 ## Restarts and logs
 
 Every long-running container has `restart: unless-stopped`: it comes back after

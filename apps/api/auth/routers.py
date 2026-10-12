@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,14 +19,16 @@ from apps.api.auth.password import (
     unusable_password_hash,
     verify_password,
 )
-from apps.api.config import FRONTEND_URL
+from apps.api.config import FRONTEND_URL, IS_PRODUCTION
 from apps.api.database import get_db
 from apps.api.database.models import User
 from apps.api.repositories.user_repository import UserRepository
 from apps.api.security.errors import internal_error
-from apps.api.services.email import send_email
+from apps.api.services import email_templates
+from apps.api.services.email import EmailError, EmailNotConfigured, send_email
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
+logger = logging.getLogger("phylo.api.auth")
 
 RESET_TOKEN_EXPIRE_HOURS = 1
 
@@ -255,9 +258,27 @@ class RefreshTokenRequest(BaseModel):
     refresh_token: str
 
 
+async def _send_password_reset(to: str, reset_link: str) -> None:
+    """Send the reset email. Runs after the response has gone out, so neither a
+    slow nor an unavailable mail server delays or changes the answer."""
+    content = email_templates.password_reset(reset_link=reset_link, expires_hours=RESET_TOKEN_EXPIRE_HOURS)
+    try:
+        await send_email(to, content.subject, content.text, content.html)
+    except EmailNotConfigured as exc:
+        logger.warning("password reset email not sent to %s: %s", to, exc)
+        if not IS_PRODUCTION:
+            # Development without a mail server: the link is the only way to continue.
+            logger.warning("password reset link (development only): %s", reset_link)
+    except EmailError as exc:
+        logger.warning("password reset email could not be sent to %s: %s", to, exc)
+    except Exception:  # noqa: BLE001 - a background task must not fail loudly
+        logger.exception("password reset email to %s failed unexpectedly", to)
+
+
 @router.post("/forgot-password")
 async def forgot_password(
     body: ForgotPasswordRequest,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
     """Request a password reset link. Always returns success to avoid email enumeration."""
@@ -268,22 +289,7 @@ async def forgot_password(
         expires = datetime.now(timezone.utc) + timedelta(hours=RESET_TOKEN_EXPIRE_HOURS)
         await user_repo.set_password_reset_token(user.id, token, expires)
         reset_link = f"{FRONTEND_URL}/auth/reset-password?token={token}"
-        html = f"""
-        <p>You requested a password reset for your Phylo Runner account.</p>
-        <p><a href="{reset_link}">Reset your password</a></p>
-        <p>This link expires in {RESET_TOKEN_EXPIRE_HOURS} hour(s). If you didn't request this, ignore this email.</p>
-        """
-        sent = await send_email(
-            to=user.email,
-            subject="Reset your password – Phylo Runner",
-            html=html.strip(),
-        )
-        if not sent:
-            import logging
-            logging.getLogger(__name__).warning(
-                "Password reset email could not be sent to %s (check RESEND_API_KEY and server logs)",
-                user.email,
-            )
+        background_tasks.add_task(_send_password_reset, user.email, reset_link)
     return {
         "message": "If an account exists with this email, you will receive password reset instructions.",
     }

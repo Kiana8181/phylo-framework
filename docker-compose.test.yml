@@ -48,7 +48,16 @@ services:
       METHOD_DOWSER_URL: http://dowser:8001
       METHOD_BREPPHYLO_URL: http://brepphylo:8003
       JWT_SECRET_KEY: test-only-key-not-for-deployment
-      RESEND_API_KEY: ""
+      # Email goes to the local test mail server below; retries are quick.
+      SMTP_HOST: mail
+      SMTP_PORT: "1025"
+      SMTP_SECURITY: none
+      SMTP_FROM: "Phylo Runner <phylo@tests.example>"
+      SMTP_TIMEOUT_SECONDS: "3"
+      FRONTEND_URL: http://127.0.0.1:53000
+      NOTIFICATION_POLL_SECONDS: "0.5"
+      NOTIFICATION_RETRY_BASE_SECONDS: "2"
+      NOTIFICATION_RETRY_MAX_SECONDS: "4"
       GOOGLE_CLIENT_ID: ""
       GOOGLE_CLIENT_SECRET: ""
       CORS_ORIGINS: http://127.0.0.1:53000
@@ -82,6 +91,22 @@ services:
     depends_on:
       api: {condition: service_healthy}
     command: [python, -m, apps.api.workers.run_worker]
+  mail:
+    # Test mail server (tests/support/smtp_sink.py): accepts mail, keeps it in
+    # memory and shows it on a control port. Standard library only, so it runs
+    # in the API image. Never part of a deployment.
+    image: phylo-api:latest
+    profiles: [full]
+    working_dir: /repo
+    volumes:
+      - ./tests:/repo/tests:ro
+    ports: ["127.0.0.1:58025:8025"]
+    command: [python, tests/support/smtp_sink.py, --smtp-port, "1025", --http-port, "8025"]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8025/health')"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
   gctree:
     image: phylo-gctree:latest
     build: ./services/gctree

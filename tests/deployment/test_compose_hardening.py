@@ -25,7 +25,7 @@ LONG_RUNNING = ["postgres", "minio", "web-prod", "api-prod", "api-worker-prod", 
 MAY_READ_DOTENV = {"api", "api-worker", "api-prod", "api-worker-prod"}
 CORE_SECRETS = {
     "POSTGRES_PASSWORD", "DATABASE_URL", "MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD",
-    "JWT_SECRET_KEY", "GOOGLE_CLIENT_SECRET", "RESEND_API_KEY", "SMTP_PASSWORD",
+    "JWT_SECRET_KEY", "GOOGLE_CLIENT_SECRET", "SMTP_PASSWORD", "SMTP_USERNAME",
 }
 PLAN_KEY = {
     "postgres": "POSTGRES", "minio": "MINIO", "minio-init": "MINIO_INIT", "web-prod": "WEB",
@@ -430,3 +430,84 @@ def test_every_method_ships_its_success_criteria(name):
     # The role must be one the method really declares, or no run could ever finish.
     sources = "".join(p.read_text() for p in (ROOT / "services" / name).glob("*.[pR]*") if p.is_file())
     assert "clone_bundle_zip" in sources, f"{name} never declares a clone_bundle_zip artifact"
+
+
+# --------------------------------------------------------------------------- #
+# Email: SMTP only, environment-driven
+# --------------------------------------------------------------------------- #
+def test_no_trace_of_the_removed_mail_provider_remains():
+    """All email goes through SMTP. The former provider must be gone from code,
+    configuration, tests and documentation, not merely unused. The tracked
+    `.env` is the one known exception: it is removed from the repository, and
+    from its history, in the credential-hygiene phase."""
+    import re
+    import subprocess
+
+    tracked = subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True).stdout.split()
+    exempt = {".env", "package-lock.json", "tests/deployment/test_compose_hardening.py"}
+    hits = []
+    for name in tracked:
+        path = ROOT / name
+        if name in exempt or not path.is_file() or path.suffix in {".png", ".jpg", ".ico", ".woff2", ".svg", ".sha256"}:
+            continue
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        # "resend" as the provider: the name alone, its key variable or its domain.
+        if re.search(r"RESEND_API_KEY|resend\.(com|dev)|\bResend\b|via Resend", content):
+            hits.append(name)
+    assert not hits, f"the removed mail provider is still mentioned in: {hits}"
+
+
+def test_smtp_settings_are_documented_and_reach_only_the_api_and_worker():
+    example = (ROOT / ".env.example").read_text()
+    for name in ("SMTP_HOST", "SMTP_PORT", "SMTP_SECURITY", "SMTP_USERNAME", "SMTP_PASSWORD", "SMTP_FROM",
+                 "SMTP_TIMEOUT_SECONDS", "SMTP_TLS_VERIFY", "SMTP_TLS_CA_FILE", "RUN_NOTIFICATIONS_ENABLED",
+                 "NOTIFICATION_MAX_ATTEMPTS", "NOTIFICATION_RETRY_BASE_SECONDS", "NOTIFICATION_RETRY_MAX_SECONDS",
+                 "NOTIFICATION_POLL_SECONDS", "FRONTEND_URL"):
+        assert any(l.lstrip("# ").startswith(f"{name}=") for l in example.splitlines()), f"{name} is not documented"
+    # Email is off in the example, and no credential is given a value there.
+    values = {l.split("=", 1)[0]: l.split("=", 1)[1] for l in example.splitlines() if l and not l.startswith("#") and "=" in l}
+    assert values["SMTP_HOST"] == "" and values["SMTP_USERNAME"] == "" and values["SMTP_PASSWORD"] == ""
+    # Nothing about SMTP is pinned in compose: the server's .env decides, and
+    # only the API and the worker (env_file) ever see the mail password.
+    assert "SMTP_" not in (ROOT / "docker-compose.yml").read_text()
+    for name in ("api-prod", "api-worker-prod"):
+        assert "env_file" in SERVICES[name]
+
+
+def test_documented_notification_defaults_match_the_code():
+    import re
+
+    source = (ROOT / "apps/api/workers/notifier.py").read_text()
+    defaults = {m.group(1): float(eval(m.group(2), {})) for m in re.finditer(  # noqa: S307 - arithmetic on constants
+        r"^(DEFAULT_[A-Z_]+) = ([0-9.* ]+)$", source, flags=re.M)}
+    example = (ROOT / ".env.example").read_text()
+
+    def documented(name):
+        line = next(l for l in example.splitlines() if l.lstrip("# ").startswith(f"{name}="))
+        return float(line.split("=", 1)[1])
+
+    assert documented("NOTIFICATION_MAX_ATTEMPTS") == defaults["DEFAULT_MAX_ATTEMPTS"] == 6
+    assert documented("NOTIFICATION_RETRY_BASE_SECONDS") == defaults["DEFAULT_RETRY_BASE_SECONDS"]
+    assert documented("NOTIFICATION_RETRY_MAX_SECONDS") == defaults["DEFAULT_RETRY_MAX_SECONDS"]
+    assert documented("NOTIFICATION_POLL_SECONDS") == defaults["DEFAULT_POLL_SECONDS"]
+    assert documented("SMTP_TIMEOUT_SECONDS") == 15
+
+
+def test_the_worker_can_reach_a_mail_server_and_the_method_containers_cannot():
+    """Sending mail needs outbound network access: the API and the worker have
+    it; the method containers, which parse untrusted input, do not."""
+    for name in ("api-prod", "api-worker-prod"):
+        assert "phylo_egress" in networks_of(SERVICES[name]), name
+    for name in METHODS:
+        assert "phylo_egress" not in networks_of(SERVICES[name]), name
+
+
+def test_the_test_stack_sends_mail_to_a_local_sink_only():
+    test_compose = yaml.safe_load((ROOT / "docker-compose.test.yml").read_text())
+    mail = test_compose["services"]["mail"]
+    assert mail["ports"] == ["127.0.0.1:58025:8025"]                      # control port on loopback only
+    assert test_compose["services"]["api"]["environment"]["SMTP_HOST"] == "mail"
+    assert "mail" not in COMPOSE["services"]                               # never part of a deployment

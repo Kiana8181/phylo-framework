@@ -1,14 +1,21 @@
 from __future__ import annotations
 
 from typing import Iterable, Optional, List
-from uuid import UUID
+from uuid import UUID, uuid4
 from datetime import date, datetime, timezone, timedelta
 
 from sqlalchemy import String, and_, case, cast, exists, false, func, or_, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apps.api.database.models import Run, RunStatus, ACTIVE_RUN_STATUSES
+from apps.api.database.models import (
+    ACTIVE_RUN_STATUSES,
+    NotificationOutbox,
+    NotificationStatus,
+    Run,
+    RunStatus,
+)
 from apps.api.repositories.base_repository import BaseRepository
 from apps.api.utils.datetime_util import utc_now
 
@@ -16,6 +23,12 @@ TERMINAL_RUN_STATUSES = (RunStatus.DONE, RunStatus.ERROR, RunStatus.CANCELLED)
 
 # Postgres sequence backing the global dispatch order (see migration 009).
 DISPATCH_SEQ = "runs_dispatch_seq"
+# Outbox entry written when a run ends by itself (see NotificationOutbox).
+NOTIFICATION_RUN_FINISHED = "run_finished"
+OUTCOME_DONE = "DONE"
+OUTCOME_ERROR = "ERROR"
+OUTCOME_QUEUE_TIMEOUT = "QUEUE_TIMEOUT"
+
 # First key of the advisory lock that serializes one user's run creation
 # (the second key is a hash of the user id). Any fixed number; it only has to
 # differ from other advisory locks this application takes.
@@ -243,6 +256,26 @@ class RunRepository(BaseRepository[Run]):
                 promoted += 1
         return promoted
 
+    async def _enqueue_run_notification(self, run_id: UUID, user_id: Optional[UUID], outcome: str) -> None:
+        """Record, in the current transaction, that the owner is owed an email
+        about this run. Does not commit. A run without an owner gets none, and a
+        run that already has one keeps it: the unique (run_id, kind) constraint
+        turns every repeat into a no-op, so no path can queue a second email."""
+        if user_id is None:
+            return
+        await self.session.execute(
+            pg_insert(NotificationOutbox)
+            .values(
+                id=uuid4(),
+                run_id=run_id,
+                user_id=user_id,
+                kind=NOTIFICATION_RUN_FINISHED,
+                outcome=outcome,
+                status=NotificationStatus.PENDING.value,
+            )
+            .on_conflict_do_nothing(index_elements=["run_id", "kind"])
+        )
+
     async def _terminal_update_and_promote(
         self, run_id: UUID, *, commit: bool = True, **values
     ) -> Optional[Run]:
@@ -260,6 +293,16 @@ class RunRepository(BaseRepository[Run]):
         )
         stmt = update(Run).where(Run.id == run_id).values(**values).returning(Run)
         result = (await self.session.execute(stmt)).scalar_one_or_none()
+
+        # A run that ended by itself owes its owner one email. Written here, in
+        # the transaction of the status change: the two commit or roll back
+        # together. A cancelled run owes none.
+        if result is not None:
+            status = values.get("status")
+            if status == RunStatus.DONE:
+                await self._enqueue_run_notification(run_id, owner_id, OUTCOME_DONE)
+            elif status == RunStatus.ERROR:
+                await self._enqueue_run_notification(run_id, owner_id, OUTCOME_ERROR)
 
         if owner_id is not None:
             try:
@@ -513,6 +556,9 @@ class RunRepository(BaseRepository[Run]):
             .returning(Run.id, Run.user_id)
         )
         expired = (await self.session.execute(stmt)).all()
+        for expired_id, owner_id in expired:
+            # Its own outcome, so the email can say that the run never started.
+            await self._enqueue_run_notification(expired_id, owner_id, OUTCOME_QUEUE_TIMEOUT)
         for _, owner_id in expired:
             if owner_id is None:
                 continue
@@ -866,6 +912,30 @@ class RunRepository(BaseRepository[Run]):
             stage_message="Completed" if status == RunStatus.DONE else None,
             progress=100,
             message="Completed",
+            finished_at=func.now(),
+            worker_lease_until=None,
+        )
+
+    async def fail_run(
+        self,
+        run_id: UUID,
+        *,
+        error: str,
+        message: str,
+        result: Optional[dict] = None,
+    ) -> Optional[Run]:
+        """Finish a run as ERROR with a stored error, a user-facing message and
+        a result payload; promote the owner's next run and queue the owner's
+        notification, all in one transaction."""
+        return await self._terminal_update_and_promote(
+            run_id,
+            status=RunStatus.ERROR,
+            stage="ERROR",
+            error=error,
+            message=message,
+            stage_message=message,
+            progress=100,
+            result=result,
             finished_at=func.now(),
             worker_lease_until=None,
         )

@@ -148,6 +148,7 @@ MinIO is never exposed to the browser.
 - Resource budget, container limits, network layout and secret isolation on a shared server: [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md#resource-budget-and-container-limits).
 - How many jobs run at once, how threads are limited inside each method, and why a run may show "waiting for capacity": [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md#job-execution-inside-the-budget).
 - How many runs a user may start per hour, what counts, and what the wizard shows when the limit is reached: [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md#limits-on-creating-runs).
+- Email: SMTP settings, which runs send a notification, retries and what a mail outage does (nothing to runs): [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md#email-and-run-notifications).
 - Run time limits, what happens to a run when a method container restarts, the object store is down or a job runs out of memory, and what each error code means: [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md#when-a-run-cannot-finish).
 - Replacing the unmaintained MinIO image (investigation and recommendation, not yet applied): [docs/OBJECT-STORAGE-OPTIONS.md](./docs/OBJECT-STORAGE-OPTIONS.md).
 
@@ -364,7 +365,7 @@ npm run storage:check          # round-trips both buckets via the host (localhos
 ```
 
 > If `set -a; source .env` errors on values containing `<` or spaces (e.g.
-> `EMAIL_FROM`), run the storage check via the Node wrapper instead, which parses
+> `SMTP_FROM`), run the storage check via the Node wrapper instead, which parses
 > `.env` safely: `node --env-file=.env ./scripts/storage-check.mjs`.
 
 > **Method services upload artifacts directly to MinIO** using a scoped
