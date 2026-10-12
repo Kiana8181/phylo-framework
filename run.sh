@@ -22,6 +22,8 @@ case "$choice" in
     if command -v node >/dev/null 2>&1; then
       node "$ROOT/scripts/method-services.mjs" sync-env >/dev/null
     fi
+    # Per-container limits for the budget in .env (see .env.example).
+    sh "$ROOT/scripts/resource-plan.sh" --write || die "Resource budget is not usable (see above)"
     exec docker compose --profile prod up -d --build
     ;;
   *) die "Invalid choice" ;;

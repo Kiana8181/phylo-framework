@@ -32,10 +32,16 @@ done
 
 service_dir(){ case "$1" in api) echo "apps/api" ;; *) echo "services/$1" ;; esac; }
 
-# Keep in step with the FROM line of each service's Dockerfile.
+# The Python image of the final (runtime) stage of each service's Dockerfile.
+# `FROM ${PYTHON_IMAGE}` is resolved through the matching `ARG PYTHON_IMAGE=`.
 service_image(){
   local dockerfile="$ROOT/$(service_dir "$1")/Dockerfile"
-  awk 'toupper($1)=="FROM"{print $2; exit}' "$dockerfile"
+  awk '
+    # Exact upper-case keywords only: Dockerfile heredocs contain Python
+    # lines such as "from PyQt5 import ...".
+    $1 == "ARG" && $2 ~ /^PYTHON_IMAGE=/ { sub(/^PYTHON_IMAGE=/, "", $2); arg = $2 }
+    $1 == "FROM" { img = $2 }
+    END { if (img == "${PYTHON_IMAGE}") img = arg; print img }' "$dockerfile"
 }
 
 for svc in "${SERVICES[@]}"; do

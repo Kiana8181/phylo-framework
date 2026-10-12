@@ -1,0 +1,3 @@
+# Accepted image-scan findings, one id per line, with the reason above it.
+# Every entry is explained in docs/SECURITY-AUDIT.md. Remove an entry as soon
+# as the fix can be taken. (Currently empty: nothing is being waved through.)

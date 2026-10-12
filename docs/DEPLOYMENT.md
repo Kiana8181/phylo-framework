@@ -92,6 +92,169 @@ cause is in the container log under the same id. The interactive API docs
 
 ---
 
+## Resource budget and container limits
+
+The server is shared, so the whole stack runs inside **one budget** that you set
+in `.env`:
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `PHYLO_CPU_BUDGET` | CPU cores for all containers together | `4` |
+| `PHYLO_MEMORY_BUDGET_MB` | RAM in MiB for all containers together | `8192` |
+| `PHYLO_PIDS_BUDGET` | Processes + threads for all containers together | `4096` |
+| `PHYLO_RESOURCE_MODE` | `strict` or `pooled` (see below) | `strict` |
+| `PHYLO_CGROUP_PARENT` | Optional host cgroup that enforces the total | unset |
+
+The defaults are placeholders, not a recommendation for any server. Set them to
+the share the infrastructure team gives this deployment.
+
+```bash
+sh scripts/resource-plan.sh            # show the plan for the budget in .env
+sh scripts/resource-plan.sh --write    # store it in .env (managed block)
+docker compose --profile prod up -d    # recreate containers with the new limits
+sh scripts/resource-plan.sh --check    # verify .env still matches the budget
+```
+
+`./run.sh` (production mode) runs `--write` for you. If you start the stack with
+`docker compose` directly and never run the script, the compose file applies the
+plan for the default budget.
+
+### How the budget is split
+
+Docker Compose has no shared, elastic pool: each container gets its own cap,
+fixed when it starts. The script therefore gives every container a measured
+minimum plus a weighted part of what is left:
+
+- Each R service (Dowser, BrepPhylo) idles near 800 MiB and needs about 1.7 GiB
+  for one small job, so its minimum is 2048 MiB.
+- GCtree's minimum is 512 MiB, ClonalTree's 384 MiB.
+- Postgres, MinIO, the API, the worker and the web server together need about
+  1.3 GiB.
+
+That makes the smallest usable budget **2.05 CPU, 6592 MiB, 2432 PIDs**. Below
+it the script stops with an error instead of producing limits that cannot work.
+
+Plan for the default budget:
+
+| Container | CPUs | Memory | PIDs |
+|---|---|---|---|
+| postgres | 0.36 | 389 MiB | 384 |
+| minio | 0.30 | 450 MiB | 384 |
+| minio-init (runs once) | 0.10 | 256 MiB | 64 |
+| api | 0.48 | 322 MiB | 256 |
+| worker | 0.15 | 225 MiB | 192 |
+| web | 0.15 | 289 MiB | 256 |
+| dowser | 0.60 | 2448 MiB | 512 |
+| brepphylo | 0.60 | 2448 MiB | 512 |
+| gctree | 0.60 | 778 MiB | 768 |
+| clonaltree | 0.60 | 584 MiB | 768 |
+| **total** | **3.94** | **8189 MiB** | **4096** |
+
+### `strict` and `pooled`
+
+- **strict** (default): the caps add up to at most the budget. The stack cannot
+  exceed it even when every container is busy at the same moment. The price is
+  that each method service only ever gets its own slice of the CPU (0.60 cores
+  each in the table above), even while the other three are idle.
+- **pooled**: every method service may use the whole method share of the CPU
+  (2.40 cores in the example). The CPU caps then add up to more than the budget,
+  so this mode is only safe when something else enforces the total: set
+  `PHYLO_CGROUP_PARENT` to a host cgroup that the infrastructure team limits.
+  Memory and process limits stay strictly split in both modes.
+
+A host parent cgroup is the only way to get a true shared pool. On a host that
+uses systemd it is a slice, for example `/etc/systemd/system/phylo.slice`:
+
+```ini
+[Slice]
+CPUQuota=400%
+MemoryMax=8G
+MemorySwapMax=0
+TasksMax=4096
+```
+
+followed by `systemctl daemon-reload` and `PHYLO_CGROUP_PARENT=phylo.slice` in
+`.env`. This needs root on the host and was **not tested here** (the
+development machine does not run systemd); only the hand-over of the setting to
+Docker was verified. Without it, use `strict`.
+
+### What happens at the limits
+
+- **CPU:** a container that wants more than its cap is slowed down, never
+  killed. Jobs take longer; nothing fails.
+- **Memory:** a limit is a hard ceiling and swap is disabled per container, so
+  the limit is real. A process that exceeds it is killed by the kernel. If that
+  was a job's own process, only that job is lost; if it was the service's main
+  process, the container restarts automatically. Limits do **not** make a job
+  slow down gracefully when memory runs short. Avoiding that needs admission
+  control (not starting a job that will not fit), which is a later phase. Until
+  then, size the budget so each method has headroom above the numbers above.
+- **Processes:** new processes are refused at the limit; the service keeps
+  running and recovers when the extra processes end.
+
+Measured on a throwaway copy of the production profile with the default
+budget: four busy processes in GCtree used 0.60 cores; a process asking for
+1.5 GiB in GCtree (limit 778 MiB) was killed while the container, the API and
+the other methods stayed up; ClonalTree could not go beyond 768 processes; one
+real run per method completed with no out-of-memory kill.
+
+### Restarts and logs
+
+Every long-running container has `restart: unless-stopped`: it comes back after
+a crash, an out-of-memory kill or a host reboot, but not after you stop it
+yourself. `minio-init` runs once and is never restarted. Measured recovery after
+killing the main process: API healthy again in about 5 seconds, worker and
+Python method services in about 2 seconds, Dowser serving again in about 12.
+
+A production container that refuses to start because of weak secrets (see
+above) will be restarted repeatedly; `docker compose ps` shows `Restarting` and
+the log repeats the reason.
+
+Container logs are rotated: `PHYLO_LOG_MAX_SIZE` (default `10m`) per file,
+`PHYLO_LOG_MAX_FILES` (default `5`) files per container.
+
+---
+
+## Network layout and secret isolation
+
+| Network | Type | Members |
+|---|---|---|
+| `phylo_db` | internal, no internet | Postgres, API, worker |
+| `phylo_internal` | internal, no internet | MinIO, the four method services, API, worker |
+| `phylo_egress` | outbound allowed | API, worker |
+| `proxy_net` | external, owned by the infrastructure team | API, web |
+
+- The method services parse uploaded files. They have no route to the internet,
+  cannot open a connection to the database, hold no Linux capabilities, and
+  receive only the write-only object-store user (it can add artifacts and
+  nothing else).
+- The web container is only on `proxy_net` and holds no secret.
+- Only the API and the worker read `.env`. Postgres and MinIO get just their own
+  credentials.
+- Internal addresses use names unique to this project (`phylo-postgres`,
+  `phylo-minio`, `phylo-dowser`, …) so they cannot resolve to another project's
+  container on the shared proxy network.
+
+The container names on `proxy_net` (`phylo-web-prod`, `phylo-api-prod`) and their
+ports (3000, 8000) are unchanged, so the reverse-proxy configuration does not
+need to change.
+
+**Upgrading an existing server:** set these in the server's `.env`, because old
+values still point at the short names:
+
+```
+S3_ENDPOINT_URL_DOCKER=http://phylo-minio:9000
+METHOD_DOWSER_URL_DOCKER=http://phylo-dowser:8001
+METHOD_GCTREE_URL_DOCKER=http://phylo-gctree:8002
+METHOD_BREPPHYLO_URL_DOCKER=http://phylo-brepphylo:8003
+METHOD_CLONALTREE_URL_DOCKER=http://phylo-clonaltree:8004
+```
+
+(`./run.sh` rewrites the four `METHOD_*` lines for you.) The old names keep
+working, so nothing breaks if you forget; they are just not unique.
+
+---
+
 ## Local development
 
 ```bash
@@ -114,7 +277,7 @@ bash ./scripts/reset-local.sh
 
 ---
 
-## Server / production deployment (self-hosted MinIO)
+## Server / production deployment
 
 The `prod` compose profile includes `postgres`, `minio`, `minio-init`,
 `api-prod`, `api-worker-prod`, `web-prod`, and the four method services.
@@ -128,11 +291,46 @@ docker compose exec api-prod alembic upgrade head   # (also runs automatically o
 npm run storage:check:docker
 ```
 
-> **MinIO images:** `minio/minio` and `minio/mc` can no longer be pulled from
-> Docker Hub. A server that already has them cached keeps working; a fresh host
-> cannot download them. Do not prune images on the server (`docker image prune -a`,
-> `docker system prune -a`) until a replacement is decided. See finding 1 in
-> [SECURITY-AUDIT.md](./SECURITY-AUDIT.md).
+### Object store image
+
+The object store is **Silo** (`pgsty/silo`), the maintained community fork of
+MinIO; upstream MinIO no longer publishes images. It uses the same settings
+(`MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`, …), the same client commands and the
+same on-disk format, so the compose service is still called `minio` and nothing
+else in the configuration changes. Both images are pinned by digest in
+`docker-compose.yml`. Background and test evidence:
+[OBJECT-STORAGE-OPTIONS.md](./OBJECT-STORAGE-OPTIONS.md).
+
+**Upgrading a server that ran MinIO:** no data migration. Take a backup (next
+section), then start the stack as usual; Silo opens the existing
+`phylo_minio_data` volume. Buckets, objects, the methods user and its policy
+carry over. This was tested on throwaway volumes with data written by the old
+MinIO image, and going back to the old image afterwards also worked.
+
+**Deployment prerequisite — mirror the two images.** They are currently pulled
+from the fork's Docker Hub repository. If that repository ever disappears, as
+MinIO's did, a fresh host cannot start the stack. Copy both images, by digest,
+into a registry the group controls and point the deployment at the copy:
+
+```bash
+# Run once, logged in to your registry. Copying by digest keeps the digest, so
+# the mirror provably serves the same images.
+docker buildx imagetools create --tag registry.example.org/phylo/silo:RELEASE.2026-09-16 \
+  pgsty/silo@sha256:32a8a777d90f3296294c9a57da5e8d397121187c4b868b2a7fc7874c726c0291
+docker buildx imagetools create --tag registry.example.org/phylo/mc:RELEASE.2026-09-16 \
+  pgsty/mc@sha256:cfc83108c3abb371f8fb84d99c1fdc88f8c237e022409b0081fb7c0a3be634dd
+```
+
+then in `.env`:
+
+```
+PHYLO_OBJECT_STORE_IMAGE=registry.example.org/phylo/silo@sha256:32a8a777d90f3296294c9a57da5e8d397121187c4b868b2a7fc7874c726c0291
+PHYLO_OBJECT_STORE_CLIENT_IMAGE=registry.example.org/phylo/mc@sha256:cfc83108c3abb371f8fb84d99c1fdc88f8c237e022409b0081fb7c0a3be634dd
+```
+
+This has **not** been done: no group registry was available when the images
+were adopted. Until it is, the deployment depends on Docker Hub for these two
+images.
 
 Hardening notes:
 
@@ -173,17 +371,26 @@ docker compose exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB
 docker compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" "$POSTGRES_DB"' < backups/backup_db.sql
 ```
 
-**MinIO (object storage):** mirror both buckets with the `mc` client:
+**Object storage:** mirror both buckets with the `mc` client. The object store
+publishes no host port, so the client container joins the store's internal
+network:
+
 ```bash
-docker run --rm --network=host -v "$PWD/backups/minio:/backup" -e MC_HOST_local="http://$S3_ACCESS_KEY_ID:$S3_SECRET_ACCESS_KEY@localhost:9000" \
-  minio/mc mirror --overwrite local/phylo-datasets  /backup/phylo-datasets
-docker run --rm --network=host -v "$PWD/backups/minio:/backup" -e MC_HOST_local="http://$S3_ACCESS_KEY_ID:$S3_SECRET_ACCESS_KEY@localhost:9000" \
-  minio/mc mirror --overwrite local/phylo-artifacts /backup/phylo-artifacts
+set -a; . ./.env; set +a
+NET=$(docker inspect phylo-minio --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}')
+MC=pgsty/mc@sha256:cfc83108c3abb371f8fb84d99c1fdc88f8c237e022409b0081fb7c0a3be634dd
+for bucket in "$S3_BUCKET_DATASETS" "$S3_BUCKET_ARTIFACTS"; do
+  docker run --rm --network "$NET" -v "$PWD/backups/minio:/backup" \
+    -e MC_HOST_store="http://$MINIO_ROOT_USER:$MINIO_ROOT_PASSWORD@phylo-minio:9000" \
+    "$MC" mirror --overwrite "store/$bucket" "/backup/$bucket"
+done
 # restore = mirror the backup directory back into the bucket.
 ```
+
 Alternatively snapshot the `phylo_minio_data` volume while the stack is stopped.
 These commands do not capture copies already downloaded by users or versions
-retained by an externally configured versioned object store.
+retained by an externally configured versioned object store. Backups are a
+manual step; nothing in this project schedules them.
 
 ---
 

@@ -44,6 +44,8 @@ async function main() {
     await run(path.join(ROOT, "scripts/dev-with-local-r.sh"), []);
   } else {
     await run("node", [path.join(ROOT, "scripts/method-services.mjs"), "sync-env"]);
+    // Per-container limits for the budget in .env (see .env.example).
+    await run("sh", [path.join(ROOT, "scripts/resource-plan.sh"), "--write"]);
     await run("docker", ["compose", "--profile", "prod", "up", "-d", "--build"]);
   }
 }

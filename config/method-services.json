@@ -8,7 +8,7 @@
       "name": "Dowser",
       "port": 8001,
       "containerPort": 8001,
-      "composeHost": "dowser",
+      "composeHost": "phylo-dowser",
       "path": "services/dowser",
       "dockerImage": "phylo-dowser:dev",
       "platform": "linux/amd64"
@@ -18,7 +18,7 @@
       "name": "GCtree",
       "port": 8002,
       "containerPort": 8002,
-      "composeHost": "gctree",
+      "composeHost": "phylo-gctree",
       "path": "services/gctree",
       "dockerImage": "phylo-gctree:dev"
     },
@@ -27,7 +27,7 @@
       "name": "BrepPhylo",
       "port": 8003,
       "containerPort": 8003,
-      "composeHost": "brepphylo",
+      "composeHost": "phylo-brepphylo",
       "path": "services/brepphylo",
       "dockerImage": "phylo-brepphylo:dev",
       "platform": "linux/amd64"
@@ -37,7 +37,7 @@
       "name": "ClonalTree",
       "port": 8004,
       "containerPort": 8004,
-      "composeHost": "clonaltree",
+      "composeHost": "phylo-clonaltree",
       "path": "services/clonaltree",
       "dockerImage": "phylo-clonaltree:dev"
     }

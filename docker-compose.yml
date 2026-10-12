@@ -2,6 +2,45 @@
 # refuse to start until that variable is set in .env (copy .env.example first).
 # Host ports for Postgres/MinIO are NOT published here; local host-run
 # development adds them through docker-compose.dev.yml.
+#
+# Shared-server rules applied to every long-running service:
+#   - CPU / memory / process limits. The PHYLO_CPUS_*, PHYLO_MEM_*, PHYLO_PIDS_*
+#     values come from scripts/resource-plan.sh, which splits ONE global budget
+#     (PHYLO_CPU_BUDGET, PHYLO_MEMORY_BUDGET_MB, PHYLO_PIDS_BUDGET). The fallback
+#     numbers below are that script's plan for its default budget.
+#   - Swap is disabled per container (memswap_limit = mem_limit), so a memory
+#     limit is a hard ceiling: a container that exceeds it is OOM-killed and
+#     then restarted by the restart policy.
+#   - Only the API and the worker read .env. Every other container receives an
+#     explicit list of the variables it needs, so the method services (which
+#     parse untrusted uploads) and the web server never hold the database
+#     password, the MinIO root password or the JWT signing key.
+#   - Postgres, MinIO and the method services sit on internal networks with no
+#     route to the internet (Postgres on its own, away from the method
+#     services). Other containers reach them by unique names
+#     (phylo-postgres, phylo-minio, phylo-dowser, ...), which cannot be confused
+#     with another project's services on the shared reverse-proxy network.
+
+# Bounded container logs (applies to `docker logs`, json-file driver).
+x-logging: &default_logging
+  driver: json-file
+  options:
+    max-size: ${PHYLO_LOG_MAX_SIZE:-10m}
+    max-file: "${PHYLO_LOG_MAX_FILES:-5}"
+
+# Every service: bounded logs, no privilege escalation through setuid binaries.
+x-base: &base
+  logging: *default_logging
+  security_opt:
+    - no-new-privileges:true
+
+# Long-running services additionally come back after a crash, an OOM kill or a
+# host reboot, and may be placed under a host parent cgroup that enforces the
+# whole budget at once (optional, see docs/DEPLOYMENT.md).
+x-service: &service
+  <<: *base
+  restart: unless-stopped
+  cgroup_parent: ${PHYLO_CGROUP_PARENT:-}
 
 x-api-common-env: &api_common_env
   CONTRACTS_DIR: /contracts
@@ -18,7 +57,7 @@ x-api-common-env: &api_common_env
   STORAGE_BACKEND: ${STORAGE_BACKEND:-minio}
   # Use the in-cluster endpoint inside containers; the host-side .env value of
   # S3_ENDPOINT_URL (localhost) is only for host-run scripts/dev.
-  S3_ENDPOINT_URL: ${S3_ENDPOINT_URL_DOCKER:-http://minio:9000}
+  S3_ENDPOINT_URL: ${S3_ENDPOINT_URL_DOCKER:-http://phylo-minio:9000}
   S3_REGION: ${S3_REGION:-us-east-1}
   S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-${MINIO_ROOT_USER:?set MINIO_ROOT_USER in .env}}
   S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}}
@@ -26,13 +65,13 @@ x-api-common-env: &api_common_env
   S3_BUCKET_ARTIFACTS: ${S3_BUCKET_ARTIFACTS:-phylo-artifacts}
   S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
   PUBLIC_API_BASE_URL: ${PUBLIC_API_BASE_URL:-http://localhost:8000}
-  POSTGRES_HOST: postgres
+  POSTGRES_HOST: phylo-postgres
   POSTGRES_PORT: "5432"
-  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:?set POSTGRES_USER in .env}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB in .env}
-  METHOD_DOWSER_URL: ${METHOD_DOWSER_URL_DOCKER:-http://dowser:8001}
-  METHOD_GCTREE_URL: ${METHOD_GCTREE_URL_DOCKER:-http://gctree:8002}
-  METHOD_BREPPHYLO_URL: ${METHOD_BREPPHYLO_URL_DOCKER:-http://brepphylo:8003}
-  METHOD_CLONALTREE_URL: ${METHOD_CLONALTREE_URL_DOCKER:-http://clonaltree:8004}
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:?set POSTGRES_USER in .env}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@phylo-postgres:5432/${POSTGRES_DB:?set POSTGRES_DB in .env}
+  METHOD_DOWSER_URL: ${METHOD_DOWSER_URL_DOCKER:-http://phylo-dowser:8001}
+  METHOD_GCTREE_URL: ${METHOD_GCTREE_URL_DOCKER:-http://phylo-gctree:8002}
+  METHOD_BREPPHYLO_URL: ${METHOD_BREPPHYLO_URL_DOCKER:-http://phylo-brepphylo:8003}
+  METHOD_CLONALTREE_URL: ${METHOD_CLONALTREE_URL_DOCKER:-http://phylo-clonaltree:8004}
 
 # Production API + worker. ENV=production switches on the start-up check that
 # refuses known-default or weak secrets (apps/api/security/production_config.py)
@@ -56,19 +95,24 @@ x-method-common-env: &method_common_env
   # the artifact bucket using a scoped PutObject-only user. No shared volume
   # with the worker is needed for artifacts.
   STORAGE_BACKEND: ${STORAGE_BACKEND:-minio}
-  S3_ENDPOINT_URL: ${S3_ENDPOINT_URL_DOCKER:-http://minio:9000}
+  S3_ENDPOINT_URL: ${S3_ENDPOINT_URL_DOCKER:-http://phylo-minio:9000}
   S3_REGION: ${S3_REGION:-us-east-1}
   S3_ACCESS_KEY_ID: ${MINIO_METHODS_USER:?set MINIO_METHODS_USER in .env}
   S3_SECRET_ACCESS_KEY: ${MINIO_METHODS_PASSWORD:?set MINIO_METHODS_PASSWORD in .env}
   S3_BUCKET_ARTIFACTS: ${S3_BUCKET_ARTIFACTS:-phylo-artifacts}
   S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
+  # Seconds a cancelled job gets to stop before it is killed.
+  JOB_CANCEL_GRACE_SECONDS: ${JOB_CANCEL_GRACE_SECONDS:-5}
 
 services:
   postgres:
     image: postgres:15-alpine
     container_name: phylo-postgres
-    env_file:
-      - ./.env
+    <<: *service
+    cpus: ${PHYLO_CPUS_POSTGRES:-0.36}
+    mem_limit: ${PHYLO_MEM_POSTGRES:-389m}
+    memswap_limit: ${PHYLO_MEM_POSTGRES:-389m}
+    pids_limit: ${PHYLO_PIDS_POSTGRES:-384}
     environment:
       POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
@@ -83,12 +127,27 @@ services:
       timeout: 5s
       retries: 5
     profiles: ["dev", "prod"]
+    # Only the API and the worker share this network: the method services
+    # cannot even open a connection to the database.
     networks:
-      - phylo_framework
+      phylo_db:
+        aliases: [phylo-postgres]
 
+  # Object store: Silo, the maintained community fork of MinIO (upstream MinIO
+  # no longer publishes images). It speaks the same protocol, uses the same
+  # MINIO_* settings and the same on-disk format, so the service keeps its name
+  # and an existing data volume is used as it is. Pinned by digest
+  # (RELEASE.2026-09-16, distroless build); see docs/OBJECT-STORAGE-OPTIONS.md.
+  # PHYLO_OBJECT_STORE_IMAGE lets a deployment pull the same digest from a
+  # registry mirror it controls.
   minio:
-    image: minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+    image: ${PHYLO_OBJECT_STORE_IMAGE:-pgsty/silo@sha256:32a8a777d90f3296294c9a57da5e8d397121187c4b868b2a7fc7874c726c0291}
     container_name: phylo-minio
+    <<: *service
+    cpus: ${PHYLO_CPUS_MINIO:-0.30}
+    mem_limit: ${PHYLO_MEM_MINIO:-450m}
+    memswap_limit: ${PHYLO_MEM_MINIO:-450m}
+    pids_limit: ${PHYLO_PIDS_MINIO:-384}
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER in .env}
@@ -104,12 +163,21 @@ services:
     # gates on minio-init completing successfully.
     profiles: ["dev", "prod"]
     networks:
-      - phylo_framework
+      phylo_internal:
+        aliases: [phylo-minio]
 
   # One-shot: waits for MinIO, then creates the dataset + artifact buckets.
+  # No restart policy: it must run once and exit.
   minio-init:
-    image: minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    image: ${PHYLO_OBJECT_STORE_CLIENT_IMAGE:-pgsty/mc@sha256:cfc83108c3abb371f8fb84d99c1fdc88f8c237e022409b0081fb7c0a3be634dd}
     container_name: phylo-minio-init
+    <<: *base
+    restart: "no"
+    cgroup_parent: ${PHYLO_CGROUP_PARENT:-}
+    cpus: ${PHYLO_CPUS_MINIO_INIT:-0.10}
+    mem_limit: ${PHYLO_MEM_MINIO_INIT:-256m}
+    memswap_limit: ${PHYLO_MEM_MINIO_INIT:-256m}
+    pids_limit: ${PHYLO_PIDS_MINIO_INIT:-64}
     depends_on:
       minio:
         condition: service_started
@@ -120,23 +188,35 @@ services:
       MINIO_METHODS_PASSWORD: ${MINIO_METHODS_PASSWORD:?set MINIO_METHODS_PASSWORD in .env}
       S3_BUCKET_DATASETS: ${S3_BUCKET_DATASETS:-phylo-datasets}
       S3_BUCKET_ARTIFACTS: ${S3_BUCKET_ARTIFACTS:-phylo-artifacts}
+    # Fails loudly: a step that goes wrong stops the script with a non-zero exit
+    # code, and the last step checks that the methods user really exists with
+    # its policy. The API waits for this container to finish successfully, so a
+    # broken object-store setup blocks start-up instead of producing runs that
+    # silently lose their artifacts.
     entrypoint: >
       /bin/sh -c "
-      until mc alias set local http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD}; do
+      set -e;
+      n=0;
+      until mc alias set local http://phylo-minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD} >/tmp/alias.log 2>&1; do
+        n=$$((n+1));
+        if [ $$n -ge 60 ]; then echo 'ERROR: could not log in to MinIO after 2 minutes:' >&2; cat /tmp/alias.log >&2; exit 1; fi;
         echo 'waiting for minio...'; sleep 2;
       done;
       mc mb --ignore-existing local/$${S3_BUCKET_DATASETS};
       mc mb --ignore-existing local/$${S3_BUCKET_ARTIFACTS};
       echo 'minio buckets ready';
       printf '%s\n' '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"s3:PutObject\"],\"Resource\":\"arn:aws:s3:::'\"$${S3_BUCKET_ARTIFACTS}\"'/*\"}]}' > /tmp/methods-policy.json;
-      mc admin policy create local phylo-methods-write /tmp/methods-policy.json 2>/dev/null || mc admin policy update local phylo-methods-write /tmp/methods-policy.json 2>/dev/null || true;
-      mc admin user add local $${MINIO_METHODS_USER} $${MINIO_METHODS_PASSWORD} 2>/dev/null || true;
+      mc admin policy create local phylo-methods-write /tmp/methods-policy.json;
+      mc admin user add local $${MINIO_METHODS_USER} $${MINIO_METHODS_PASSWORD};
       mc admin policy attach local phylo-methods-write --user $${MINIO_METHODS_USER} 2>/dev/null || true;
-      echo 'methods user ready';
+      case \"$$(mc admin user info local $${MINIO_METHODS_USER} 2>&1)\" in
+        *phylo-methods-write*) echo 'methods user ready' ;;
+        *) echo 'ERROR: the methods user was not created with the phylo-methods-write policy' >&2; exit 1 ;;
+      esac
       "
     profiles: ["dev", "prod"]
     networks:
-      - phylo_framework
+      - phylo_internal
 
   web:
     build:
@@ -148,8 +228,7 @@ services:
       args:
         NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
     image: phylo-web:dev
-    env_file:
-      - ./.env
+    <<: *base
     environment:
       NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
     depends_on: [api]
@@ -166,7 +245,7 @@ services:
     command: sh -lc "npm -w web run dev -- -p ${WEB_PORT:-3000}"
     profiles: ["dev"]
     networks:
-      - phylo_framework
+      - phylo_egress
 
   web-prod:
     container_name: phylo-web-prod
@@ -176,8 +255,14 @@ services:
       args:
         NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
     image: phylo-web:latest
-    env_file:
-      - ./.env
+    <<: *service
+    cpus: ${PHYLO_CPUS_WEB:-0.15}
+    mem_limit: ${PHYLO_MEM_WEB:-289m}
+    memswap_limit: ${PHYLO_MEM_WEB:-289m}
+    pids_limit: ${PHYLO_PIDS_WEB:-256}
+    # Serves static pages and proxies nothing: it needs no Linux capabilities.
+    cap_drop:
+      - ALL
     environment:
       NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
       HOSTNAME: "0.0.0.0"
@@ -200,8 +285,9 @@ services:
       retries: 5
       start_period: 20s
     profiles: ["prod"]
+    # Browsers call the API through the reverse proxy; the web server itself
+    # talks to no other container, so it is only on the proxy network.
     networks:
-      - phylo_framework
       - proxy_net
 
   api:
@@ -209,6 +295,7 @@ services:
       context: .
       dockerfile: apps/api/Dockerfile
     image: phylo-api:latest
+    <<: *base
     env_file:
       - ./.env
     environment:
@@ -239,10 +326,13 @@ services:
     command: sh -lc "alembic upgrade head && exec uvicorn apps.api.main:app --host 0.0.0.0 --port 8000 --reload"
     profiles: ["dev"]
     networks:
-      - phylo_framework
+      - phylo_db
+      - phylo_internal
+      - phylo_egress
 
   api-worker:
     image: phylo-api:latest
+    <<: *base
     build:
       context: .
       dockerfile: apps/api/Dockerfile
@@ -272,7 +362,9 @@ services:
     command: sh -lc "python -m apps.api.workers.run_worker"
     profiles: ["dev"]
     networks:
-      - phylo_framework
+      - phylo_db
+      - phylo_internal
+      - phylo_egress
 
   api-prod:
     container_name: phylo-api-prod
@@ -280,6 +372,11 @@ services:
       context: .
       dockerfile: apps/api/Dockerfile
     image: phylo-api:latest
+    <<: *service
+    cpus: ${PHYLO_CPUS_API:-0.48}
+    mem_limit: ${PHYLO_MEM_API:-322m}
+    memswap_limit: ${PHYLO_MEM_API:-322m}
+    pids_limit: ${PHYLO_PIDS_API:-256}
     env_file:
       - ./.env
     environment:
@@ -315,13 +412,24 @@ services:
       retries: 5
       start_period: 15s
     profiles: ["prod"]
+    # db:       the database.
+    # internal: object store and method services.
+    # egress:   outbound calls (Google sign-in, mail).
+    # proxy:    inbound traffic from the reverse proxy.
     networks:
-      - phylo_framework
+      - phylo_db
+      - phylo_internal
+      - phylo_egress
       - proxy_net
 
   api-worker-prod:
     container_name: phylo-api-worker-prod
     image: phylo-api:latest
+    <<: *service
+    cpus: ${PHYLO_CPUS_WORKER:-0.15}
+    mem_limit: ${PHYLO_MEM_WORKER:-225m}
+    memswap_limit: ${PHYLO_MEM_WORKER:-225m}
+    pids_limit: ${PHYLO_PIDS_WORKER:-192}
     build:
       context: .
       dockerfile: apps/api/Dockerfile
@@ -351,19 +459,32 @@ services:
     command: sh -lc "python -m apps.api.workers.run_worker"
     profiles: ["prod"]
     networks:
-      - phylo_framework
+      - phylo_db
+      - phylo_internal
+      - phylo_egress
 
   dowser:
     container_name: phylo-dowser
+    <<: *service
+    cpus: ${PHYLO_CPUS_DOWSER:-0.60}
+    mem_limit: ${PHYLO_MEM_DOWSER:-2448m}
+    memswap_limit: ${PHYLO_MEM_DOWSER:-2448m}
+    pids_limit: ${PHYLO_PIDS_DOWSER:-512}
+    # Parses untrusted uploads: no capabilities, no .env, no internet.
+    cap_drop:
+      - ALL
+    # A minimal init as PID 1 reaps finished job processes. Measured without
+    # it: every R job leaves one zombie behind, which counts against
+    # pids_limit until the container restarts.
+    init: true
     platform: ${IMMCANTATION_PLATFORM:-linux/amd64}
     build:
       context: ./services/dowser
       dockerfile: Dockerfile
     image: phylo-dowser:latest
-    env_file:
-      - ./.env
     environment:
       <<: *method_common_env
+      METHOD_DOWSER_CONTAINER_PORT: ${METHOD_DOWSER_CONTAINER_PORT:-8001}
       DNAPARS_PATH: ${DNAPARS_PATH:-/usr/local/bin/dnapars}
       DNAML_PATH: ${DNAML_PATH:-/usr/local/bin/dnaml}
       RAXML_BIN: ${RAXML_BIN:-/usr/local/bin/raxml-ng}
@@ -390,18 +511,26 @@ services:
       ]
     profiles: ["dev", "prod"]
     networks:
-      - phylo_framework
+      phylo_internal:
+        aliases: [phylo-dowser]
 
   gctree:
     container_name: phylo-gctree
+    <<: *service
+    cpus: ${PHYLO_CPUS_GCTREE:-0.60}
+    mem_limit: ${PHYLO_MEM_GCTREE:-778m}
+    memswap_limit: ${PHYLO_MEM_GCTREE:-778m}
+    pids_limit: ${PHYLO_PIDS_GCTREE:-768}
+    # Parses untrusted uploads: no capabilities, no .env, no internet.
+    cap_drop:
+      - ALL
     build:
       context: ./services/gctree
       dockerfile: Dockerfile
     image: phylo-gctree:latest
-    env_file:
-      - ./.env
     environment:
       <<: *method_common_env
+      METHOD_GCTREE_CONTAINER_PORT: ${METHOD_GCTREE_CONTAINER_PORT:-8002}
       PYTHONHASHSEED: "0"
     volumes:
       - type: bind
@@ -417,19 +546,31 @@ services:
     command: sh -lc "uvicorn app:app --host 0.0.0.0 --port ${METHOD_GCTREE_CONTAINER_PORT:-8002}"
     profiles: ["dev", "prod"]
     networks:
-      - phylo_framework
+      phylo_internal:
+        aliases: [phylo-gctree]
 
   brepphylo:
     container_name: phylo-brepphylo
+    <<: *service
+    cpus: ${PHYLO_CPUS_BREPPHYLO:-0.60}
+    mem_limit: ${PHYLO_MEM_BREPPHYLO:-2448m}
+    memswap_limit: ${PHYLO_MEM_BREPPHYLO:-2448m}
+    pids_limit: ${PHYLO_PIDS_BREPPHYLO:-512}
+    # Parses untrusted uploads: no capabilities, no .env, no internet.
+    cap_drop:
+      - ALL
+    # A minimal init as PID 1 reaps finished job processes. Measured without
+    # it: every R job leaves one zombie behind, which counts against
+    # pids_limit until the container restarts.
+    init: true
     platform: ${IMMCANTATION_PLATFORM:-linux/amd64}
     build:
       context: ./services/brepphylo
       dockerfile: Dockerfile
     image: phylo-brepphylo:latest
-    env_file:
-      - ./.env
     environment:
       <<: *method_common_env
+      METHOD_BREPPHYLO_CONTAINER_PORT: ${METHOD_BREPPHYLO_CONTAINER_PORT:-8003}
       DNAPARS_PATH: ${DNAPARS_PATH:-/usr/local/bin/dnapars}
       IGPHYML_BIN: ${IGPHYML_BIN:-/usr/local/share/igphyml/src/igphyml}
       IGPHYML_MOTIFS: ${IGPHYML_MOTIFS:-/usr/local/share/igphyml/src/motifs}
@@ -454,18 +595,30 @@ services:
       ]
     profiles: ["dev", "prod"]
     networks:
-      - phylo_framework
+      phylo_internal:
+        aliases: [phylo-brepphylo]
 
   clonaltree:
     container_name: phylo-clonaltree
+    <<: *service
+    cpus: ${PHYLO_CPUS_CLONALTREE:-0.60}
+    mem_limit: ${PHYLO_MEM_CLONALTREE:-584m}
+    memswap_limit: ${PHYLO_MEM_CLONALTREE:-584m}
+    pids_limit: ${PHYLO_PIDS_CLONALTREE:-768}
+    # Parses untrusted uploads: no capabilities, no .env, no internet.
+    cap_drop:
+      - ALL
+    # A minimal init as PID 1 reaps finished job processes. Measured without
+    # it: every R job leaves one zombie behind, which counts against
+    # pids_limit until the container restarts.
+    init: true
     build:
       context: ./services/clonaltree
       dockerfile: Dockerfile
     image: phylo-clonaltree:latest
-    env_file:
-      - ./.env
     environment:
       <<: *method_common_env
+      METHOD_CLONALTREE_CONTAINER_PORT: ${METHOD_CLONALTREE_CONTAINER_PORT:-8004}
     volumes:
       - type: bind
         source: ./packages/contracts
@@ -480,7 +633,8 @@ services:
     command: sh -lc "uvicorn app:app --host 0.0.0.0 --port ${METHOD_CLONALTREE_CONTAINER_PORT:-8004}"
     profiles: ["dev", "prod"]
     networks:
-      - phylo_framework
+      phylo_internal:
+        aliases: [phylo-clonaltree]
 
 volumes:
   phylo_postgres_data:
@@ -493,7 +647,17 @@ networks:
   # team, so it stays external.
   proxy_net:
     external: true
-  # Project-internal network, created by Compose itself (no manual
-  # `docker network create`). Its real name is prefixed with the Compose
-  # project name, so it cannot collide with another project's network.
-  phylo_framework: {}
+  # Project networks, created by Compose itself (no manual
+  # `docker network create`). Their real names are prefixed with the Compose
+  # project name, so they cannot collide with another project's networks.
+  #
+  # Both internal networks have no route to the internet and none from the
+  # host.
+  # db: Postgres, reachable by the API and the worker only.
+  phylo_db:
+    internal: true
+  # internal: MinIO and the method services, plus the API and the worker.
+  phylo_internal:
+    internal: true
+  # Outbound-capable network for the API and the worker only.
+  phylo_egress: {}

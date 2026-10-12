@@ -145,6 +145,8 @@ MinIO is never exposed to the browser.
 - Full clean reset (wipe DB + MinIO + staging): `bash ./scripts/reset-local.sh`.
 - Production/server guidance (volumes, backup/restore, hardening): [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md).
 - Dependency and image security audit (what was scanned, what is still open, how to re-run it): [docs/SECURITY-AUDIT.md](./docs/SECURITY-AUDIT.md).
+- Resource budget, container limits, network layout and secret isolation on a shared server: [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md#resource-budget-and-container-limits).
+- Replacing the unmaintained MinIO image (investigation and recommendation, not yet applied): [docs/OBJECT-STORAGE-OPTIONS.md](./docs/OBJECT-STORAGE-OPTIONS.md).
 
 ---
 
@@ -722,6 +724,7 @@ services/
 docs/
   DEPLOYMENT.md          # MinIO/server deployment, volumes, backup/restore
   SECURITY-AUDIT.md      # Dependency/image audit results, open findings, re-run commands
+  OBJECT-STORAGE-OPTIONS.md  # MinIO replacement: tested options and recommendation
 # helper scripts:
 #   run.sh
 #   scripts/dev-with-docker.sh

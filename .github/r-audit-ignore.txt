@@ -1,0 +1,16 @@
+# Accepted R package advisories, one id per line, with the reason above it.
+# Every entry is explained in docs/SECURITY-AUDIT.md. All three packages ship
+# inside the immcantation/suite base image; they are removed from this list
+# when that base image is upgraded.
+
+# gh (GitHub API client): arbitrary code execution through a crafted response.
+# Never loaded by the services; present only as a dependency of usethis.
+RSEC-2025-0
+
+# plotly: prototype pollution in its JavaScript widget. Never loaded by the
+# services; dependency of Seurat/enchantr. The services render no HTML widgets.
+RSEC-2025-1
+
+# png: buffer overflow when installed from source on Windows with R < 4.2.
+# The images are Linux with R 4.4.3.
+RSEC-2026-1

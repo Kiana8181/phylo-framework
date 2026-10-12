@@ -63,6 +63,15 @@ RUN curl -fsSL -o /tmp/brepphylo.tar.gz \
 RUN R -q -e "install.packages(c('paws.storage', 'digest'), repos = 'https://packagemanager.posit.co/cran/2026-07-20'); \
     stopifnot(all(c('paws.storage', 'digest') %in% rownames(installed.packages())))"
 
+# Security updates published for the base image's distribution since the base
+# image was built. `--security` limits this to packages with a security
+# advisory, so R and the scientific tools keep the versions the base image
+# ships. Kept as the last system layer so the expensive layers above stay
+# cached.
+RUN dnf -y upgrade --security --setopt=install_weak_deps=False \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
+
 WORKDIR /srv
 COPY validators.R /srv/validators.R
 COPY plumber.R /srv/plumber.R

@@ -82,6 +82,12 @@ jobs:
       - run: python -m pip install -r requirements-test.txt
       - run: npx playwright install --with-deps chromium
       - run: npm run test:all -- --build
+      # The job above has just built every runtime image, so scan them here
+      # instead of building them a second time. Runs on every push and on the
+      # weekly schedule. Reports land in coverage/security/ and are uploaded
+      # with the other artifacts below, also when the gate fails.
+      - name: Scan runtime images and audit R packages
+        run: bash scripts/security-audit.sh images && bash scripts/security-audit.sh r
       - name: Upload scientific evidence, traces and all coverage reports
         if: always()
         uses: actions/upload-artifact@v4

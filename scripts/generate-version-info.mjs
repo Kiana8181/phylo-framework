@@ -85,10 +85,24 @@ function dockerfileArgs(text) {
   return out;
 }
 
-/** First `FROM <image>` in a Dockerfile, ignoring the `AS stage` suffix. */
+/**
+ * Base image of the stage that actually ships: the last `FROM <image>` whose
+ * image is not an earlier build stage, with `${ARG}` references resolved from
+ * the Dockerfile's own `ARG NAME=value` defaults. (Upper-case `FROM` only:
+ * Dockerfile heredocs contain Python lines such as `from x import y`.)
+ */
 function dockerfileBaseImage(text) {
-  const m = /^\s*FROM\s+(\S+)/m.exec(text);
-  return m ? m[1] : null;
+  const args = dockerfileArgs(text);
+  const stages = new Set();
+  let base = null;
+  for (const line of text.split("\n")) {
+    const m = /^\s*FROM\s+(\S+)(?:\s+AS\s+(\S+))?/.exec(line);
+    if (!m) continue;
+    const image = m[1].replace(/\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/g, (whole, name) => args[name] ?? whole);
+    if (!stages.has(image)) base = image;
+    if (m[2]) stages.add(m[2]);
+  }
+  return base;
 }
 
 /** Parse pinned `pkg==version` lines from a pip requirements file. */

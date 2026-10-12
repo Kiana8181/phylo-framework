@@ -1,22 +1,58 @@
 # Dependency and image security audit
 
-Last full audit: **2026-10-09**. This file records what was scanned, what was
+Last full audit: **2026-10-12**. This file records what was scanned, what was
 fixed, and every finding that remains open with the reason it is still open.
 It is not a claim that the project is free of vulnerabilities: scanners only
-know published advisories, and the open items below are real.
+know published advisories, some components are outside what any scanner here
+can see, and the open items below are real.
+
+## What is scanned, and what is not
+
+| Layer | Tool | Where it runs | Gate |
+|---|---|---|---|
+| npm packages (web, contracts) | `npm audit` | CI on every push, pull request and weekly | Fails on a high or critical advisory in a production dependency |
+| Python packages (API, GCtree, ClonalTree lock files) | `pip-audit` | Same job | Fails on any advisory not listed in `.github/pip-audit-ignore.txt` |
+| Runtime images: OS packages, Python/Node packages, Go binaries | Trivy, run inside each image | CI job that builds the images, on every push and weekly | Fails on a fixable critical finding in an image this project builds, or when an image cannot be scanned |
+| R packages in the Dowser and BrepPhylo images | OSV database (CRAN, Bioconductor) | Same job | Fails on any advisory not listed in `.github/r-audit-ignore.txt` |
+
+Not covered by any of the above:
+
+- **Compiled scientific tools** inside the images (IgPhyML, PHYLIP `dnapars` /
+  `dnaml`, RAxML-NG, MUSCLE, and R packages' compiled code). They are not
+  installed through a package manager a scanner understands, so they produce
+  no findings either way. They only ever process files that already passed the
+  framework's input validation, inside containers with no internet access.
+- **R packages beyond OSV's coverage.** The R advisory database is young and
+  small. An empty result means nothing is known, not that nothing is wrong.
+- **Rust binaries** (relevant to the object-store alternatives): Trivy cannot
+  read their dependencies unless they were built with audit metadata.
+- **The host**, the Docker daemon and the reverse proxy: owned by the
+  infrastructure team.
 
 ## How to re-run the audit
 
 ```bash
-# npm (production + development) and the three Python lock files.
-# This is the same gate CI runs on every push, pull request and weekly.
 pip install pip-audit==2.10.1
-bash scripts/security-audit.sh
-
-# Container images (OS packages + bundled binaries). Build first, then:
-docker save phylo-api:latest -o /tmp/phylo-api.tar
-docker run --rm -v /tmp:/scan aquasec/trivy:latest image --scanners vuln --input /scan/phylo-api.tar
+bash scripts/security-audit.sh          # npm + Python lock files (no images needed)
+bash scripts/security-audit.sh images   # every runtime image (build them first)
+bash scripts/security-audit.sh r        # R packages inside the two R images
+bash scripts/security-audit.sh full     # all of the above
 ```
+
+Image and R reports are written to `coverage/security/`.
+
+### How large images are scanned
+
+The two R images are about 13 GB each. Exporting them with `docker save` and
+scanning the archive failed (the scanner could not read the archive) and needs
+a second copy of every image on disk. `scripts/scan_images.py` instead starts a
+throw-away container of each image with the scanner binary and its database
+mounted read-only, and scans that container's own root filesystem. It needs no
+image export, gives the scanned container no network access and no Docker
+socket, and uses the same amount of disk for a 13 GB image as for a small one.
+
+If an image cannot be scanned the script exits with an error; it never reports
+an unscanned image as clean.
 
 Rebuild images with `--pull` so they pick up patched base images:
 
@@ -24,18 +60,27 @@ Rebuild images with `--pull` so they pick up patched base images:
 docker compose --profile prod build --pull
 ```
 
-## What the CI gate enforces
+## What the CI gates enforce
 
-The `security-audit` job in `.github/workflows/tests.yml` fails when:
+`security-audit` job (fast, every push and weekly):
 
-- a **production** npm dependency has a high or critical advisory;
+- a **production** npm dependency with a high or critical advisory fails it;
 - any package in `apps/api/requirements.lock`, `services/gctree/requirements.lock`
-  or `services/clonaltree/requirements.lock` has a known advisory that is not
-  listed, with its reason, in `.github/pip-audit-ignore.txt`.
+  or `services/clonaltree/requirements.lock` with an advisory that is not
+  listed, with its reason, in `.github/pip-audit-ignore.txt` fails it.
 
-Development-only npm advisories are printed but do not fail the job (see
-"Open findings" below). Container images and R packages are not scanned in CI;
-re-run those by hand with the commands above when base images change.
+`scientific-browser` job (after it has built every image):
+
+- a **fixable critical** finding in the web, API, GCtree or ClonalTree image
+  that is not listed in `.github/trivy-ignore.txt` fails it;
+- an R package advisory that is not listed in `.github/r-audit-ignore.txt`
+  fails it;
+- the Dowser, BrepPhylo, Postgres and object-store images are scanned and
+  reported but do not fail the job: the first two sit on an end-of-life base
+  image (finding 2) and the last two are patched by their upstreams. Their
+  reports are uploaded as build artifacts on every run.
+
+Development-only npm advisories are printed but do not fail a job (finding 5).
 
 ## Dependency pinning
 
@@ -115,49 +160,62 @@ tested images.
 
 ## Open findings
 
-### 1. MinIO images are no longer distributed (action needed)
+### 1. Object store: MinIO replaced by the Silo fork; mirror still to do
 
-`minio/minio` and `minio/mc` cannot be pulled any more: Docker Hub returns
-"repository does not exist" for both, and the `quay.io` mirror has no manifest.
-`docker-compose.yml` pins both by digest and `docker-compose.test.yml` uses a
-`RELEASE.2025-04-22` tag.
+Upstream MinIO no longer distributes images, and the build this project pinned
+(9 critical / 120 high findings) would never have been patched. The stack now
+runs **Silo** (`pgsty/silo`), the maintained community fork, pinned by digest.
+Evidence, alternatives and trade-offs: [OBJECT-STORAGE-OPTIONS.md](./OBJECT-STORAGE-OPTIONS.md).
 
-- **Impact on deployment:** a host that already has the images cached keeps
-  working. A fresh host, or CI on a clean runner, cannot pull them and the
-  stack will not start.
-- **Impact on security:** the pinned server image is a September 2025 build
-  that will never be patched. Trivy reports 7 critical and 102 high fixable
-  findings in it, almost all in Go libraries compiled into the `minio` binary.
-- **Exposure:** MinIO publishes no host port and is reachable only from this
-  project's containers, so these are not reachable from the internet. An
-  attacker would first need code execution inside one of the project's
-  containers.
-- **Why it is open:** replacing the object store, or building MinIO from
-  source, is a deployment decision with data-migration consequences. It was
-  not made in this audit.
-- **Options:** (a) keep the cached image and export it with `docker save` so
-  the server can be rebuilt (after `docker load` the compose file may need a
-  local tag in place of the digest reference); (b) build MinIO from its source
-  repository into a project-owned image; (c) move to another S3-compatible
-  server. The API, worker and method services already speak plain S3
-  (`STORAGE_BACKEND=s3`), so (c) needs no application code change, but the
-  `minio-init` service (bucket creation and the write-only methods user) is
-  MinIO-specific and would have to be replaced, and existing objects copied.
+- **Scan of the adopted image:** 0 critical, 5 high. Four are in the Go
+  standard library and `golang.org/x/net` (denial of service; fixed by a rebuild
+  with a newer Go, which needs a new Silo release). One is reported against
+  MinIO's S3 Select CSV parser; the fork patched it, and this project does not
+  use S3 Select.
+- **Exposure:** unchanged. The object store publishes no host port and is
+  reachable only from this project's API, worker and method containers.
+- **Residual risk 1 — availability:** the images come from the fork's Docker
+  Hub repository. Mirroring them into a registry the group controls is a
+  deployment prerequisite that has not been done yet (no such registry was
+  available).
+- **Residual risk 2 — maintenance:** Silo is a young fork with one dominant
+  maintainer. Re-check its activity every few months; SeaweedFS is the
+  documented fallback.
 
 ### 2. R service base image runs an end-of-life operating system
 
 Dowser and BrepPhylo are built on `immcantation/suite:4.6.0` (April 2025),
-which is Fedora 41. Fedora 41 no longer receives security updates, so OS-level
-findings in these two images cannot be fixed by rebuilding.
+which is Fedora 41, and Fedora 41 is end of life.
 
-- **Exposure:** both services are internal-only (no published port), read
-  inputs from a read-only mount, and are reached only by the worker.
-- **Why it is open:** `immcantation/suite` 4.7.0 and 4.8.0 exist, but they
-  change the R, Dowser and IgPhyML versions. That alters the scientific
-  environment and needs a deliberate upgrade with the scientific regression
-  suite, not a security patch.
-- **Mitigation planned:** Phase 3 places the method services on a Docker
-  network with no outbound internet access.
+- **What was fixed:** the distribution had published 141 security updates
+  (11 rated Important, none Critical; packages such as `expat`, `sqlite`, `pam`,
+  `sudo`, `qt5-qtbase`) that the base image did not contain. Both Dockerfiles
+  now apply them (`dnf upgrade --security`). After the rebuild the distribution
+  reports 0 pending security updates. R 4.4.3, every R package version and the
+  IgPhyML / PHYLIP / RAxML-NG binaries are byte-identical before and after, and
+  Dowser and BrepPhylo produced identical trees on the regression dataset.
+- **What stays open:** Fedora 41 publishes no new advisories. A vulnerability
+  found from now on in one of its 1,312 OS packages will neither be fixed nor
+  show up in any scan of these images.
+- **What cannot be scanned:** Trivy has no vulnerability data for Fedora. For
+  these two images it only assesses the pip- and npm-installed parts; the scan
+  report says "OS not assessed" and shows the distribution's own count of
+  pending updates instead. "0 pending" therefore means "everything the
+  distribution ever published is applied", not "no known vulnerabilities".
+- **Exposure:** both services are internal-only (no published port), have no
+  route to the internet and none to the database, run without Linux
+  capabilities, hold only the write-only object-store credential, and read
+  inputs that already passed the framework's validation from a read-only mount.
+- **Why the base is not upgraded here:** `immcantation/suite` 4.7.0 and 4.8.0
+  exist, but they change the R, Dowser and IgPhyML versions. That alters the
+  scientific environment and needs a deliberate upgrade with the scientific
+  regression suite, not a security patch.
+- **Also in the base image:** `pyarrow` 19.0.1 (one high finding, fixed in
+  23.0.1), installed with pip for the Immcantation command-line tools. The R
+  services do not load it.
+- **Java archives:** the images contain two PHYLIP drawing GUIs
+  (`DrawGram.jar`, `DrawTree.jar`) and no Java runtime, so they cannot run.
+  They are skipped by the image scan unless `--with-java` is given.
 
 ### 3. R packages
 
@@ -170,8 +228,9 @@ database (CRAN and Bioconductor ecosystems). Three advisories matched:
 | `plotly` 4.10.4 | RSEC-2025-1, fixed in 4.12.0 | Not loaded by the services; dependency of `Seurat`/`enchantr` |
 | `png` 0.1-7 | RSEC-2026-1, fixed in 0.1-9 | Applies to source installs on Windows with R < 4.2; the images are Linux with R 4.4.3 |
 
-They ship inside the base image. Left as is; they go away with an
-`immcantation/suite` upgrade.
+They ship inside the base image. Accepted, with these reasons, in
+`.github/r-audit-ignore.txt`; any new advisory fails the CI audit. They go away
+with an `immcantation/suite` upgrade.
 
 ### 4. Biopython `Bio.Entrez` XXE (CVE-2025-68463) in ClonalTree
 
@@ -212,34 +271,54 @@ network input. Resolved when the upstream image is rebuilt.
 
 | Runtime | Used by | Status |
 |---|---|---|
-| Python 3.10 | ClonalTree | End of life in October 2026. Moving to 3.11/3.12 needs a scientific regression run |
+| Python 3.12 | API, ClonalTree | Security fixes until October 2028 |
+| Python 3.11 | GCtree | Security fixes until October 2027 |
+| `ete3` 3.1.x | GCtree, ClonalTree | Imports the `cgi` module, removed in Python 3.13. It is what keeps both services at Python 3.12 or older |
 | `passlib` 1.7.4 | API password hashing | Unmaintained; imports a module removed in Python 3.13. Works on the API's Python 3.12 |
+| Fedora 41 | Dowser, BrepPhylo base image | End of life (finding 2) |
 | PostgreSQL 15 | Database | Supported until November 2027 |
+
+ClonalTree moved from Python 3.10 (end of life in October 2026) to 3.12. Python
+3.11, 3.12 and 3.13 were all tried with the unchanged dependency lock: 3.11 and
+3.12 install and run it; 3.13 fails on `import ete3`. 3.12 was chosen because it
+is the newest release the pinned scientific stack supports. Every scientific pin
+is unchanged (the lock file lost only `exceptiongroup`, a Python 3.10
+backport). The old and new images produced identical output for three parameter
+sets on the regression dataset: the same Newick tree, nodes, edges, clone
+table, artifacts and step log, including the same behaviour on the two
+parameter sets that do not yield a tree. MUSCLE produces an identical alignment
+from both images.
 
 ## Image scan results
 
-Trivy 0.75.0, all severities, scanned from the locally built images.
+Trivy 0.75.0 run inside each image (`scripts/scan_images.py`), all severities,
+2026-10-12. All eight images were scanned in under three minutes on a laptop,
+including the two 13 GB R images.
 
 | Image | Critical | High | Medium | Low | Fixable critical/high | Where the fixable ones are |
 |---|---|---|---|---|---|---|
-| `phylo-web` (Node 22, Debian 12) | 1 | 48 | 95 | 77 | 0 | — |
-| `phylo-api` (Python 3.12, Debian 13) | 0 | 56 | 86 | 105 | 4 high | Copies bundled inside `pip` (finding 6) |
-| `phylo-gctree` (Python 3.11, Debian 12) | 4 | 108 | 260 | 215 | 4 high | Copies bundled inside `pip` (finding 6) |
-| `phylo-clonaltree` (Python 3.10, Debian 12) | 3 | 274 | 2212 | 1024 | 4 high | Copies bundled inside `pip` (finding 6) |
-| `postgres:15-alpine` | 1 | 21 | 23 | 2 | 1 critical, 21 high | `gosu` helper binary (finding 8) |
-| `minio/minio` (pinned digest) | 9 | 112 | 137 | 24 | 7 critical, 102 high | `minio` binary (finding 1) |
-| `minio/mc` (pinned digest) | 2 | 51 | 97 | 20 | 2 critical, 45 high | `mc` binary (finding 1) |
-| `phylo-dowser`, `phylo-brepphylo` | not scanned | | | | | Trivy failed to read the 13 GB image archive. Their OS is end-of-life Fedora 41 (finding 2); R packages were checked separately (finding 3) |
+| `phylo-web` (Node 22, Debian 12) | 1 | 50 | 96 | 77 | 0 | — |
+| `phylo-api` (Python 3.12, Debian 13) | 0 | 58 | 95 | 105 | 4 high | Copies bundled inside `pip` (finding 6) |
+| `phylo-gctree` (Python 3.11, Debian 12) | 4 | 110 | 271 | 218 | 4 high | Copies bundled inside `pip` (finding 6) |
+| `phylo-clonaltree` (Python 3.12, Debian 12) | 2 | 59 | 119 | 101 | 4 high | Copies bundled inside `pip` (finding 6) |
+| `phylo-dowser` (Fedora 41) | OS not assessed | | | | 1 high | `pyarrow` from the base image (finding 2). Distribution reports 0 pending security updates |
+| `phylo-brepphylo` (Fedora 41) | OS not assessed | | | | 1 high | Same as Dowser |
+| `postgres:15-alpine` | 1 | 24 | 28 | 3 | 1 critical, 24 high | `gosu` helper binary (finding 8) |
+| `pgsty/silo` (pinned digest, object store) | 0 | 5 | 7 | 1 | 4 high | Go standard library and `x/net` inside the `silo` binary (finding 1). The MinIO image it replaced had 9 critical / 120 high |
 
-Before this audit the web image had 3 critical and 14 high **fixable** findings
-(an outdated `perl-base` and the `npm` bundled in the base image). The runtime
-stage now applies Debian updates and removes `npm`, `corepack` and `yarn`,
-which the standalone server never runs.
+Changes from the earlier scan (2026-10-09):
+
+- **ClonalTree:** 3 critical / 274 high / 2212 medium → 2 / 59 / 119. The
+  compiler toolchain, git and kernel headers now stay in a build stage; the
+  runtime image holds only the MUSCLE binary and the pinned Python packages
+  (1.24 GB instead of 1.66 GB).
+- **Web:** 3 critical and 14 high fixable findings → 0. The runtime stage
+  applies Debian updates and removes `npm`, `corepack` and `yarn`, which the
+  standalone server never runs.
+- **Dowser, BrepPhylo:** not scannable before (the scanner could not read a
+  13 GB image archive); now scanned from the inside, with the limits described
+  in finding 2.
 
 Everything in the "Critical/High" columns that is not "fixable" has no patched
-package in the distribution yet. In the ClonalTree image, 190 of the 277
-critical/high entries are `linux-libc-dev` (kernel header files installed with
-the compiler toolchain that builds MUSCLE); they are headers, not running code.
-Moving the MUSCLE build to a separate build stage would remove the toolchain
-from the final image. That restructuring is planned with the container
-hardening in Phase 3.
+package in the distribution yet. Counts move from day to day as the scanner's
+database is updated.
