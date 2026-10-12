@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import ClientDisconnect
 
 from apps.api.auth.dependencies import get_current_user_required
+from apps.api.auth.verification import require_verified_user
 from apps.api.config import STORAGE_QUOTA_PER_USER_BYTES
 from apps.api.database import get_db
 from apps.api.database.models import StorageType, UploadSessionStatus, User
@@ -87,7 +88,8 @@ def _safe_unlink(path: Optional[str]) -> None:
 @router.post("/init")
 async def init_upload(
     body: InitUploadBody,
-    current_user: User = Depends(get_current_user_required),
+    # Uploading needs a confirmed email address (when that is required).
+    current_user: User = Depends(require_verified_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Create an upload session. Returns upload_id + the content upload endpoint."""
@@ -113,7 +115,7 @@ async def init_upload(
 async def upload_content(
     upload_id: UUID,
     request: Request,
-    current_user: User = Depends(get_current_user_required),
+    current_user: User = Depends(require_verified_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Receive the raw file body, persist to storage and create the File record."""

@@ -14,6 +14,8 @@ import httpx
 import pytest
 from jsonschema import Draft7Validator
 
+from tests.support.accounts import register_verified
+
 ROOT = Path(__file__).resolve().parents[2]
 PARAMS = json.loads((ROOT / 'tests/fixtures/scientific-params.json').read_text())
 SAMPLE = ROOT / 'apps/web/public/samples/ExampleAirr_clone_3128.tsv'
@@ -30,9 +32,8 @@ def unwrap(response):
 async def test_scientific_pipeline(method, tmp_path):
     async with httpx.AsyncClient(base_url='http://127.0.0.1:58000', timeout=60, trust_env=False) as api:
         tag = uuid4().hex
-        account = unwrap(await api.post('/auth/register', json={
-            'email': f'{tag}@example.org', 'username': tag, 'password': 'e2e-password'}))
-        api.headers['Authorization'] = f"Bearer {account['access_token']}"
+        # Sign up as a person does: sign-up check, then the emailed confirmation link.
+        await register_verified(api, f'{tag}@example.org', tag, 'e2e-password')
         init = unwrap(await api.post('/uploads/init', json={'original_filename': SAMPLE.name, 'mime_type': 'text/tab-separated-values'}))
         uploaded = unwrap(await api.put(init['content_url'], content=SAMPLE.read_bytes()))
         created = unwrap(await api.post(f'/runs?method={method}', json={'file_id': uploaded['file_id'], 'params': PARAMS[method]}))
@@ -103,9 +104,8 @@ async def test_scientific_pipeline(method, tmp_path):
 async def test_malformed_dataset_fails_with_diagnostic_and_preserves_history(method):
     async with httpx.AsyncClient(base_url='http://127.0.0.1:58000', timeout=30, trust_env=False) as api:
         tag = uuid4().hex
-        account = unwrap(await api.post('/auth/register', json={
-            'email': f'{tag}@example.org', 'username': tag, 'password': 'e2e-password'}))
-        api.headers['Authorization'] = f"Bearer {account['access_token']}"
+        # Sign up as a person does: sign-up check, then the emailed confirmation link.
+        await register_verified(api, f'{tag}@example.org', tag, 'e2e-password')
         init = unwrap(await api.post('/uploads/init', json={'original_filename': 'invalid.tsv'}))
         uploaded = unwrap(await api.put(init['content_url'], content=b'sequence_id\tsequence_alignment\n'))
         run_id = unwrap(await api.post(f'/runs?method={method}', json={

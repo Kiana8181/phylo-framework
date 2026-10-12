@@ -83,6 +83,22 @@ def email_verification(*, verification_link: str, expires_hours: int) -> EmailCo
     )
 
 
+def account_already_exists(*, login_link: str, reset_link: str) -> EmailContent:
+    """Sent instead of a confirmation link when someone registers an address
+    that already has an account. The registration form answers the same way in
+    both cases, so only the owner of the mailbox learns which one it was."""
+    intro = f"Someone tried to create a {APP_NAME} account with this email address, but it already has one."
+    yours = (f"If that was you, you do not need a new account: log in at {login_link} "
+             f"or, if you have forgotten your password, reset it at {reset_link}.")
+    other = "If it was not you, you can ignore this email. Nothing about your account has changed."
+    footer = f"Sent by {APP_NAME} because a registration was attempted with this address."
+    return EmailContent(
+        subject=f"You already have a {APP_NAME} account",
+        text=_text([intro, yours, other], footer=footer),
+        html=_page([escape(intro), escape(yours), escape(other)], footer=footer),
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Run notifications
 # --------------------------------------------------------------------------- #

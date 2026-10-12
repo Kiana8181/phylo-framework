@@ -16,6 +16,7 @@ from apps.api.config import API_DOCS_ENABLED, CORS_ORIGINS, IS_PRODUCTION
 from apps.api.logging_setup import configure_logging
 from apps.api.security.errors import log_internal_error
 from apps.api.security.production_config import enforce_production_config
+from apps.api.security.startup_report import log_auth_protection
 from apps.api.services import email as mailer
 
 configure_logging()
@@ -49,6 +50,7 @@ async def _report_email_configuration() -> None:
     # Says at start-up whether password-reset and other account emails can be
     # sent; a broken mail configuration never stops the API from starting.
     mailer.log_configuration("api")
+    log_auth_protection()
 
 
 @app.on_event("shutdown")

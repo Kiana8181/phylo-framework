@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/features/auth/context";
 import Sidebar from "@/components/dashboard/Sidebar";
+import VerifyEmailBanner from "@/components/auth/VerifyEmailBanner";
 import { Loading } from "@/components/ui/loading";
 
 export default function DashboardLayout({
@@ -33,6 +34,7 @@ export default function DashboardLayout({
     <div className="flex h-full min-h-0 overflow-hidden">
       <Sidebar />
       <div className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain">
+        <VerifyEmailBanner />
         {children}
       </div>
     </div>

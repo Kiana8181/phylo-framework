@@ -1,17 +1,5 @@
-import { test, expect, type Page } from './fixtures';
-import { randomUUID } from 'node:crypto';
+import { test, expect, signup } from './fixtures';
 const api = 'http://127.0.0.1:58000';
-
-async function signup(page: Page) {
-  const tag = randomUUID().replaceAll('-', '');
-  await page.goto('/auth?mode=signup');
-  await page.getByLabel('Email', {exact: true}).fill(`${tag}@example.org`);
-  await page.getByLabel('Username', {exact: true}).fill(tag);
-  await page.getByLabel('Password', {exact: true}).fill('browser-password-123');
-  await page.getByRole('button', {name: 'Sign up', exact: true}).click();
-  await expect(page).toHaveURL(/\/dashboard/);
-  return {email: `${tag}@example.org`, password: 'browser-password-123'};
-}
 
 test('protected dashboard redirects; real signup and login persist across reload', async ({page}) => {
   await page.goto('/dashboard');

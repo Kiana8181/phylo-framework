@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { setTokens } from "@/lib/auth/storage";
+import { OAUTH_STATE_KEY, setTokens } from "@/lib/auth/storage";
 import { authApi } from "@/features/auth/api";
 import { notify } from "@/lib/notify";
 import { getApiErrorMessage } from "@/lib/http/errors";
@@ -18,8 +18,18 @@ function AuthCallbackContent() {
       notify.error("Missing authorization code");
       return;
     }
+    // Only complete a sign-in that this tab started: the state Google returns
+    // must be the one stored before leaving for Google.
+    const state = searchParams.get("state");
+    const expected = sessionStorage.getItem(OAUTH_STATE_KEY);
+    sessionStorage.removeItem(OAUTH_STATE_KEY);
+    if (!state || !expected || state !== expected) {
+      setStatus("error");
+      notify.error("Google sign-in failed", "This sign-in was not started here or has expired. Please try again.");
+      return;
+    }
     authApi
-      .loginWithGoogleCode(code)
+      .loginWithGoogleCode(code, state)
       .then((res) => {
         setTokens(res.access_token, res.refresh_token, res.user);
         setStatus("ok");

@@ -59,7 +59,8 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     else:
         expire = datetime.now(timezone.utc) + timedelta(minutes=JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
     
-    to_encode.update({"exp": expire, "type": "access"})
+    # iat lets a session be recognised as older than a password reset.
+    to_encode.update({"exp": expire, "iat": datetime.now(timezone.utc), "type": "access"})
     encoded_jwt = jwt.encode(to_encode, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
     return encoded_jwt
 
@@ -76,7 +77,7 @@ def create_refresh_token(data: dict) -> str:
     """
     to_encode = data.copy()
     expire = datetime.now(timezone.utc) + timedelta(days=JWT_REFRESH_TOKEN_EXPIRE_DAYS)
-    to_encode.update({"exp": expire, "type": "refresh"})
+    to_encode.update({"exp": expire, "iat": datetime.now(timezone.utc), "type": "refresh"})
     encoded_jwt = jwt.encode(to_encode, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
     return encoded_jwt
 
@@ -117,3 +118,16 @@ def get_user_id_from_token(token: str) -> Optional[UUID]:
         except (ValueError, TypeError):
             return None
     return None
+
+
+def issued_before(payload: dict, moment: Optional[datetime]) -> bool:
+    """True when the token was issued before ``moment`` (a token without an
+    issue time counts as older than any moment)."""
+    if moment is None:
+        return False
+    issued = payload.get("iat")
+    if not isinstance(issued, (int, float)):
+        return True
+    # JWT times are whole seconds: compare at that precision, or a token issued
+    # in the same second as the cut-off would be refused.
+    return int(issued) < int(moment.timestamp())

@@ -46,6 +46,7 @@ import traceback
 from datetime import timedelta
 from typing import Any, Optional
 
+from apps.api.auth.verification import may_use_service
 from apps.api.config import FRONTEND_URL
 from apps.api.contracts.loader import load_spec_from_contracts
 from apps.api.database.base import AsyncSessionLocal
@@ -157,6 +158,10 @@ async def _deliver_one(notification: NotificationOutbox) -> str:
         user = await db.get(User, notification.user_id)
         if run is None or user is None or not (user.email or "").strip():
             await repo.mark_skipped(notification.id, reason="the run or its owner no longer exists")
+            return "skipped"
+        if not may_use_service(user):
+            # An address nobody has confirmed may not be the account holder's.
+            await repo.mark_skipped(notification.id, reason="the owner's email address is not confirmed")
             return "skipped"
         recipient = user.email.strip()
         content = build_run_email(notification, run)

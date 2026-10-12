@@ -7,7 +7,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apps.api.auth.jwt_handler import decode_token, get_user_id_from_token
+from apps.api.auth.jwt_handler import decode_token, get_user_id_from_token, issued_before
 from apps.api.database import get_db
 from apps.api.database.models import User
 from apps.api.repositories.user_repository import UserRepository
@@ -60,6 +60,14 @@ async def get_current_user(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found or inactive",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    # A session from before the password was reset (or the account passed to
+    # its verified owner) is no longer valid.
+    if issued_before(payload, user.tokens_valid_after):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session expired. Please log in again.",
             headers={"WWW-Authenticate": "Bearer"},
         )
     

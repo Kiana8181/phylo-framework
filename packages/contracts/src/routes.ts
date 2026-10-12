@@ -40,6 +40,9 @@ export const API_ROUTES = {
   authMe: () => `/auth/me`,
   authLogout: () => `/auth/logout`,
   authGoogle: () => `/auth/google`,
+  authChallenge: () => `/auth/challenge`,
+  authVerifyEmail: () => `/auth/verify-email`,
+  authResendVerification: () => `/auth/resend-verification`,
 } as const;
 
 /**

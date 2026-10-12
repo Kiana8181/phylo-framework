@@ -14,14 +14,18 @@ import {
   clearTokens,
   type StoredUser,
 } from "@/lib/auth/storage";
-import { authApi } from "./api";
+import { authApi, isRegistrationPending } from "./api";
 
 type AuthContextValue = {
   user: StoredUser | null;
   isAuthenticated: boolean;
   isLoading: boolean;
   login: (email: string, password: string) => Promise<void>;
-  register: (email: string, username: string, password: string) => Promise<void>;
+  /** Resolves to `{ pending: true }` when a confirmation link was emailed and
+   *  the account is not signed in yet. */
+  register: (email: string, username: string, password: string) => Promise<{ pending: boolean; message?: string }>;
+  /** Ask the server again who the user is (e.g. after confirming the email address). */
+  refreshUser: () => Promise<void>;
   logout: () => Promise<void>;
   setUser: (user: StoredUser | null) => void;
 };
@@ -50,7 +54,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     authApi
       .me()
       .then((me) => {
-        setUserState({ id: me.id, email: me.email, username: me.username });
+        const fresh = {
+          id: me.id,
+          email: me.email,
+          username: me.username,
+          email_verified: me.email_verified,
+          verification_required: me.verification_required,
+        };
+        setUserState(fresh);
       })
       .catch(() => {
         clearTokens();
@@ -70,11 +81,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const register = useCallback(
     async (email: string, username: string, password: string) => {
       const res = await authApi.register(email, username, password);
+      if (isRegistrationPending(res)) {
+        return { pending: true, message: res.message };
+      }
       setTokens(res.access_token, res.refresh_token, res.user);
       setUserState(res.user);
+      return { pending: false };
     },
     []
   );
+
+  const refreshUser = useCallback(async () => {
+    const me = await authApi.me();
+    setUserState({
+      id: me.id,
+      email: me.email,
+      username: me.username,
+      email_verified: me.email_verified,
+      verification_required: me.verification_required,
+    });
+  }, []);
 
   const logout = useCallback(async () => {
     await authApi.logout();
@@ -91,6 +117,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     isLoading,
     login,
     register,
+    refreshUser,
     logout,
     setUser,
   };

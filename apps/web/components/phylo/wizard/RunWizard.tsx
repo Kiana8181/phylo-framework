@@ -10,6 +10,8 @@ import { useMethodSpec } from "@/features/methods/hooks";
 import { useCreateRun, useRunQuota } from "@/features/runs/hooks";
 import { runLimitCode, runLimitTitle } from "@/features/runs/quota";
 import RunQuotaNotice from "@/components/phylo/RunQuotaNotice";
+import { useAuth } from "@/features/auth/context";
+import { needsEmailVerification } from "@/lib/auth/storage";
 import { useUploadSession } from "@/features/uploads/hooks";
 import { notify } from "@/lib/notify";
 import type { MethodInfo } from "@phylo/contracts";
@@ -55,8 +57,10 @@ export default function RunWizard({
   // this only keeps the user from preparing a run it would refuse.
   const quotaQuery = useRunQuota();
   const quota = quotaQuery.data;
-  const runBlockedReason =
-    quota && !quota.can_submit
+  const { user } = useAuth();
+  const runBlockedReason = needsEmailVerification(user)
+    ? "Confirm your email address to start runs."
+    : quota && !quota.can_submit
       ? (quota.message ?? (quota.blocked_by ? runLimitTitle(quota.blocked_by) : "Runs are limited right now."))
       : null;
 

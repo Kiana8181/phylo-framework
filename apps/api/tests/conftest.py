@@ -33,7 +33,7 @@ TEST_URL = _BASE_URL.set(database=_TEST_DB)
 _ADMIN_URL = _BASE_URL.set(database="postgres")
 
 # Tables cleared between tests (children first for FK safety; CASCADE covers the rest).
-_TRUNCATE_SQL = "TRUNCATE runs, files, users RESTART IDENTITY CASCADE"
+_TRUNCATE_SQL = "TRUNCATE runs, files, users, rate_limits, captcha_used RESTART IDENTITY CASCADE"
 
 
 async def _ensure_database() -> None:

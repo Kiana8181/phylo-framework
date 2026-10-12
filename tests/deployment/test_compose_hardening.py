@@ -511,3 +511,69 @@ def test_the_test_stack_sends_mail_to_a_local_sink_only():
     assert mail["ports"] == ["127.0.0.1:58025:8025"]                      # control port on loopback only
     assert test_compose["services"]["api"]["environment"]["SMTP_HOST"] == "mail"
     assert "mail" not in COMPOSE["services"]                               # never part of a deployment
+
+
+# --------------------------------------------------------------------------- #
+# Sign-in protection
+# --------------------------------------------------------------------------- #
+def _example_values() -> dict[str, str]:
+    """Every NAME=value in .env.example, including commented-out examples."""
+    values = {}
+    for line in (ROOT / ".env.example").read_text().splitlines():
+        stripped = line.lstrip("# ").strip()
+        name, sep, value = stripped.partition("=")
+        if sep and name.replace("_", "").isalnum() and name.isupper():
+            values.setdefault(name, value.strip())
+    return values
+
+
+def test_documented_sign_in_protection_defaults_match_the_code():
+    import re
+
+    example = _example_values()
+    limits_source = (ROOT / "apps/api/security/rate_limit.py").read_text()
+    for name, count, seconds in re.findall(r'^    "([A-Z_]+)": \((\d+), (\d+)\),$', limits_source, flags=re.M):
+        assert example[f"AUTH_LIMIT_{name}"] == f"{count}/{seconds}", name
+    assert len(re.findall(r'^    "([A-Z_]+)": \(\d+, \d+\),$', limits_source, flags=re.M)) == 7
+    captcha_source = (ROOT / "apps/api/security/captcha.py").read_text()
+    assert f"DEFAULT_DIFFICULTY_BITS = {example['CAPTCHA_DIFFICULTY_BITS']}\n" in captcha_source
+    assert f"DEFAULT_TTL_SECONDS = {example['CAPTCHA_TTL_SECONDS']}\n" in captcha_source
+    assert example["CAPTCHA_ENABLED"] == "true" and example["AUTH_RATE_LIMITS_ENABLED"] == "true"
+    assert example["EMAIL_VERIFICATION"] == "auto" and example["EMAIL_VERIFICATION_EXPIRE_HOURS"] == "24"
+    assert "FORWARDED_ALLOW_IPS" in example
+
+
+def test_protection_is_on_by_default_and_not_pinned_in_compose():
+    """Secure unless switched off: the code defaults are 'on', and compose
+    leaves every one of these settings to the server's .env."""
+    text = (ROOT / "docker-compose.yml").read_text()
+    for name in ("CAPTCHA_", "AUTH_LIMIT_", "AUTH_RATE_LIMITS_ENABLED", "EMAIL_VERIFICATION"):
+        assert name not in text, name
+    captcha_source = (ROOT / "apps/api/security/captcha.py").read_text()
+    assert '(os.getenv("CAPTCHA_ENABLED") or "true")' in captcha_source
+    assert '(os.getenv("AUTH_RATE_LIMITS_ENABLED") or "true")' in (ROOT / "apps/api/security/rate_limit.py").read_text()
+
+
+def test_the_test_suite_switches_protection_off_only_for_itself():
+    """Unit tests run with the controls off (conftest.py); the end-to-end stack
+    runs with the CAPTCHA and email verification on, as a deployment does."""
+    root_conftest = (ROOT / "conftest.py").read_text()
+    assert '"CAPTCHA_ENABLED": "false"' in root_conftest and '"AUTH_RATE_LIMITS_ENABLED": "false"' in root_conftest
+    api_env = yaml.safe_load((ROOT / "docker-compose.test.yml").read_text())["services"]["api"]["environment"]
+    assert api_env["CAPTCHA_ENABLED"] == "true" and api_env["EMAIL_VERIFICATION"] == "auto" and api_env["SMTP_HOST"] == "mail"
+
+
+def test_no_third_party_captcha_is_loaded_by_the_web_app():
+    """The CAPTCHA is self-hosted: no script or request to an outside service."""
+    import subprocess
+
+    tracked = subprocess.run(["git", "ls-files", "apps/web"], cwd=ROOT, capture_output=True, text=True, check=True).stdout.split()
+    forbidden = ("recaptcha", "hcaptcha", "turnstile", "challenges.cloudflare.com", "google.com/recaptcha")
+    hits = []
+    for name in tracked:
+        path = ROOT / name
+        if path.suffix not in {".ts", ".tsx", ".js", ".mjs", ".json", ".html"} or name.endswith("package-lock.json"):
+            continue
+        content = path.read_text(encoding="utf-8", errors="ignore").lower()
+        hits += [f"{name}: {word}" for word in forbidden if word in content]
+    assert not hits, hits

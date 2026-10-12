@@ -1,8 +1,22 @@
 import { http } from "@/lib/http/client";
 import { apiBaseURL } from "@/lib/config";
 import { API_ROUTES } from "@phylo/contracts";
+import { solveCaptcha } from "./captcha";
 
-export type AuthUser = { id: string; email: string; username: string };
+export type AuthUser = {
+  id: string;
+  email: string;
+  username: string;
+  email_verified?: boolean;
+  verification_required?: boolean;
+};
+
+/** Sign-up answer while email verification is required: no session yet, a link was emailed. */
+export type RegistrationPending = { verification_required: true; message: string };
+
+export function isRegistrationPending(value: unknown): value is RegistrationPending {
+  return typeof value === "object" && value !== null && (value as RegistrationPending).verification_required === true;
+}
 
 export type TokenResponse = {
   access_token: string;
@@ -17,31 +31,54 @@ export type ForgotPasswordResponse = {
 };
 
 export const authApi = {
+  // The three public forms carry the answer to a proof-of-work challenge
+  // (features/auth/captcha.ts). It is fetched and solved here, so every caller
+  // gets it right; when the server does not ask for one, nothing is sent.
   async login(email: string, password: string): Promise<TokenResponse> {
+    const captcha = await solveCaptcha();
     const { data } = await http.post<TokenResponse>(API_ROUTES.authLogin(), {
       email,
       password,
+      captcha,
     });
     return data;
   },
 
+  /** Either a session (verification not required) or "a link was emailed". */
   async register(
     email: string,
     username: string,
     password: string
-  ): Promise<TokenResponse> {
-    const { data } = await http.post<TokenResponse>(API_ROUTES.authRegister(), {
+  ): Promise<TokenResponse | RegistrationPending> {
+    const captcha = await solveCaptcha();
+    const { data } = await http.post<TokenResponse | RegistrationPending>(API_ROUTES.authRegister(), {
       email,
       username,
       password,
+      captcha,
     });
     return data;
   },
 
   async forgotPassword(email: string): Promise<ForgotPasswordResponse> {
+    const captcha = await solveCaptcha();
     const { data } = await http.post<ForgotPasswordResponse>(
       API_ROUTES.authForgotPassword(),
-      { email }
+      { email, captcha }
+    );
+    return data;
+  },
+
+  /** Confirm an email address with the token from the emailed link; signs the account in. */
+  async verifyEmail(token: string): Promise<TokenResponse> {
+    const { data } = await http.post<TokenResponse>(API_ROUTES.authVerifyEmail(), { token });
+    return data;
+  },
+
+  /** Ask for a new confirmation link for the signed-in account. */
+  async resendVerification(): Promise<{ email_verified: boolean; message: string }> {
+    const { data } = await http.post<{ email_verified: boolean; message: string }>(
+      API_ROUTES.authResendVerification()
     );
     return data;
   },
@@ -67,14 +104,16 @@ export const authApi = {
     }
   },
 
-  async getGoogleAuthUrl(): Promise<{ auth_url: string }> {
-    const { data } = await http.get<{ auth_url: string }>(API_ROUTES.authGoogle());
+  /** The URL to send the browser to, and the `state` to keep and send back with the code. */
+  async getGoogleAuthUrl(): Promise<{ auth_url: string; state: string }> {
+    const { data } = await http.get<{ auth_url: string; state: string }>(API_ROUTES.authGoogle());
     return data;
   },
 
-  async loginWithGoogleCode(code: string): Promise<TokenResponse> {
+  async loginWithGoogleCode(code: string, state: string): Promise<TokenResponse> {
     const { data } = await http.post<TokenResponse>(API_ROUTES.authGoogle(), {
       code,
+      state,
     });
     return data;
   },

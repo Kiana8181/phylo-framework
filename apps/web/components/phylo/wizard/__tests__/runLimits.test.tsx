@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   refetch: vi.fn(),
   notifyError: vi.fn(),
   quota: {current: undefined as unknown},
+  user: {current: {id: 'u', email: 'ada@uni.example', username: 'ada'} as Record<string, unknown>},
   parametersProps: {current: null as null | Record<string, any>},
 }));
 
@@ -21,6 +22,7 @@ vi.mock('@/features/runs/hooks', () => ({
   useCreateRun: () => ({mutateAsync: mocks.create}),
   useRunQuota: () => ({data: mocks.quota.current, dataUpdatedAt: Date.now(), refetch: mocks.refetch}),
 }));
+vi.mock('@/features/auth/context', () => ({useAuth: () => ({user: mocks.user.current})}));
 vi.mock('@/features/uploads/hooks', () => ({
   useUploadSession: () => ({upload: mocks.upload, uploading: false, progress: null, cancel: vi.fn()}),
 }));
@@ -108,6 +110,18 @@ it('a refusal by the server is explained once, not as a generic failure', async 
   await waitFor(() => expect(mocks.create).toHaveBeenCalledTimes(1));
   expect(mocks.notifyError).not.toHaveBeenCalled();          // useCreateRun reports limit refusals itself
   expect(onSubmitDone).not.toHaveBeenCalled();
+});
+
+it('an account that has not confirmed its email address cannot start a run', async () => {
+  mocks.user.current = {id: 'u', email: 'ada@uni.example', username: 'ada', email_verified: false, verification_required: true};
+  await openParametersStep();
+  expect(mocks.parametersProps.current?.runBlockedReason).toBe('Confirm your email address to start runs.');
+  // Where confirmation is not asked for, the same account is not blocked.
+  cleanup();
+  mocks.user.current = {id: 'u', email: 'ada@uni.example', username: 'ada', email_verified: false, verification_required: false};
+  await openParametersStep();
+  expect(mocks.parametersProps.current?.runBlockedReason).toBeNull();
+  mocks.user.current = {id: 'u', email: 'ada@uni.example', username: 'ada'};
 });
 
 it('other failures are still reported as failures', async () => {

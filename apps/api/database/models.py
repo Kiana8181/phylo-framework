@@ -98,8 +98,18 @@ class User(Base):
     email = Column(String(255), unique=True, nullable=False, index=True)
     username = Column(String(100), unique=True, nullable=False, index=True)
     password_hash = Column(String(255), nullable=False)
+    # SHA-256 of the emailed reset token (never the token itself).
     password_reset_token = Column(String(255), nullable=True)
     password_reset_expires = Column(DateTime(timezone=True), nullable=True)
+    # When the address was proven to belong to the account holder (a link sent
+    # to it was used, or Google vouched for it). NULL = not proven.
+    email_verified_at = Column(DateTime(timezone=True), nullable=True)
+    # SHA-256 of the emailed verification token, and when it stops working.
+    email_verification_token = Column(String(64), nullable=True)
+    email_verification_expires = Column(DateTime(timezone=True), nullable=True)
+    # Sessions issued before this moment are no longer accepted. Set when the
+    # password is reset or the account changes hands to its verified owner.
+    tokens_valid_after = Column(DateTime(timezone=True), nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
     is_admin = Column(Boolean, default=False, nullable=False)
     created_at = Column(

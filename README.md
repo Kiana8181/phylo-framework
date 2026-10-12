@@ -148,6 +148,7 @@ MinIO is never exposed to the browser.
 - Resource budget, container limits, network layout and secret isolation on a shared server: [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md#resource-budget-and-container-limits).
 - How many jobs run at once, how threads are limited inside each method, and why a run may show "waiting for capacity": [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md#job-execution-inside-the-budget).
 - How many runs a user may start per hour, what counts, and what the wizard shows when the limit is reached: [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md#limits-on-creating-runs).
+- Sign-in protection: the self-hosted CAPTCHA, rate limits, the reverse-proxy setting they depend on, and email verification: [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md#sign-in-protection).
 - Email: SMTP settings, which runs send a notification, retries and what a mail outage does (nothing to runs): [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md#email-and-run-notifications).
 - Run time limits, what happens to a run when a method container restarts, the object store is down or a job runs out of memory, and what each error code means: [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md#when-a-run-cannot-finish).
 - Replacing the unmaintained MinIO image (investigation and recommendation, not yet applied): [docs/OBJECT-STORAGE-OPTIONS.md](./docs/OBJECT-STORAGE-OPTIONS.md).

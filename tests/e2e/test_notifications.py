@@ -14,6 +14,8 @@ from uuid import uuid4
 import httpx
 import pytest
 
+from tests.support.accounts import VERIFICATION_SUBJECT, messages_for, register_verified
+
 ROOT = Path(__file__).resolve().parents[2]
 PARAMS = json.loads((ROOT / 'tests/fixtures/scientific-params.json').read_text())
 SAMPLE = ROOT / 'apps/web/public/samples/ExampleAirr_clone_3128.tsv'
@@ -36,9 +38,7 @@ class Account:
         self.email = f'{uuid4().hex}@example.org'
 
     async def register(self, content: bytes = None, filename: str = None):
-        account = unwrap(await self.api.post('/auth/register', json={
-            'email': self.email, 'username': self.email.split('@')[0], 'password': 'e2e-password'}))
-        self.api.headers['Authorization'] = f"Bearer {account['access_token']}"
+        await register_verified(self.api, self.email, self.email.split('@')[0], 'e2e-password')
         init = unwrap(await self.api.post('/uploads/init', json={
             'original_filename': filename or SAMPLE.name, 'mime_type': 'text/tab-separated-values'}))
         uploaded = unwrap(await self.api.put(init['content_url'], content=content or SAMPLE.read_bytes()))
@@ -60,9 +60,8 @@ class Account:
 
 
 async def mail_for(address: str) -> list[dict]:
-    async with httpx.AsyncClient(base_url=MAIL, timeout=10, trust_env=False) as mail:
-        messages = (await mail.get('/messages')).json()['messages']
-    return [m for m in messages if address in m['recipients']]
+    """Run notifications sent to an address (its sign-up confirmation email is not one)."""
+    return [m for m in await messages_for(address) if not m['subject'].startswith(VERIFICATION_SUBJECT)]
 
 
 async def wait_for_mail(address: str, count: int = 1, timeout: float = 30) -> list[dict]:

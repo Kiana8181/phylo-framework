@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.auth.access import ensure_run_access
 from apps.api.auth.dependencies import get_current_user_required
+from apps.api.auth.verification import require_verified_user
 from apps.api.config import method_service_url
 from apps.api.contracts.loader import get_ui_hints
 from apps.api.database import get_db
@@ -296,7 +297,8 @@ def _limit_error(quota: run_quota.QuotaState) -> HTTPException:
 async def create_run(
     method: str = Query(..., description="Method ID (e.g., 'dowser')"),
     body: CreateRunBody = Body(default_factory=CreateRunBody),
-    current_user: User = Depends(get_current_user_required),
+    # Creating a run needs a confirmed email address (when that is required).
+    current_user: User = Depends(require_verified_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Create a new run.

@@ -1,5 +1,4 @@
-import { test, expect, type Page } from './fixtures';
-import { randomUUID } from 'node:crypto';
+import { test, expect, signup } from './fixtures';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
@@ -7,16 +6,6 @@ const api = 'http://127.0.0.1:58000';
 const root = process.cwd();   // tests run from the repository root
 const sample = readFileSync(path.join(root, 'apps/web/public/samples/ExampleAirr_clone_3128.tsv'));
 const params = JSON.parse(readFileSync(path.join(root, 'tests/fixtures/scientific-params.json'), 'utf8'));
-
-async function signup(page: Page) {
-  const tag = randomUUID().replaceAll('-', '');
-  await page.goto('/auth?mode=signup');
-  await page.getByLabel('Email', {exact: true}).fill(`${tag}@example.org`);
-  await page.getByLabel('Username', {exact: true}).fill(tag);
-  await page.getByLabel('Password', {exact: true}).fill('browser-password-123');
-  await page.getByRole('button', {name: 'Sign up', exact: true}).click();
-  await expect(page).toHaveURL(/\/dashboard/);
-}
 
 test('the hourly run limit disables new runs, shows a countdown, and lifts when a queued run is cancelled', async ({page, request}) => {
   // Load the dashboard route once first (it redirects to sign-in): the dev

@@ -40,15 +40,20 @@ async def verify_google_token(token: str) -> Optional[dict]:
                     "name": user_info.get("name"),
                     "picture": user_info.get("picture"),
                     "google_id": user_info.get("sub"),
+                    # Whether Google has itself confirmed this address.
+                    "email_verified": user_info.get("email_verified") in (True, "true"),
                 }
             return None
     except Exception:
         return None
 
 
-def get_google_oauth_url() -> str:
+def get_google_oauth_url(state: Optional[str] = None) -> str:
     """
     Get Google OAuth authorization URL.
+
+    ``state`` is returned unchanged by Google on the callback; the caller
+    issues it (security/tokens.py) and checks it when the sign-in completes.
     
     Returns:
         Google OAuth authorization URL
@@ -66,6 +71,8 @@ def get_google_oauth_url() -> str:
         "access_type": "offline",
         "prompt": "consent",
     }
+    if state:
+        params["state"] = state
     
     return f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
 

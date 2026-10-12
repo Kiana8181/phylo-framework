@@ -10,6 +10,19 @@ from apps.api.repositories.user_repository import UserRepository
 pytestmark = pytest.mark.integration
 
 
+def emailed_token(send) -> str:
+    """The token in the link of the last email handed to the (mocked) mailer:
+    the database only holds its hash, as it would for an attacker reading it."""
+    text = send.await_args.args[2]
+    return text.split('token=')[1].split()[0]
+
+
+def google_sign_in(**extra) -> dict:
+    """Request body for POST /auth/google with a state this API issued."""
+    from apps.api.security.tokens import new_oauth_state
+    return {'code': 'auth-code', 'state': new_oauth_state(), **extra}
+
+
 async def test_register_login_refresh_me(client, account):
     assert (await client.get('/auth/me')).json()['id'] == account['user']['id']
     login = await client.post('/auth/login', json={'email': 'owner@example.org', 'password': 'test-password-123'})
@@ -70,7 +83,7 @@ async def test_password_reset_single_use_and_no_enumeration(client, account, ses
     assert existing.json() == absent.json()
     send.assert_awaited_once()
     user = await UserRepository(session).get_by_email('owner@example.org')
-    body = {'token': user.password_reset_token, 'new_password': 'changed-password'}
+    body = {'token': emailed_token(send), 'new_password': 'changed-password'}
     assert (await client.post('/auth/reset-password', json=body)).status_code == 200
     assert (await client.post('/auth/reset-password', json=body)).status_code == 400
     assert (await client.post('/auth/login', json={'email': user.email, 'password': 'changed-password'})).status_code == 200
@@ -100,7 +113,8 @@ from apps.api.auth.password import (
     verify_password,
 )
 
-GOOGLE_IDENTITY = {'email': 'google-user@example.org', 'name': 'G User', 'google_id': '42', 'picture': None}
+GOOGLE_IDENTITY = {'email': 'google-user@example.org', 'name': 'G User', 'google_id': '42', 'picture': None,
+                   'email_verified': True}
 
 
 @pytest.mark.parametrize('stored_hash', ['legacy-empty', 'unusable'])
@@ -134,25 +148,26 @@ def test_verify_password_treats_bad_input_as_a_failed_match():
 async def test_google_sign_in_creates_an_account_without_a_usable_password(client, session, monkeypatch):
     from apps.api.auth import routers
     monkeypatch.setattr(routers, 'exchange_google_code', AsyncMock(return_value=GOOGLE_IDENTITY))
-    response = await client.post('/auth/google', json={'code': 'auth-code'})
+    response = await client.post('/auth/google', json=google_sign_in())
     assert response.status_code == 200, response.text
     user = await UserRepository(session).get_by_email('google-user@example.org')
     assert user.password_hash == UNUSABLE_PASSWORD_HASH
     login = await client.post('/auth/login', json={'email': user.email, 'password': ''})
     assert login.status_code == 401
     # Signing in with Google again still works and reuses the same account.
-    again = await client.post('/auth/google', json={'code': 'auth-code'})
+    again = await client.post('/auth/google', json=google_sign_in())
     assert again.json()['user']['id'] == response.json()['user']['id']
 
 
 async def test_google_account_can_set_a_password_through_reset(client, session, monkeypatch):
     from apps.api.auth import routers
     monkeypatch.setattr(routers, 'exchange_google_code', AsyncMock(return_value=GOOGLE_IDENTITY))
-    monkeypatch.setattr(routers, 'send_email', AsyncMock(return_value=True))
-    await client.post('/auth/google', json={'code': 'auth-code'})
+    send = AsyncMock(return_value=True)
+    monkeypatch.setattr(routers, 'send_email', send)
+    await client.post('/auth/google', json=google_sign_in())
     await client.post('/auth/forgot-password', json={'email': GOOGLE_IDENTITY['email']})
     user = await UserRepository(session).get_by_email(GOOGLE_IDENTITY['email'])
-    body = {'token': user.password_reset_token, 'new_password': 'chosen-password-1'}
+    body = {'token': emailed_token(send), 'new_password': 'chosen-password-1'}
     assert (await client.post('/auth/reset-password', json=body)).status_code == 200
     login = await client.post('/auth/login', json={'email': user.email, 'password': 'chosen-password-1'})
     assert login.status_code == 200
@@ -190,10 +205,11 @@ async def test_register_rejects_overlong_password(client):
 
 async def test_reset_enforces_minimum_length_and_keeps_the_token_valid(client, account, session, monkeypatch):
     from apps.api.auth import routers
-    monkeypatch.setattr(routers, 'send_email', AsyncMock(return_value=True))
+    send = AsyncMock(return_value=True)
+    monkeypatch.setattr(routers, 'send_email', send)
     await client.post('/auth/forgot-password', json={'email': 'owner@example.org'})
     user = await UserRepository(session).get_by_email('owner@example.org')
-    token = user.password_reset_token
+    token = emailed_token(send)
     weak = await client.post('/auth/reset-password', json={'token': token, 'new_password': 'short'})
     assert weak.status_code == 400
     assert 'at least 8 characters' in weak.json()['message']
@@ -258,10 +274,13 @@ async def test_password_reset_email_is_delivered_over_smtp_with_a_working_link(c
         (mail,) = sink.messages
     user = await UserRepository(session).get_by_email('owner@example.org')
     assert mail['recipients'] == ['owner@example.org'] and mail['subject'] == 'Reset your Phylo Runner password'
-    link = f'https://phylo.lab.example/auth/reset-password?token={user.password_reset_token}'
-    assert link in mail['text'] and link in mail['html']
-    # The token in the email is the one that resets the password.
+    # The token in the email is the one that resets the password; the database
+    # holds only its hash.
     token = mail['text'].split('token=')[1].split()[0]
+    link = f'https://phylo.lab.example/auth/reset-password?token={token}'
+    assert link in mail['text'] and link in mail['html']
+    from apps.api.security.tokens import hash_token
+    assert user.password_reset_token == hash_token(token) and token not in user.password_reset_token
     assert (await client.post('/auth/reset-password', json={'token': token, 'new_password': 'a-new-password-1'})).status_code == 200
 
 
@@ -304,11 +323,12 @@ async def test_the_reset_link_is_logged_for_developers_but_never_in_production(c
     monkeypatch.setenv('SMTP_HOST', '')
     with caplog.at_level(logging.WARNING, logger='phylo.api.auth'):
         await client.post('/auth/forgot-password', json={'email': 'owner@example.org'})
-    token = (await UserRepository(session).get_by_email('owner@example.org')).password_reset_token
-    assert token in caplog.text                                      # development: the only way to continue
+    from apps.api.security.tokens import hash_token
+    stored = (await UserRepository(session).get_by_email('owner@example.org')).password_reset_token
+    logged = caplog.text.split('token=')[1].split()[0]               # development: the only way to continue
+    assert hash_token(logged) == stored
     caplog.clear()
     monkeypatch.setattr(routers, 'IS_PRODUCTION', True)
     with caplog.at_level(logging.WARNING, logger='phylo.api.auth'):
         await client.post('/auth/forgot-password', json={'email': 'owner@example.org'})
-    token = (await UserRepository(session).get_by_email('owner@example.org')).password_reset_token
-    assert token not in caplog.text and 'reset link' not in caplog.text
+    assert 'token=' not in caplog.text and 'reset link' not in caplog.text

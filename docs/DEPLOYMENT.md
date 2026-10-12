@@ -480,6 +480,149 @@ What these tests do not cover: datasets larger than the samples, cgroup v1
 hosts, and an out-of-memory kill inside the R services (their handling of it is
 tested with a simulated kernel counter, not with a real kill).
 
+## Sign-in protection
+
+Four things protect the sign-in, sign-up and password-reset forms. All are on
+by default and configured in `.env`. The API logs one line at start-up saying
+which are active, and warns in production about any that are not.
+
+### CAPTCHA (self-hosted proof of work)
+
+Every submission of the three forms carries the answer to a small computing
+task. The API hands out a signed challenge (`GET /auth/challenge`); the
+visitor's browser searches for a number whose SHA-256 hash, together with the
+challenge, starts with a set number of zero bits; the API checks the answer
+with one hash computation and accepts each challenge once. No third-party
+service is involved, nothing has to be reachable from the server or from the
+visitor's network, and there is nothing to click.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `CAPTCHA_ENABLED` | `true` | `false` switches the check off |
+| `CAPTCHA_DIFFICULTY_BITS` | `18` | Work per submission; each bit doubles it |
+| `CAPTCHA_TTL_SECONDS` | `300` | How long a challenge may be used |
+
+Measured time to solve in a browser engine on a laptop: 16 bits about 30 ms,
+18 bits about 90 ms, 20 bits about 0.4 s (medians; individual challenges vary
+several-fold, and phones are several times slower).
+
+**What it does and does not do.** It makes every attempt cost computing time:
+nothing for a person, a real cost for a script making thousands of attempts.
+It does not tell a person from a program, and an attacker with fast hardware
+can pay the price. It is a cost multiplier in front of the rate limits below,
+which are what actually bounds the number of attempts.
+
+### Rate limits
+
+Counted in PostgreSQL (no extra service), so they hold across API restarts.
+Each is written `N/SECONDS`; `0` switches that one off.
+
+| Setting | Default | Limits |
+|---|---|---|
+| `AUTH_LIMIT_LOGIN_IP` | `30/900` | Sign-in attempts per client address |
+| `AUTH_LIMIT_LOGIN_ACCOUNT` | `10/900` | **Failed** sign-in attempts per account |
+| `AUTH_LIMIT_REGISTER_IP` | `10/3600` | Registrations per client address |
+| `AUTH_LIMIT_FORGOT_IP` | `10/3600` | Password-reset requests per client address |
+| `AUTH_LIMIT_FORGOT_ACCOUNT` | `3/3600` | Password-reset emails per account |
+| `AUTH_LIMIT_VERIFY_IP` | `10/3600` | Confirmation-email requests per client address |
+| `AUTH_LIMIT_VERIFY_ACCOUNT` | `3/3600` | Confirmation emails per account |
+| `AUTH_RATE_LIMITS_ENABLED` | `true` | Master switch |
+
+A request over a limit gets `429` with `Retry-After`. Things to know:
+
+- After ten failed sign-ins for an account, that account accepts no sign-in,
+  right or wrong, until the 15-minute window ends. This stops password
+  guessing; it also means someone can keep a known address locked out of
+  sign-in by failing on purpose. Password reset is not affected by it.
+- Account limits apply to any address typed in, whether or not it has an
+  account, so they reveal nothing about which addresses are registered.
+- Windows are aligned to the clock, so up to twice a limit can pass in a short
+  time across a window boundary.
+- A whole lab behind one public address shares the per-address limits; raise
+  `AUTH_LIMIT_REGISTER_IP` before a course signs up together.
+- The table stores keyed hashes, not addresses or email addresses.
+
+### The visitor's address behind the reverse proxy
+
+**Required for the per-address limits to work on a server.** Browsers reach the
+API through the reverse proxy, so the API sees the proxy's address unless told
+to trust what the proxy reports:
+
+```
+FORWARDED_ALLOW_IPS=<address or network of the reverse proxy>
+```
+
+for example the subnet of the Docker network the proxy shares with the API
+(`docker network inspect proxy_net`). Only requests coming *from* that address
+have their `X-Forwarded-For` header believed, and the proxy's own entry (the
+last one) is the one used, so a visitor cannot pass off another address by
+sending the header themselves. The proxy must set or append the header (nginx:
+`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`).
+
+Check it after deploying, from your own machine:
+
+```bash
+curl https://<your site's API>/auth/client-ip
+```
+
+It must show your public address. If it shows a private address such as
+`172.18.0.3`, the setting is missing or wrong, and all visitors share one
+per-address allowance (30 sign-in attempts per 15 minutes for everybody
+together). The API warns about an unset value at start-up in production.
+
+### Email verification
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `EMAIL_VERIFICATION` | `auto` | `auto`: required when `SMTP_HOST` is set. `required`: always. `off`: never |
+| `EMAIL_VERIFICATION_EXPIRE_HOURS` | `24` | How long a confirmation link works |
+
+With `auto` nothing changes until a mail server is configured; from then on:
+
+- Signing up answers "if this address can be registered, we have sent a
+  confirmation link to it" and does not sign in. The answer is the same whether
+  or not the address already has an account; what really happened is told to
+  the mailbox (a confirmation link, or "you already have an account").
+- Opening the link confirms the address and signs in. A link works once.
+- Until then the account can sign in and request a new link (a banner offers
+  it), but cannot upload data or create runs (`403 EMAIL_NOT_VERIFIED`) and
+  gets no run notifications.
+- Accounts that existed before this version are treated as confirmed.
+- Signing in with Google counts as confirmation, provided Google itself has
+  verified the address; a Google account with an unverified address is refused.
+- Using a password-reset link also confirms the address.
+
+If someone registers an address that is not theirs and its real owner later
+arrives, through Google or a password reset, the account passes to the owner:
+the password that was set without proof stops working and every session made
+with it ends.
+
+While verification is not required (no mail server, or `off`), sign-up works as
+before, and the sign-up form does reveal whether an address is registered.
+
+### Other changes to authentication
+
+- **Password reset and confirmation tokens are stored only as hashes.** Someone
+  who can read the database cannot use what is there to reset a password.
+  Reset links issued before the upgrade stop working; users request a new one.
+- **A password reset ends every earlier session** of the account.
+- **Google sign-in carries a `state` value** issued by this API and required
+  back, so a sign-in that was not started here cannot be completed here.
+- **Sign-in takes the same time** for an unknown address as for a wrong
+  password, and email addresses are compared without regard to letter case.
+
+Measured on the isolated test stack and in the test suite: a form submitted
+without the check was refused (`CAPTCHA_REQUIRED`), and the same answer used
+six times at once was accepted once. Twenty simultaneous failed sign-ins
+against a limit of five let exactly five through. A sign-up for an existing
+address returned the same response as one for a new address. An unconfirmed
+account was refused uploads and runs and allowed them after opening its link;
+its first link stopped working when a new one was requested. After a password
+reset, the previous session and its refresh token were refused. With
+`FORWARDED_ALLOW_IPS` set to the proxy's network, `/auth/client-ip` returned
+the forwarded visitor address, including when the visitor sent a forged header
+of their own; without it, the proxy's address.
+
 ## Email and run notifications
 
 All email leaves through one SMTP server that you name in `.env`: password
