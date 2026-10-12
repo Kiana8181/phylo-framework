@@ -1,0 +1,8 @@
+# Advisories that pip-audit must not fail on, one id per line, with the reason.
+# Every entry is explained in docs/SECURITY-AUDIT.md. Remove an entry as soon
+# as the fix can be taken.
+
+# Biopython Bio.Entrez XXE (CVE-2025-68463). ClonalTree never imports
+# Bio.Entrez (no NCBI network access); Biopython is a pinned scientific
+# dependency that is only changed together with a scientific regression run.
+PYSEC-2026-1221

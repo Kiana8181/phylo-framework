@@ -20,9 +20,13 @@ RUN apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire
 
 WORKDIR /srv
 
-COPY requirements.txt ./requirements.txt
-RUN grep -vE '^[[:space:]]*PyQt5([<>=!~].*)?$' requirements.txt > /tmp/requirements.docker.txt \
-    && pip install -r /tmp/requirements.docker.txt
+# requirements.lock pins the complete dependency set (direct + indirect), so
+# every build installs exactly the versions that were tested and audited.
+# Regenerate it with scripts/update-python-locks.sh.
+COPY requirements.txt requirements.lock ./
+RUN pip install --upgrade pip==26.2.1 setuptools==84.0.0 wheel==0.48.0 \
+    && grep -vE '^[[:space:]]*PyQt5([<>=!~].*)?$' requirements.txt > /tmp/requirements.docker.txt \
+    && pip install -r /tmp/requirements.docker.txt -c requirements.lock
 
 COPY sitecustomize.py /tmp/sitecustomize.py
 RUN python - <<'PY'

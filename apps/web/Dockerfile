@@ -3,7 +3,7 @@
 # --- Build stage ---
 # Use Debian (glibc) instead of Alpine (musl) because Next/SWC can crash
 # with SIGBUS during production builds on Alpine in some environments.
-FROM node:20-bookworm-slim AS build
+FROM node:22-bookworm-slim AS build
 WORKDIR /srv
 
 # Copy manifests first for caching
@@ -40,7 +40,18 @@ RUN npm -w @phylo/contracts run build
 RUN npm -w web run build
 
 # --- Runtime stage (no npm install here) ---
-FROM node:20-bookworm-slim AS runtime
+FROM node:22-bookworm-slim AS runtime
+# The standalone server needs only the `node` binary. Apply pending Debian
+# security updates, and remove the package managers that ship in the base image
+# (npm, corepack, yarn): they are never run here and only add attack surface
+# and scanner findings. The dev compose service builds the `build` stage
+# instead, which keeps npm.
+RUN apt-get update \
+    && apt-get -y upgrade \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+              /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
+              /usr/local/bin/yarn /usr/local/bin/yarnpkg /opt/yarn-v*
 WORKDIR /srv
 ENV NODE_ENV=production
 ENV HOSTNAME=0.0.0.0

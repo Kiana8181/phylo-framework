@@ -144,6 +144,7 @@ MinIO is never exposed to the browser.
   or `npm run storage:check:docker` (inside the API container).
 - Full clean reset (wipe DB + MinIO + staging): `bash ./scripts/reset-local.sh`.
 - Production/server guidance (volumes, backup/restore, hardening): [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md).
+- Dependency and image security audit (what was scanned, what is still open, how to re-run it): [docs/SECURITY-AUDIT.md](./docs/SECURITY-AUDIT.md).
 
 ---
 
@@ -720,6 +721,7 @@ services/
   clonaltree/ # FastAPI service (ClonalTree)     + artifact_manifest.py
 docs/
   DEPLOYMENT.md          # MinIO/server deployment, volumes, backup/restore
+  SECURITY-AUDIT.md      # Dependency/image audit results, open findings, re-run commands
 # helper scripts:
 #   run.sh
 #   scripts/dev-with-docker.sh

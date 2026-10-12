@@ -122,10 +122,17 @@ The `prod` compose profile includes `postgres`, `minio`, `minio-init`,
 ```bash
 # On your server:
 cp .env.example .env            # then replace every secret listed under "Required production secrets"
-docker compose --profile prod up -d --build
+docker compose --profile prod build --pull          # --pull picks up patched base images
+docker compose --profile prod up -d
 docker compose exec api-prod alembic upgrade head   # (also runs automatically on start)
 npm run storage:check:docker
 ```
+
+> **MinIO images:** `minio/minio` and `minio/mc` can no longer be pulled from
+> Docker Hub. A server that already has them cached keeps working; a fresh host
+> cannot download them. Do not prune images on the server (`docker image prune -a`,
+> `docker system prune -a`) until a replacement is decided. See finding 1 in
+> [SECURITY-AUDIT.md](./SECURITY-AUDIT.md).
 
 Hardening notes:
 

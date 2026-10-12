@@ -142,9 +142,12 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
+      # The dev server runs `npm`, which only the build stage carries; the
+      # production (runtime) stage ships without a package manager.
+      target: build
       args:
         NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
-    image: phylo-web:latest
+    image: phylo-web:dev
     env_file:
       - ./.env
     environment:

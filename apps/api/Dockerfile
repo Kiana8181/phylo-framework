@@ -10,9 +10,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /srv
 
-# Copy requirements early for better caching
-COPY apps/api/requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy requirements early for better caching.
+# requirements.lock pins the complete dependency set (direct + indirect), so
+# every build installs exactly the versions that were tested and audited.
+# Regenerate it with scripts/update-python-locks.sh.
+COPY apps/api/requirements.txt apps/api/requirements.lock ./
+RUN pip install --no-cache-dir --upgrade pip==26.2.1 \
+    && pip install --no-cache-dir -r requirements.txt -c requirements.lock
 
 # Copy repo
 COPY . /srv

@@ -59,8 +59,12 @@ RUN set -eux; \
 
 WORKDIR /srv/clonaltree
 
-COPY requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt
+# requirements.lock pins the complete dependency set (direct + indirect), so
+# every build installs exactly the versions that were tested and audited.
+# Regenerate it with scripts/update-python-locks.sh.
+COPY requirements.txt requirements.lock /tmp/
+RUN pip install --no-cache-dir --upgrade pip==26.2.1 setuptools==84.0.0 wheel==0.48.0 \
+    && pip install --no-cache-dir -r /tmp/requirements.txt -c /tmp/requirements.lock
 
 COPY app.py /srv/clonaltree/app.py
 COPY validators.py /srv/clonaltree/validators.py
