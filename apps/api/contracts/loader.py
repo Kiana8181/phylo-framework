@@ -134,6 +134,7 @@ _DEFAULT_SERVICE_ROUTES = {
     "jobStatus": "/jobs/{job_id}/status",
     "jobResult": "/jobs/{job_id}/result",
     "jobCancel": "/jobs/{job_id}/cancel",
+    "capacity": "/capacity",
 }
 
 

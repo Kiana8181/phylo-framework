@@ -91,6 +91,8 @@ RUN pip install --no-cache-dir --upgrade pip==26.2.1 setuptools==84.0.0 wheel==0
 
 COPY app.py /srv/clonaltree/app.py
 COPY validators.py /srv/clonaltree/validators.py
+COPY resource_limits.py /srv/clonaltree/resource_limits.py
+COPY sitecustomize.py /srv/clonaltree/sitecustomize.py
 COPY job_manager.py /srv/clonaltree/job_manager.py
 COPY job_runner.py /srv/clonaltree/job_runner.py
 COPY artifact_manifest.py /srv/clonaltree/artifact_manifest.py

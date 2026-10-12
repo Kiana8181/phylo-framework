@@ -77,6 +77,7 @@ if not out.exists() or out.stat().st_size <= 0:
 print(f"ETE smoke render OK: {out}")
 PY
 COPY app.py /srv/app.py
+COPY resource_limits.py /srv/resource_limits.py
 COPY job_manager.py /srv/job_manager.py
 COPY job_runner.py /srv/job_runner.py
 COPY artifact_manifest.py /srv/artifact_manifest.py

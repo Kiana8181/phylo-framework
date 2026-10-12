@@ -2,6 +2,8 @@
 
 A standalone process (separate from the API) that:
   - claims QUEUED runs atomically (SELECT ... FOR UPDATE SKIP LOCKED + lease),
+    but only for methods whose service reports a free job slot, so a run that
+    cannot start yet waits in the queue instead of oversubscribing a container,
   - stages/preprocesses the input,
   - submits an async job to the method service (/jobs),
   - polls the method job status (stage-based, no fake timers),
@@ -51,11 +53,38 @@ from apps.api.services.stage_map import progress_for_stage
 from apps.api.services.tree_contract import assemble_unified_tree_result
 from apps.api.services.version_info import attach_version_info
 from apps.api.storage import get_storage
+from apps.api.workers.capacity import CapacityTracker
 
 POLL_INTERVAL = float(os.getenv("WORKER_POLL_INTERVAL", "3"))
 METHOD_POLL_INTERVAL = float(os.getenv("WORKER_METHOD_POLL_INTERVAL", "10"))
 LEASE_SECONDS = int(os.getenv("WORKER_LEASE_SECONDS", "180"))
-MAX_CONCURRENT = int(os.getenv("WORKER_MAX_CONCURRENT_RUNS", "4"))
+CAPACITY_REFRESH_SECONDS = float(os.getenv("WORKER_CAPACITY_REFRESH_SECONDS", "5"))
+# Used only while no method service has reported its capacity yet.
+FALLBACK_CONCURRENT_RUNS = 1
+
+
+def configured_max_concurrent() -> Optional[int]:
+    """Operator override for how many runs this worker drives at once.
+
+    Unset or empty (the default) means: derive it from the method services, as
+    the sum of the job slots they report. The services size those slots from
+    their own CPU and memory limits, so there is no fixed number to maintain.
+    """
+    raw = (os.getenv("WORKER_MAX_CONCURRENT_RUNS") or "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def max_concurrent_runs(tracker: CapacityTracker) -> int:
+    configured = configured_max_concurrent()
+    if configured is not None:
+        return configured
+    return max(FALLBACK_CONCURRENT_RUNS, tracker.total_slots())
 
 _storage = None
 
@@ -286,10 +315,26 @@ async def _mark_cancelled(run_id: UUID, message: str = "Run cancelled") -> None:
     _log("run cancelled", run_id=run_id)
 
 
-async def process_run(run_id: UUID, worker_id: str) -> None:
+async def _release_for_capacity(
+    run_id: UUID, worker_id: str, method_id: str, reason: str, retry_after: float,
+    tracker: Optional[CapacityTracker],
+) -> None:
+    """The method service could not start the job yet: put the run back in the
+    queue (it keeps its position) and pause offers to that method briefly."""
+    if tracker is not None:
+        tracker.mark_busy(method_id, reason, retry_after)
+    async with AsyncSessionLocal() as db:
+        released = await RunRepository(db).release_for_capacity(run_id, worker_id, reason)
+    _log("run waiting for capacity", run_id=run_id, method_id=method_id, released=released, reason=reason)
+
+
+async def process_run(
+    run_id: UUID, worker_id: str, tracker: Optional[CapacityTracker] = None
+) -> None:
     """Drive a single claimed run from staging -> method job -> result."""
     workspace = None
     method_id = ""
+    reserved = False
     try:
         async with AsyncSessionLocal() as db:
             run_repo = RunRepository(db)
@@ -300,6 +345,11 @@ async def process_run(run_id: UUID, worker_id: str) -> None:
             method_id = run.method_id
             params = run.params if isinstance(run.params, dict) else {}
             method_job_id = run.method_job_id
+            # Until the job is submitted the method service cannot count it, so
+            # the tracker holds the slot for it.
+            if tracker is not None and not method_job_id:
+                tracker.reserve(method_id, run_id)
+                reserved = True
             cancel_requested = run.cancel_requested_at is not None
             input_storage_path = await _resolve_input_storage_path(run, file_repo)
 
@@ -362,12 +412,23 @@ async def process_run(run_id: UUID, worker_id: str) -> None:
                     progress=20,
                 )
 
-            method_job_id = await jobs.submit_job(
-                method_id,
-                file_path=container_path,
-                params=params,
-                run_id=str(run_id),
-            )
+            try:
+                method_job_id = await jobs.submit_job(
+                    method_id,
+                    file_path=container_path,
+                    params=params,
+                    run_id=str(run_id),
+                )
+            except jobs.MethodBusy as busy:
+                # Not a failure: the service is full (or short of memory) right
+                # now. The run goes back to the queue and is offered again.
+                await _release_for_capacity(
+                    run_id, worker_id, method_id, busy.reason, busy.retry_after_seconds, tracker
+                )
+                return
+            if tracker is not None and reserved:
+                tracker.submitted(method_id, run_id)
+                reserved = False
             async with AsyncSessionLocal() as db:
                 run_repo = RunRepository(db)
                 await run_repo.set_method_job_id(run_id, method_job_id)
@@ -377,6 +438,19 @@ async def process_run(run_id: UUID, worker_id: str) -> None:
 
     except jobs.MethodServiceUnavailable as exc:
         await _persist_error(run_id, error_message=str(exc))
+    except jobs.MethodCapacityError as exc:
+        # The service can never run this job with its current limits. Waiting
+        # would not help, so the run fails with the service's explanation.
+        message = f"The {method_id} service cannot run this job with its current resource limits: {exc}"
+        await _persist_error(
+            run_id,
+            error_message=message,
+            result_payload={
+                "ok": False,
+                "error": message,
+                "logs": [{"step": "api.worker.capacity", "ok": False, "out": str(exc)}],
+            },
+        )
     except Exception as exc:  # noqa: BLE001
         # An orchestration fault (database, storage, network), not a scientific
         # error. The run owner sees this message, so it carries a reference id
@@ -396,6 +470,8 @@ async def process_run(run_id: UUID, worker_id: str) -> None:
             },
         )
     finally:
+        if tracker is not None and reserved:
+            tracker.release(method_id, run_id)
         if workspace is not None:
             await asyncio.to_thread(cleanup_workspace, workspace, run_id)
 
@@ -481,37 +557,71 @@ async def _poll_method_job(
         await asyncio.sleep(METHOD_POLL_INTERVAL)
 
 
+async def dispatch_once(
+    worker_id: str, active: set[UUID], tracker: CapacityTracker
+) -> list[UUID]:
+    """One dispatch cycle. Claims every run that can start now and returns
+    their ids; runs whose method has no free capacity stay QUEUED."""
+    async with AsyncSessionLocal() as db:
+        run_repo = RunRepository(db)
+        # Promote every user's head-of-line first, so a slot freed since the
+        # last cycle immediately makes the next-ready runs claimable. Idempotent
+        # and cheap; the correctness backstop behind per-transition promotion.
+        await run_repo.promote_all_eligible()
+        ready_methods = await run_repo.dispatch_ready_methods()
+
+    await tracker.refresh(ready_methods)
+    eligible = tracker.eligible(ready_methods)
+    waiting = {
+        m: reason for m in ready_methods if (reason := tracker.blocked_reason(m)) is not None
+    }
+    if waiting:
+        async with AsyncSessionLocal() as db:
+            await RunRepository(db).mark_waiting_for_capacity(waiting)
+
+    claimed: list[UUID] = []
+    limit = max_concurrent_runs(tracker)
+    while len(active) + len(claimed) < limit:
+        async with AsyncSessionLocal() as db:
+            run = await RunRepository(db).claim_next_run(
+                worker_id, LEASE_SECONDS, eligible_methods=eligible
+            )
+        if run is None:
+            break
+        _log("claimed run", run_id=run.id, method_id=run.method_id)
+        claimed.append(run.id)
+        # Hold the slot until the job is submitted, and stop offering this
+        # method once its last free slot is taken.
+        if not run.method_job_id:
+            tracker.reserve(run.method_id, run.id)
+            if tracker.blocked_reason(run.method_id) is not None:
+                eligible.discard(run.method_id)
+    return claimed
+
+
 async def main() -> None:
     # Same start-up gate as the API: never process runs on weak production secrets.
     enforce_production_config()
     worker_id = f"{socket.gethostname()}:{os.getpid()}"
-    _log("starting", worker_id=worker_id, max_concurrent=MAX_CONCURRENT, lease=LEASE_SECONDS)
+    tracker = CapacityTracker(jobs.get_capacity, ttl_seconds=CAPACITY_REFRESH_SECONDS)
+    configured = configured_max_concurrent()
+    _log(
+        "starting",
+        worker_id=worker_id,
+        max_concurrent=configured if configured is not None else "auto (sum of method job slots)",
+        lease=LEASE_SECONDS,
+    )
     active: set[UUID] = set()
 
     while True:
         try:
-            # Promote every user's head-of-line first, so a slot freed since the last
-            # cycle immediately makes the next-ready runs claimable. Idempotent + cheap;
-            # this is the correctness backstop behind the per-transition promotion.
-            async with AsyncSessionLocal() as db:
-                run_repo = RunRepository(db)
-                await run_repo.promote_all_eligible()
-
-            claimed_any = False
-            while len(active) < MAX_CONCURRENT:
-                async with AsyncSessionLocal() as db:
-                    run_repo = RunRepository(db)
-                    run = await run_repo.claim_next_run(worker_id, LEASE_SECONDS)
-                if run is None:
-                    break
-                run_id = run.id
-                _log("claimed run", run_id=run_id, method_id=run.method_id)
+            claimed = await dispatch_once(worker_id, active, tracker)
+            for run_id in claimed:
                 active.add(run_id)
-                task = asyncio.create_task(process_run(run_id, worker_id))
+                task = asyncio.create_task(process_run(run_id, worker_id, tracker))
                 task.add_done_callback(lambda t, rid=run_id: active.discard(rid))
-                claimed_any = True
 
-            if not claimed_any:
+            if not claimed:
                 await asyncio.sleep(POLL_INTERVAL)
         except asyncio.CancelledError:
             break

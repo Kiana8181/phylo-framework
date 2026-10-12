@@ -19,6 +19,7 @@ from fastapi import FastAPI, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+import resource_limits
 from validators import validate_clonaltree_input
 
 load_dotenv()
@@ -54,6 +55,7 @@ _DEFAULT_ROUTES = {
     "jobStatus": "/jobs/{job_id}/status",
     "jobResult": "/jobs/{job_id}/result",
     "jobCancel": "/jobs/{job_id}/cancel",
+    "capacity": "/capacity",
 }
 ROUTES = {**_DEFAULT_ROUTES, **(_read_json(ROUTES_JSON_PATH, {}) or {})}
 STRICT_CONTRACT_ROUTES = os.environ.get("STRICT_CONTRACT_ROUTES", "true").lower() in (
@@ -122,6 +124,18 @@ def err(
 def _env(extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     env = os.environ.copy()
     env.update(DEFAULT_ENV)
+    # CPU budget of this job for every tool it starts. The pipeline sizes a
+    # process pool with multiprocessing.cpu_count() and MUSCLE picks its thread
+    # count from the host's cores; neither knows about the container's CPU
+    # limit. The thread variables cap MUSCLE and BLAS, and sitecustomize.py
+    # (found through PYTHONPATH by every Python the pipeline starts) makes
+    # cpu_count() report the budget. Inside a job this repeats what the job
+    # manager already set; for a direct /run call it applies the container's plan.
+    env.update(resource_limits.job_environment(METHOD_ID, resource_limits.job_threads(env, METHOD_ID)))
+    service_dir = str(Path(__file__).resolve().parent)
+    existing = env.get("PYTHONPATH", "")
+    if service_dir not in existing.split(os.pathsep):
+        env["PYTHONPATH"] = service_dir + (os.pathsep + existing if existing else "")
     if extra:
         env.update(extra)
     return env
@@ -1216,9 +1230,34 @@ if not STRICT_CONTRACT_ROUTES:
 
 
 # ---------- Async job execution (/jobs contract) ----------
-from job_manager import JobManager  # noqa: E402
+from job_manager import JobManager, JobRejected  # noqa: E402
 
 job_manager = JobManager(METHOD_ID)
+
+
+def _rejection_response(exc: JobRejected) -> JSONResponse:
+    """A job that was not started: 429 when waiting will help (the caller keeps
+    it queued and retries), 507 when it cannot fit in this container at all."""
+    decision = exc.admission
+    retryable = decision.code == resource_limits.BUSY
+    headers = {"Retry-After": str(decision.retry_after_seconds)} if retryable else None
+    return JSONResponse(
+        status_code=429 if retryable else 507,
+        headers=headers,
+        content={
+            "ok": False,
+            "code": decision.code,
+            "error": decision.reason,
+            "retry_after_seconds": decision.retry_after_seconds,
+            "capacity": job_manager.capacity_report(),
+        },
+    )
+
+
+@app.get(ROUTES["capacity"])
+async def capacity_endpoint():
+    """What this service may use and how much of it is free right now."""
+    return ok(job_manager.capacity_report())
 
 
 def run_job_sync(file_path, params) -> Tuple[int, Any]:
@@ -1276,6 +1315,8 @@ async def submit_job_endpoint(request: Request):
     run_id = body.get("run_id")
     try:
         job_id = job_manager.submit(file_path=file_path, params=params, run_id=run_id)
+    except JobRejected as rejected:
+        return _rejection_response(rejected)
     except Exception as e:  # noqa: BLE001
         return err(f"Failed to start job: {e}", 500)
     return ok({"ok": True, "job_id": job_id, "status": "QUEUED"})

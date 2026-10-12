@@ -11,6 +11,7 @@ root_dir <- function() {
 
 root <- root_dir()
 for (mod in c(
+  "resource_limits.R",
   "validators.R", "data_io.R", "format_clones.R", "tree_build.R",
   "dta.R", "time_evolution.R", "internal_seqs.R", "exports.R", "handlers.R"
 )) {

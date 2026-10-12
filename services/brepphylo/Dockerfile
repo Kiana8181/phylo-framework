@@ -75,6 +75,7 @@ RUN dnf -y upgrade --security --setopt=install_weak_deps=False \
 WORKDIR /srv
 COPY validators.R /srv/validators.R
 COPY plumber.R /srv/plumber.R
+COPY resource_limits.R /srv/resource_limits.R
 COPY job_manager.R /srv/job_manager.R
 COPY job_runner.R /srv/job_runner.R
 COPY artifact_manifest.R /srv/artifact_manifest.R

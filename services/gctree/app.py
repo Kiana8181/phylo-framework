@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
+import resource_limits
 from fastapi import FastAPI, Request
 from dotenv import load_dotenv
 
@@ -63,6 +64,7 @@ _DEFAULT_ROUTES = {
     "jobStatus": "/jobs/{job_id}/status",
     "jobResult": "/jobs/{job_id}/result",
     "jobCancel": "/jobs/{job_id}/cancel",
+    "capacity": "/capacity",
 }
 ROUTES = {**_DEFAULT_ROUTES, **(_read_json(ROUTES_JSON_PATH, {}) or {})}
 STRICT_CONTRACT_ROUTES = os.environ.get("STRICT_CONTRACT_ROUTES", "true").lower() in (
@@ -193,6 +195,10 @@ def validate_ranking(raw: Optional[str]) -> str:
 def _env(extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     env = os.environ.copy()
     env.update(DEFAULT_ENV)
+    # CPU budget of this job for every tool it starts (BLAS/OpenMP threads).
+    # Inside a job this repeats what the job manager already set; for a direct
+    # /run call it applies the container's plan.
+    env.update(resource_limits.job_environment(METHOD_ID, resource_limits.job_threads(env, METHOD_ID)))
     if extra:
         env.update(extra)
     try:
@@ -3123,9 +3129,34 @@ if not STRICT_CONTRACT_ROUTES:
 
 
 # ---------- Async job execution (/jobs contract) ----------
-from job_manager import JobManager  # noqa: E402
+from job_manager import JobManager, JobRejected  # noqa: E402
 
 job_manager = JobManager(METHOD_ID)
+
+
+def _rejection_response(exc: JobRejected) -> JSONResponse:
+    """A job that was not started: 429 when waiting will help (the caller keeps
+    it queued and retries), 507 when it cannot fit in this container at all."""
+    decision = exc.admission
+    retryable = decision.code == resource_limits.BUSY
+    headers = {"Retry-After": str(decision.retry_after_seconds)} if retryable else None
+    return JSONResponse(
+        status_code=429 if retryable else 507,
+        headers=headers,
+        content={
+            "ok": False,
+            "code": decision.code,
+            "error": decision.reason,
+            "retry_after_seconds": decision.retry_after_seconds,
+            "capacity": job_manager.capacity_report(),
+        },
+    )
+
+
+@app.get(ROUTES["capacity"])
+async def capacity_endpoint():
+    """What this service may use and how much of it is free right now."""
+    return ok(job_manager.capacity_report())
 
 
 def run_job_sync(file_path, params) -> Tuple[int, Any]:
@@ -3187,6 +3218,8 @@ async def submit_job_endpoint(request: Request):
     run_id = body.get("run_id")
     try:
         job_id = job_manager.submit(file_path=file_path, params=params, run_id=run_id)
+    except JobRejected as rejected:
+        return _rejection_response(rejected)
     except Exception as e:  # noqa: BLE001
         return err(f"Failed to start job: {e}", 500)
     return ok({"ok": True, "job_id": job_id, "status": "QUEUED"})

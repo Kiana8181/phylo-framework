@@ -728,7 +728,8 @@ ROUTES_JSON        <- modifyList(
     spec = "/spec", run = "/run", jobs = "/jobs",
     jobStatus = "/jobs/{job_id}/status",
     jobResult = "/jobs/{job_id}/result",
-    jobCancel = "/jobs/{job_id}/cancel"
+    jobCancel = "/jobs/{job_id}/cancel",
+    capacity = "/capacity"
   ),
   ROUTES_JSON
 )
@@ -1409,8 +1410,23 @@ function(pr) {
       error = function(e) e
     )
     if (inherits(job_id, "error")) { res$status <- 500; return(list(ok = FALSE, error = conditionMessage(job_id))) }
+    if (is.list(job_id) && isTRUE(job_id$rejected)) {
+      # Not started: 429 when waiting will help (the caller keeps the job
+      # queued and retries), 507 when it cannot fit in this container at all.
+      decision <- job_id$admission
+      retryable <- identical(decision$code, RL_BUSY)
+      res$status <- if (retryable) 429L else 507L
+      if (retryable) res$setHeader("Retry-After", as.character(decision$retry_after_seconds))
+      return(list(
+        ok = FALSE, code = decision$code, error = decision$reason,
+        retry_after_seconds = decision$retry_after_seconds,
+        capacity = job_manager_capacity(JOB_MGR)
+      ))
+    }
     list(ok = TRUE, job_id = job_id, status = "QUEUED")
   })
+  # What this service may use and how much of it is free right now.
+  pr$handle("GET", ROUTES_JSON$capacity, serializer = SER, function(req, res) job_manager_capacity(JOB_MGR))
   pr$handle("GET", to_plumber_path(ROUTES_JSON$jobStatus), serializer = SER, function(req, res, job_id) {
     st <- job_manager_status(JOB_MGR, job_id)
     if (is.null(st)) { res$status <- 404; return(list(ok = FALSE, error = "Job not found")) }

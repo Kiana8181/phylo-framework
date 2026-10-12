@@ -70,7 +70,7 @@ RUN dnf -y upgrade --security --setopt=install_weak_deps=False \
     && rm -rf /var/cache/dnf
 
 WORKDIR /srv
-COPY validators.R data_io.R format_clones.R tree_build.R dta.R time_evolution.R internal_seqs.R exports.R handlers.R plumber.R job_manager.R job_runner.R artifact_manifest.R object_storage.R /srv/
+COPY validators.R data_io.R format_clones.R tree_build.R dta.R time_evolution.R internal_seqs.R exports.R handlers.R plumber.R resource_limits.R job_manager.R job_runner.R artifact_manifest.R object_storage.R /srv/
 
 EXPOSE 8001
 

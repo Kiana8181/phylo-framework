@@ -258,3 +258,67 @@ def test_object_store_images_are_pinned_by_digest_and_mirrorable():
     # The test stack runs the very same server image as production.
     test_compose = yaml.safe_load((ROOT / "docker-compose.test.yml").read_text())
     assert test_compose["services"]["minio"]["image"] == store.split(":-", 1)[1].rstrip("}")
+
+
+# --------------------------------------------------------------------------- #
+# Resource-aware execution (job slots, thread budgets, admission)
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("name", METHODS)
+def test_methods_receive_their_execution_tunables(name):
+    env = SERVICES[name]["environment"]
+    upper = name.upper()
+    assert env["METHOD_MAX_CONCURRENT_JOBS"] == f"${{PHYLO_{upper}_MAX_JOBS:-}}"
+    assert env["METHOD_THREADS_PER_JOB"] == f"${{PHYLO_{upper}_THREADS_PER_JOB:-}}"
+    assert env["METHOD_JOB_MEMORY_MB"] == f"${{PHYLO_{upper}_JOB_MEMORY_MB:-}}"
+    assert env["METHOD_MEMORY_HEADROOM_PERCENT"] == "${PHYLO_MEMORY_HEADROOM_PERCENT:-10}"
+
+
+def test_no_fixed_worker_concurrency_is_configured():
+    """The worker derives its concurrency from the method services' job slots."""
+    text = (ROOT / "docker-compose.yml").read_text()
+    assert "WORKER_MAX_CONCURRENT_RUNS" not in text
+    worker_source = (ROOT / "apps/api/workers/run_worker.py").read_text()
+    assert 'getenv("WORKER_MAX_CONCURRENT_RUNS", "4")' not in worker_source
+
+
+def _load_resource_limits():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("rl_for_plan", ROOT / "services/gctree/resource_limits.py")
+    module = importlib.util.module_from_spec(spec)
+    import sys
+
+    sys.modules[spec.name] = module  # dataclasses need the module to be registered
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize("budget", [
+    (),                                                              # default budget
+    ("--cpus", "2.05", "--memory-mb", "6592", "--pids", "2432"),     # smallest accepted budget
+    ("--cpus", "8", "--memory-mb", "16384"),
+    ("--cpus", "8", "--memory-mb", "16384", "--mode", "pooled"),
+])
+def test_every_method_can_run_at_least_one_job_under_the_resource_plan(tmp_path, budget, monkeypatch):
+    """scripts/resource-plan.sh and the services' own capacity plan must agree:
+    the limits the script hands a container are enough for one job there, and
+    jobs x threads never exceeds the CPUs the container was given."""
+    import subprocess
+
+    rl = _load_resource_limits()
+    monkeypatch.setattr(rl, "host_cpus", lambda: 64)
+    out = subprocess.run(["sh", str(ROOT / "scripts/resource-plan.sh"), "--env-file", "/dev/null", "--env", *budget],
+                         capture_output=True, text=True, check=True, env={"PATH": "/usr/bin:/bin:/usr/local/bin"}).stdout
+    plan = dict(line.split("=", 1) for line in out.splitlines() if line.startswith("PHYLO_"))
+    for method in METHODS:
+        cpus = float(plan[f"PHYLO_CPUS_{method.upper()}"])
+        memory_mb = int(plan[f"PHYLO_MEM_{method.upper()}"].rstrip("m"))
+        root = tmp_path / method
+        root.mkdir(exist_ok=True)
+        (root / "cpu.max").write_text(f"{int(cpus * 100000)} 100000\n")
+        (root / "memory.max").write_text(f"{memory_mb * 1024 * 1024}\n")
+        capacity = rl.plan_capacity(method, {"PHYLO_CGROUP_ROOT": str(root)})
+        assert capacity.job_slots >= 1, (method, cpus, memory_mb, capacity)
+        assert capacity.job_slots * capacity.threads_per_job <= max(1, int(cpus)), (method, capacity)
+        idle = capacity.baseline_memory_mb * 1024 * 1024
+        assert rl.admit(capacity, 0, idle).accepted, method

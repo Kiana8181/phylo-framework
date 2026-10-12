@@ -43,6 +43,16 @@ describe("computeNodes", () => {
     expect(inserted?.state).toBe("active");
   });
 
+  it("shows a run waiting for method capacity on the Queued node, not as a new step", () => {
+    for (const method of ["gctree", "dowser", "brepphylo", "clonaltree", "unknown"]) {
+      const nodes = computeNodes(method, "QUEUED", "WAITING_FOR_CAPACITY");
+      expect(nodes.map((n) => n.id)).not.toContain("WAITING_FOR_CAPACITY");
+      const active = nodes.filter((n) => n.state === "active");
+      expect(active.map((n) => n.id)).toEqual(["QUEUED"]);
+      expect(nodes.filter((n) => n.state === "done")).toHaveLength(0);
+    }
+  });
+
   it("falls back to the common sequence for unknown methods", () => {
     const nodes = computeNodes("unknown-method", "QUEUED", "QUEUED");
     expect(nodes[0].id).toBe("QUEUED");

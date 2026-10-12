@@ -4,6 +4,12 @@ The shared method container stays running; each job runs in its own child
 process (job_runner.py). Job state lives on disk under
 METHOD_JOBS_DIR/<method_id>/<job_id>/ so status/result survive across requests
 and process restarts. Cancellation terminates the job's process group only.
+
+Admission control: a job is only started while a job slot is free and its
+estimated memory still fits inside the container's limit (see
+resource_limits.py). Otherwise submit() raises JobRejected and the caller keeps
+the job queued. Each job's process tree gets a thread budget through its
+environment, so jobs x threads stays inside the container's CPU allowance.
 """
 from __future__ import annotations
 
@@ -18,6 +24,8 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
+
+import resource_limits
 
 DEFAULT_JOBS_DIR = os.environ.get("METHOD_JOBS_DIR", "/runtime/method-jobs")
 CANCEL_GRACE_SECONDS = float(os.environ.get("JOB_CANCEL_GRACE_SECONDS", "5"))
@@ -47,9 +55,24 @@ def read_json(path: Path) -> Optional[Any]:
         return None
 
 
+class JobRejected(Exception):
+    """A job was not started. ``admission.code`` says whether waiting can help
+    (METHOD_BUSY) or not (INSUFFICIENT_CAPACITY)."""
+
+    def __init__(self, admission: "resource_limits.Admission"):
+        super().__init__(admission.reason)
+        self.admission = admission
+
+
 class JobManager:
     def __init__(self, method_id: str, jobs_dir: Optional[str] = None, runner_path: Optional[str] = None):
         self.method_id = method_id
+        # Limits are fixed for the lifetime of the container, so plan once.
+        self.capacity = resource_limits.plan_capacity(method_id)
+        self._lock = threading.Lock()
+        # Jobs started by this process. Keeping the Popen handles lets us ask
+        # the kernel whether a job is still running and reaps finished ones.
+        self._procs: dict[str, subprocess.Popen] = {}
         self.jobs_root = Path(jobs_dir or DEFAULT_JOBS_DIR) / method_id
         self.jobs_root.mkdir(parents=True, exist_ok=True)
         # Runner is overridable (env or arg) so the lifecycle can be tested with
@@ -70,7 +93,47 @@ class JobManager:
     def _request_path(self, job_id: str) -> Path:
         return self._state_dir(job_id) / "request.json"
 
+    def running_jobs(self) -> int:
+        """Jobs whose process is still alive (finished ones are reaped here)."""
+        for job_id in [j for j, proc in self._procs.items() if proc.poll() is not None]:
+            del self._procs[job_id]
+        return len(self._procs)
+
+    def admission(self) -> "resource_limits.Admission":
+        return resource_limits.admit(
+            self.capacity, self.running_jobs(), resource_limits.memory_in_use_bytes()
+        )
+
+    def capacity_report(self) -> dict[str, Any]:
+        """Snapshot for GET /capacity: what the service may use and what is free."""
+        with self._lock:
+            running = self.running_jobs()
+            decision = self.admission()
+        in_use = resource_limits.memory_in_use_bytes()
+        report = self.capacity.as_dict()
+        report.update(
+            {
+                "ok": True,
+                "running_jobs": running,
+                "free_slots": max(0, self.capacity.job_slots - running),
+                "memory_in_use_mb": None if in_use is None else int(in_use // (1024 * 1024)),
+                "accepting": decision.accepted,
+                "code": decision.code,
+                "reason": decision.reason,
+            }
+        )
+        return report
+
     def submit(self, *, file_path: Optional[str], params: dict, run_id: Optional[str] = None) -> str:
+        # One submit at a time: the admission check and the start of the job
+        # must not interleave with another request.
+        with self._lock:
+            decision = self.admission()
+            if not decision.accepted:
+                raise JobRejected(decision)
+            return self._start(file_path=file_path, params=params, run_id=run_id)
+
+    def _start(self, *, file_path: Optional[str], params: dict, run_id: Optional[str]) -> str:
         job_id = uuid.uuid4().hex
         state_dir = self._state_dir(job_id)
         state_dir.mkdir(parents=True, exist_ok=True)
@@ -99,12 +162,19 @@ class JobManager:
             # New session/process group so cancellation can kill nested children.
             popen_kwargs["start_new_session"] = True
 
+        # The job's whole process tree inherits its CPU budget.
+        env = os.environ.copy()
+        env.update(resource_limits.job_environment(self.method_id, self.capacity.threads_per_job))
+
         proc = subprocess.Popen(
             [sys.executable, "-u", self.runner_path, "--job-id", job_id, "--state-dir", str(state_dir)],
             cwd=str(Path(self.runner_path).parent),
+            env=env,
             **popen_kwargs,
         )
+        self._procs[job_id] = proc
         status["pid"] = proc.pid
+        status["threads"] = self.capacity.threads_per_job
         atomic_write_json(self._status_path(job_id), status)
         return job_id
 

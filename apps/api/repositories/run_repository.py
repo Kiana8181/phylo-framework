@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from typing import Optional, List
+from typing import Iterable, Optional, List
 from uuid import UUID
 from datetime import date, datetime, timezone, timedelta
 
-from sqlalchemy import String, and_, case, cast, exists, func, or_, select, update
+from sqlalchemy import String, and_, case, cast, exists, false, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -370,10 +370,73 @@ class RunRepository(BaseRepository[Run]):
         claimed = (await self.session.execute(stmt)).scalar_one_or_none()
         return claimed is not None
 
+    async def dispatch_ready_methods(self) -> List[str]:
+        """Method ids that have at least one promoted QUEUED run waiting for a worker."""
+        result = await self.session.execute(
+            select(Run.method_id)
+            .where(Run.status == RunStatus.QUEUED, Run.dispatch_seq.isnot(None))
+            .group_by(Run.method_id)
+        )
+        methods = [row[0] for row in result.all()]
+        await self.session.commit()
+        return methods
+
+    async def mark_waiting_for_capacity(self, reasons: dict[str, str]) -> int:
+        """Tell users why their dispatch-ready run has not started: its method
+        service has no free capacity. Only touches rows whose message changes,
+        so calling it every worker cycle is cheap. Returns rows updated."""
+        updated = 0
+        for method_id, reason in reasons.items():
+            stmt = (
+                update(Run)
+                .where(
+                    Run.status == RunStatus.QUEUED,
+                    Run.dispatch_seq.isnot(None),
+                    Run.method_id == method_id,
+                    or_(
+                        Run.stage.is_distinct_from("WAITING_FOR_CAPACITY"),
+                        Run.stage_message.is_distinct_from(reason),
+                    ),
+                )
+                .values(stage="WAITING_FOR_CAPACITY", stage_message=reason, message=reason)
+            )
+            updated += (await self.session.execute(stmt)).rowcount or 0
+        await self.session.commit()
+        return updated
+
+    async def release_for_capacity(self, run_id: UUID, worker_id: str, reason: str) -> bool:
+        """Hand a claimed run back to the queue because its method service could
+        not start it yet. Nothing was submitted, so nothing has executed: the run
+        keeps its dispatch position and its execution start is cleared."""
+        stmt = (
+            update(Run)
+            .where(
+                Run.id == run_id,
+                Run.worker_id == worker_id,
+                Run.status == RunStatus.RUNNING,
+                Run.method_job_id.is_(None),
+            )
+            .values(
+                status=RunStatus.QUEUED,
+                worker_id=None,
+                worker_lease_until=None,
+                started_at=None,
+                stage="WAITING_FOR_CAPACITY",
+                stage_message=reason,
+                message=reason,
+                progress=0,
+            )
+            .returning(Run.id)
+        )
+        released = (await self.session.execute(stmt)).scalar_one_or_none()
+        await self.session.commit()
+        return released is not None
+
     async def claim_next_run(
         self,
         worker_id: str,
         lease_seconds: int = 120,
+        eligible_methods: Optional[Iterable[str]] = None,
     ) -> Optional[Run]:
         """Atomically claim the next runnable run for this worker.
 
@@ -383,26 +446,32 @@ class RunRepository(BaseRepository[Run]):
         order — so the FCFS-over-per-user-sub-queues discipline holds. Uses
         SELECT ... FOR UPDATE SKIP LOCKED so two workers never claim the same run.
 
+        ``eligible_methods`` restricts new work to methods that currently have
+        free capacity: a run for any other method stays QUEUED and is skipped,
+        without blocking runs behind it for methods that can start. A run whose
+        method job was already submitted is always resumable, because it is
+        occupying its slot already. ``None`` means no restriction.
+
         Commits the claim and returns the leased Run, or None when idle.
         """
         now = utc_now()
         lease_until = now + timedelta(seconds=lease_seconds)
 
+        queued = and_(Run.status == RunStatus.QUEUED, Run.dispatch_seq.isnot(None))
+        orphaned = and_(
+            Run.status == RunStatus.RUNNING,
+            Run.worker_lease_until.isnot(None),
+            Run.worker_lease_until < now,
+        )
+        if eligible_methods is not None:
+            eligible = sorted(set(eligible_methods))
+            has_capacity = Run.method_id.in_(eligible) if eligible else false()
+            queued = and_(queued, has_capacity)
+            orphaned = and_(orphaned, or_(Run.method_job_id.isnot(None), has_capacity))
+
         candidate_stmt = (
             select(Run.id)
-            .where(
-                or_(
-                    and_(
-                        Run.status == RunStatus.QUEUED,
-                        Run.dispatch_seq.isnot(None),
-                    ),
-                    and_(
-                        Run.status == RunStatus.RUNNING,
-                        Run.worker_lease_until.isnot(None),
-                        Run.worker_lease_until < now,
-                    ),
-                )
-            )
+            .where(or_(queued, orphaned))
             .order_by(Run.dispatch_seq.asc(), Run.id.asc())
             .limit(1)
             .with_for_update(skip_locked=True)

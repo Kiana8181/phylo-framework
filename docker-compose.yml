@@ -8,6 +8,10 @@
 #     values come from scripts/resource-plan.sh, which splits ONE global budget
 #     (PHYLO_CPU_BUDGET, PHYLO_MEMORY_BUDGET_MB, PHYLO_PIDS_BUDGET). The fallback
 #     numbers below are that script's plan for its default budget.
+#   - Each method service reads its own effective CPU and memory limits and
+#     derives from them how many jobs it runs at once and how many threads one
+#     job may use. The worker only dispatches a run when its method reports a
+#     free job slot; otherwise the run waits in the queue.
 #   - Swap is disabled per container (memswap_limit = mem_limit), so a memory
 #     limit is a hard ceiling: a container that exceeds it is OOM-killed and
 #     then restarted by the restart policy.
@@ -103,6 +107,9 @@ x-method-common-env: &method_common_env
   S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
   # Seconds a cancelled job gets to stop before it is killed.
   JOB_CANCEL_GRACE_SECONDS: ${JOB_CANCEL_GRACE_SECONDS:-5}
+  # Share of the container's memory limit a method service keeps free when it
+  # decides whether another job may start (see docs/DEPLOYMENT.md).
+  METHOD_MEMORY_HEADROOM_PERCENT: ${PHYLO_MEMORY_HEADROOM_PERCENT:-10}
 
 services:
   postgres:
@@ -485,6 +492,11 @@ services:
     environment:
       <<: *method_common_env
       METHOD_DOWSER_CONTAINER_PORT: ${METHOD_DOWSER_CONTAINER_PORT:-8001}
+      # Job slots, CPU budget per job and memory estimate per job. Empty means
+      # "derive from this container's CPU and memory limits".
+      METHOD_MAX_CONCURRENT_JOBS: ${PHYLO_DOWSER_MAX_JOBS:-}
+      METHOD_THREADS_PER_JOB: ${PHYLO_DOWSER_THREADS_PER_JOB:-}
+      METHOD_JOB_MEMORY_MB: ${PHYLO_DOWSER_JOB_MEMORY_MB:-}
       DNAPARS_PATH: ${DNAPARS_PATH:-/usr/local/bin/dnapars}
       DNAML_PATH: ${DNAML_PATH:-/usr/local/bin/dnaml}
       RAXML_BIN: ${RAXML_BIN:-/usr/local/bin/raxml-ng}
@@ -531,6 +543,11 @@ services:
     environment:
       <<: *method_common_env
       METHOD_GCTREE_CONTAINER_PORT: ${METHOD_GCTREE_CONTAINER_PORT:-8002}
+      # Job slots, CPU budget per job and memory estimate per job. Empty means
+      # "derive from this container's CPU and memory limits".
+      METHOD_MAX_CONCURRENT_JOBS: ${PHYLO_GCTREE_MAX_JOBS:-}
+      METHOD_THREADS_PER_JOB: ${PHYLO_GCTREE_THREADS_PER_JOB:-}
+      METHOD_JOB_MEMORY_MB: ${PHYLO_GCTREE_JOB_MEMORY_MB:-}
       PYTHONHASHSEED: "0"
     volumes:
       - type: bind
@@ -571,6 +588,11 @@ services:
     environment:
       <<: *method_common_env
       METHOD_BREPPHYLO_CONTAINER_PORT: ${METHOD_BREPPHYLO_CONTAINER_PORT:-8003}
+      # Job slots, CPU budget per job and memory estimate per job. Empty means
+      # "derive from this container's CPU and memory limits".
+      METHOD_MAX_CONCURRENT_JOBS: ${PHYLO_BREPPHYLO_MAX_JOBS:-}
+      METHOD_THREADS_PER_JOB: ${PHYLO_BREPPHYLO_THREADS_PER_JOB:-}
+      METHOD_JOB_MEMORY_MB: ${PHYLO_BREPPHYLO_JOB_MEMORY_MB:-}
       DNAPARS_PATH: ${DNAPARS_PATH:-/usr/local/bin/dnapars}
       IGPHYML_BIN: ${IGPHYML_BIN:-/usr/local/share/igphyml/src/igphyml}
       IGPHYML_MOTIFS: ${IGPHYML_MOTIFS:-/usr/local/share/igphyml/src/motifs}
@@ -619,6 +641,11 @@ services:
     environment:
       <<: *method_common_env
       METHOD_CLONALTREE_CONTAINER_PORT: ${METHOD_CLONALTREE_CONTAINER_PORT:-8004}
+      # Job slots, CPU budget per job and memory estimate per job. Empty means
+      # "derive from this container's CPU and memory limits".
+      METHOD_MAX_CONCURRENT_JOBS: ${PHYLO_CLONALTREE_MAX_JOBS:-}
+      METHOD_THREADS_PER_JOB: ${PHYLO_CLONALTREE_THREADS_PER_JOB:-}
+      METHOD_JOB_MEMORY_MB: ${PHYLO_CLONALTREE_JOB_MEMORY_MB:-}
     volumes:
       - type: bind
         source: ./packages/contracts

@@ -115,6 +115,7 @@ services:
     ports: ["127.0.0.1:58004:8004"]
   dowser:
     image: phylo-dowser:latest
+    init: true  # as in docker-compose.yml: reaps finished job processes
     build: ./services/dowser
     platform: linux/amd64
     profiles: [full]
@@ -126,6 +127,7 @@ services:
     ports: ["127.0.0.1:58001:8001"]
   brepphylo:
     image: phylo-brepphylo:latest
+    init: true  # as in docker-compose.yml: reaps finished job processes
     build: ./services/brepphylo
     platform: linux/amd64
     profiles: [full]

@@ -7,6 +7,9 @@ from __future__ import annotations
 
 # High-level orchestration stages owned by the API/worker.
 STAGE_QUEUED = "QUEUED"
+# Queued and dispatch-ready, but the method service has no free job slot or not
+# enough free memory right now. The run keeps its place in the queue.
+STAGE_WAITING_FOR_CAPACITY = "WAITING_FOR_CAPACITY"
 STAGE_STAGING_INPUT = "STAGING_INPUT"
 STAGE_PREPROCESSING = "PREPROCESSING"
 STAGE_SUBMITTING_METHOD_JOB = "SUBMITTING_METHOD_JOB"
@@ -23,6 +26,7 @@ STAGE_ERROR = "ERROR"
 # Coarse stage -> progress percentage. Used only on stage transitions.
 STAGE_PROGRESS: dict[str, int] = {
     STAGE_QUEUED: 0,
+    STAGE_WAITING_FOR_CAPACITY: 0,
     STAGE_STAGING_INPUT: 5,
     STAGE_PREPROCESSING: 10,
     STAGE_SUBMITTING_METHOD_JOB: 20,

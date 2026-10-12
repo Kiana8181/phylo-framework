@@ -185,10 +185,9 @@ Docker was verified. Without it, use `strict`.
 - **Memory:** a limit is a hard ceiling and swap is disabled per container, so
   the limit is real. A process that exceeds it is killed by the kernel. If that
   was a job's own process, only that job is lost; if it was the service's main
-  process, the container restarts automatically. Limits do **not** make a job
-  slow down gracefully when memory runs short. Avoiding that needs admission
-  control (not starting a job that will not fit), which is a later phase. Until
-  then, size the budget so each method has headroom above the numbers above.
+  process, the container restarts automatically. Memory does **not** degrade
+  gracefully: nothing slows down, something is killed. The protection is not
+  starting a job that will not fit (next section).
 - **Processes:** new processes are refused at the limit; the service keeps
   running and recovers when the extra processes end.
 
@@ -198,7 +197,100 @@ budget: four busy processes in GCtree used 0.60 cores; a process asking for
 the other methods stayed up; ClonalTree could not go beyond 768 processes; one
 real run per method completed with no out-of-memory kill.
 
-### Restarts and logs
+## Job execution inside the budget
+
+Limits on a container say how much it may use. This section is about what runs
+inside: how many jobs at once, how many threads each, and what happens to a job
+that does not fit.
+
+### Job slots and threads per job
+
+Each method service reads its **own effective limits** when it starts (the
+container's CPU quota and memory limit, never the host's core count) and derives:
+
+- **job slots** = whole CPUs of the container, but no more jobs than its memory
+  can hold: `idle service + N × job estimate ≤ limit − headroom`;
+- **threads per job** = whole CPUs ÷ job slots, at least 1.
+
+So `jobs × threads` never exceeds the container's CPUs. `GET /capacity` on a
+method service shows the result. With the default strict plan every method
+runs one job at a time with one thread.
+
+| Setting (all optional) | Meaning |
+|---|---|
+| `PHYLO_<METHOD>_MAX_JOBS` | Jobs at once (memory still caps it). Set `1` on a container with several CPUs to give one job all of them |
+| `PHYLO_<METHOD>_THREADS_PER_JOB` | CPU budget of one job; cannot exceed the container's CPUs |
+| `PHYLO_<METHOD>_JOB_MEMORY_MB` | Estimated peak memory of one job |
+| `PHYLO_MEMORY_HEADROOM_PERCENT` | Share of each method's memory limit kept free (default 10) |
+| `WORKER_MAX_CONCURRENT_RUNS` | Runs the worker drives at once; unset = sum of all job slots |
+
+`<METHOD>` is `DOWSER`, `BREPPHYLO`, `GCTREE` or `CLONALTREE`.
+
+The memory estimates are **measured on the sample dataset** (Dowser and
+BrepPhylo: 850 MiB idle + 950 MiB per job; GCtree 160 + 256; ClonalTree
+60 + 192). A much larger dataset needs more. If your users run large datasets,
+raise `PHYLO_<METHOD>_JOB_MEMORY_MB`; an estimate that is too low lets jobs start
+that then collide. The estimate is the one number here that cannot be derived
+automatically.
+
+### Waiting instead of oversubscribing
+
+The worker asks each method service for its capacity and only dispatches a run
+when that method has a free slot. Otherwise the run stays `QUEUED`, with stage
+`WAITING_FOR_CAPACITY` and a message such as
+"Waiting for a free dowser slot (1 of 1 in use)". It keeps its place in the
+queue. A full method does not block runs for other methods.
+
+A method service also refuses a job when a slot is free but the job's memory
+does not fit (it counts measured use and the estimates of jobs that have just
+started). The run then waits with "Not enough free memory for another … job".
+
+Two cases are not a wait:
+
+- The container can never hold even one job (limit smaller than idle service +
+  one job). The run fails at once with that explanation and the setting to
+  change, instead of waiting forever.
+- The method service is unreachable. Its runs wait with "service is not
+  reachable right now" and start when it is back.
+
+There is no limit yet on how long a run may wait; that comes with job timeouts.
+
+### Parallelism inside each method
+
+What each method does with CPU cores, and how it is kept inside the job's
+thread budget `T`:
+
+| Method | Where it parallelises | Control |
+|---|---|---|
+| **Dowser** | User parameter `nproc`: one forked R process per clone (`mclapply`), and IgPhyML's `--threads`. RAxML-NG is always called with `--threads 1` | `nproc` is reduced to `T` on the server. The result records "requested" and "effective" and carries a warning when it was reduced. BLAS/OpenMP are held at 1 thread so processes × threads cannot multiply |
+| **BrepPhylo** | Sequential by design: clones one after another, IgPhyML with `--threads 1`, `dnapars` single-threaded | BLAS/OpenMP held at 1 thread; `OMP_THREAD_LIMIT = T` as a ceiling |
+| **GCtree** | No process pool. NumPy/SciPy linear algebra (OpenBLAS) started one thread per host core | BLAS/OpenMP thread variables set to `T` |
+| **ClonalTree** | A `multiprocessing` pool sized by `cpu_count()` (the host's cores) and MUSCLE, which also started one thread per host core | `cpu_count()` reports `T` to the pipeline (through `sitecustomize.py`, without changing the pinned pipeline code); MUSCLE follows `OMP_NUM_THREADS = T`; BLAS held at 1 thread inside pool workers |
+
+`OMP_THREAD_LIMIT = T` is set for every job as a hard ceiling, including for
+programs that ask for a thread count explicitly.
+
+**Effect on results.** Thread counts change speed, not output, in every case
+that was checked: all four methods produced identical trees on the regression
+dataset before and after; MUSCLE's alignment is byte-identical for 1, 2, 4 and
+8 threads; the ClonalTree pool returns results in input order whatever its
+size. One caveat for Dowser: with `nproc` above 1 its per-clone random streams
+depend on the number of workers, so a run whose `nproc` was reduced is
+reproducible with the *effective* value, which is why that value is recorded.
+
+Measured with one job each and no container limit: GCtree used 2.35 cores and
+51 processes/threads before, 1.01 and 23 after; ClonalTree 2.06 and 15 before,
+0.96 and 7 after. In a 4-CPU container MUSCLE ran faster with 4 threads (7.3 s)
+than with its default of 8 (9.1 s).
+
+Measured on a throwaway copy of the production profile, Dowser limited to
+2 CPUs and one slot: three users submitted Dowser runs with `nproc=64` at the
+same moment. Each ran with 2 workers (never 64), one at a time, the other two
+waiting with the message above; CPU peaked at 1.85 of 2.00 cores; GCtree and
+ClonalTree runs submitted at the same moment were not held up; no
+out-of-memory kill.
+
+## Restarts and logs
 
 Every long-running container has `restart: unless-stopped`: it comes back after
 a crash, an out-of-memory kill or a host reboot, but not after you stop it
