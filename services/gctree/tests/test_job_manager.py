@@ -7,6 +7,7 @@ child processes and disk state.
 Run from services/gctree:
     python -m pytest tests/test_job_manager.py
 """
+import json
 import os
 import sys
 import time
@@ -314,3 +315,232 @@ def test_capacity_report_describes_the_container(tmp_path, manager_module, monke
     assert report["memory_in_use_mb"] == 300
     assert (report["job_slots"], report["threads_per_job"], report["running_jobs"], report["free_slots"]) == (2, 1, 0, 2)
     assert report["accepting"] is True and report["code"] == "ACCEPT"
+
+
+# --------------------------------------------------------------------------- #
+# No job stays "running" for ever: time limit, lost process, restart
+# --------------------------------------------------------------------------- #
+CRASH_RUNNER = _RUNNER_PRELUDE + """
+os._exit(3)
+"""
+
+KILLED_RUNNER = _RUNNER_PRELUDE + """
+import signal
+os.kill(os.getpid(), signal.SIGKILL)
+"""
+
+# Simulates the kernel's out-of-memory killer: the counter goes up, the job dies.
+OOM_RUNNER = _RUNNER_PRELUDE + """
+import signal
+events = os.path.join(os.environ["PHYLO_CGROUP_ROOT"], "memory.events")
+with open(events, "w") as f:
+    f.write("low 0\\nhigh 0\\nmax 3\\noom 1\\noom_kill 1\\n")
+os.kill(os.getpid(), signal.SIGKILL)
+"""
+
+CHATTY_LONG_RUNNER = _RUNNER_PRELUDE + """
+with open(os.path.join(sd, "job.log"), "w") as f:
+    f.write("step 1 done\\nstep 2 started\\n")
+time.sleep(60)
+"""
+
+CHILD_ENV_RUNNER = _RUNNER_PRELUDE + """
+write("result.json", {"ok": True, "child": os.environ.get("PHYLO_JOB_CHILD"),
+                      "oom_baseline": os.environ.get("PHYLO_JOB_OOM_BASELINE")})
+st.update({"status": "DONE", "stage": "COMPLETED", "progress": 100, "ok": True})
+write("status.json", st)
+"""
+
+
+def _pid_gone(pid: int, timeout: float = 10.0) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        except PermissionError:
+            return False
+        try:
+            os.waitpid(pid, os.WNOHANG)
+        except ChildProcessError:
+            pass
+        time.sleep(0.1)
+    return False
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process-group termination is POSIX-only")
+def test_a_job_past_its_time_limit_is_stopped_and_reported_as_timeout(tmp_path, manager_module, monkeypatch):
+    _fake_cgroup(tmp_path, monkeypatch, cpus=1, memory_mb=4096, in_use_mb=100)
+    monkeypatch.setattr(manager_module, "CANCEL_GRACE_SECONDS", 0.5)
+    mgr = _manager(manager_module, tmp_path, CHATTY_LONG_RUNNER)
+    job_id = mgr.submit(file_path=None, params={}, run_id="run-slow", timeout_seconds=1)
+    running = _wait_for_status(mgr, job_id, {"RUNNING"})
+    assert running["timeout_seconds"] == 1
+    pid = running["pid"]
+
+    final = _wait_for_status(mgr, job_id, {"ERROR"}, timeout=15)
+    assert final["status"] == "ERROR" and final["error_code"] == "TIMEOUT"
+    assert "time limit of 1 second" in final["message"]
+    assert final["error"]["error_code"] == "TIMEOUT" and final["error"]["manifest_version"] == 1
+    # The job's own last output is kept with the failure.
+    tail = [e["out"] for e in final["error"]["logs"] if e["step"] == "method.job.log_tail"]
+    assert tail and "step 2 started" in tail[0]
+    assert _pid_gone(pid)                                   # really stopped
+    assert mgr.running_jobs() == 0                          # and its slot is free again
+    assert mgr.capacity_report()["accepting"] is True
+    assert mgr.result(job_id) == (None, 409)                # an ERROR job has no result to fetch
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process-group termination is POSIX-only")
+def test_a_job_that_finishes_in_time_is_not_touched_by_its_time_limit(tmp_path, manager_module, monkeypatch):
+    _fake_cgroup(tmp_path, monkeypatch, cpus=1, memory_mb=4096, in_use_mb=100)
+    mgr = _manager(manager_module, tmp_path, DONE_RUNNER)
+    job_id = mgr.submit(file_path=None, params={}, run_id="run-fast", timeout_seconds=30)
+    assert _wait_for_status(mgr, job_id, {"DONE"})["status"] == "DONE"
+    assert mgr.running_jobs() == 0
+    assert job_id not in mgr._timers                        # the timer is cancelled with the job
+
+
+def test_the_service_default_time_limit_applies_when_the_caller_sends_none(tmp_path, manager_module, monkeypatch):
+    _fake_cgroup(tmp_path, monkeypatch, cpus=1, memory_mb=4096, in_use_mb=100)
+    monkeypatch.setenv("METHOD_JOB_TIMEOUT_SECONDS", "900")
+    mgr = _manager(manager_module, tmp_path, DONE_RUNNER)
+    def limit_of(jid):
+        return json.loads((mgr.jobs_root / jid / "meta.json").read_text())["timeout_seconds"]
+
+    job_id = mgr.submit(file_path=None, params={}, run_id="run-default")
+    assert limit_of(job_id) == 900
+    assert _wait_for_status(mgr, job_id, {"DONE"})["timeout_seconds"] == 900
+    monkeypatch.setenv("METHOD_JOB_TIMEOUT_SECONDS", "junk")     # a typo means "no limit", not a crash
+    assert mgr.running_jobs() == 0
+    other = mgr.submit(file_path=None, params={}, run_id="run-junk")
+    assert limit_of(other) is None
+    assert "timeout_seconds" not in _wait_for_status(mgr, other, {"DONE"})
+
+
+@pytest.mark.parametrize("runner,how", [(CRASH_RUNNER, "exit code 3"), (KILLED_RUNNER, "signal 9")])
+@pytest.mark.skipif(os.name != "posix", reason="POSIX signals")
+def test_a_job_whose_process_dies_without_a_result_is_reported_as_failed(
+    tmp_path, manager_module, monkeypatch, runner, how
+):
+    """Before: its status said RUNNING for ever and the run never ended."""
+    _fake_cgroup(tmp_path, monkeypatch, cpus=1, memory_mb=4096, in_use_mb=100)
+    mgr = _manager(manager_module, tmp_path, runner)
+    job_id = mgr.submit(file_path=None, params={}, run_id="run-dies")
+    final = _wait_for_status(mgr, job_id, {"ERROR"})
+    assert final["status"] == "ERROR" and final["error_code"] == "JOB_PROCESS_LOST"
+    assert how in final["message"]
+    assert mgr.running_jobs() == 0
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX signals")
+def test_an_out_of_memory_kill_is_named_as_such_and_frees_the_slot(tmp_path, manager_module, monkeypatch):
+    root = _fake_cgroup(tmp_path, monkeypatch, cpus=1, memory_mb=512, in_use_mb=100,
+                        METHOD_JOB_MEMORY_MB=64, METHOD_BASELINE_MEMORY_MB=64)
+    (root / "memory.events").write_text("low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\n")
+    mgr = _manager(manager_module, tmp_path, OOM_RUNNER)
+    assert mgr.capacity.job_slots == 1
+    job_id = mgr.submit(file_path=None, params={}, run_id="run-oom")
+    final = _wait_for_status(mgr, job_id, {"ERROR"})
+    assert final["error_code"] == "OUT_OF_MEMORY"
+    assert "ran out of memory (limit 512 MiB)" in final["message"]
+    assert "raise the memory limit" in final["message"]
+    # The slot is free: the next job is accepted.
+    assert mgr.capacity_report()["free_slots"] == 1
+    assert mgr.submit(file_path=None, params={}, run_id="run-after-oom")
+
+
+def test_reaping_a_dead_job_also_records_its_failure(tmp_path, manager_module, monkeypatch):
+    """The capacity check reaps finished processes; it must not lose the fact
+    that one of them never reported a result."""
+    _fake_cgroup(tmp_path, monkeypatch, cpus=1, memory_mb=4096, in_use_mb=100)
+    mgr = _manager(manager_module, tmp_path, CRASH_RUNNER)
+    job_id = mgr.submit(file_path=None, params={}, run_id="run-reaped")
+    mgr._procs[job_id].wait(timeout=10)
+    assert mgr.capacity_report()["running_jobs"] == 0       # reaps
+    st = mgr.status(job_id)
+    assert st["status"] == "ERROR" and st["error_code"] == "JOB_PROCESS_LOST"
+
+
+def test_jobs_interrupted_by_a_service_restart_are_closed_at_start_up(tmp_path, manager_module, monkeypatch):
+    _fake_cgroup(tmp_path, monkeypatch, cpus=1, memory_mb=4096, in_use_mb=100)
+    jobs_dir = tmp_path / "jobs"
+    for job_id, status in (("interrupted", "RUNNING"), ("queued", "QUEUED"), ("finished", "DONE"),
+                           ("failed", "ERROR"), ("cancelled", "CANCELLED")):
+        state = jobs_dir / "gctree" / job_id
+        state.mkdir(parents=True)
+        # pid 1 is alive in every container: recovery must not trust a stale pid.
+        (state / "status.json").write_text(json.dumps({"job_id": job_id, "status": status, "pid": 1}))
+    restarted = manager_module.JobManager("gctree", jobs_dir=str(jobs_dir), runner_path=_write_runner(tmp_path, DONE_RUNNER))
+
+    assert restarted.recover_interrupted_jobs() == 2
+    for job_id in ("interrupted", "queued"):
+        st = restarted.status(job_id)
+        assert st["status"] == "ERROR" and st["error_code"] == "METHOD_RESTARTED"
+        assert "restarted" in st["message"] and "submit it again" in st["message"]
+    assert restarted.status("finished")["status"] == "DONE"
+    assert restarted.status("failed")["status"] == "ERROR" and "error_code" not in restarted.status("failed")
+    assert restarted.status("cancelled")["status"] == "CANCELLED"
+    assert restarted.recover_interrupted_jobs() == 0        # nothing left to close
+
+
+def test_recovery_leaves_this_services_own_running_jobs_alone(tmp_path, manager_module, monkeypatch):
+    _fake_cgroup(tmp_path, monkeypatch, cpus=1, memory_mb=4096, in_use_mb=100)
+    mgr = _manager(manager_module, tmp_path, LONG_RUNNER)
+    job_id = mgr.submit(file_path=None, params={}, run_id="run-mine")
+    _wait_for_status(mgr, job_id, {"RUNNING"})
+    assert mgr.recover_interrupted_jobs() == 0
+    assert mgr.status(job_id)["status"] == "RUNNING"
+    assert mgr.cancel(job_id)["status"] == "CANCELLED"
+
+
+def test_an_unknown_running_job_is_reported_as_interrupted_even_without_start_up_recovery(
+    tmp_path, manager_module, monkeypatch
+):
+    _fake_cgroup(tmp_path, monkeypatch, cpus=1, memory_mb=4096, in_use_mb=100)
+    state = tmp_path / "jobs" / "gctree" / "old"
+    state.mkdir(parents=True)
+    (state / "status.json").write_text(json.dumps({"job_id": "old", "status": "RUNNING", "pid": os.getpid()}))
+    mgr = _manager(manager_module, tmp_path, DONE_RUNNER)
+    assert mgr.status("old")["error_code"] == "METHOD_RESTARTED"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process-group cancel is POSIX-only")
+def test_submitting_the_same_run_again_returns_its_running_job(tmp_path, manager_module, monkeypatch):
+    """A worker that lost the answer to its submit must not start a second job."""
+    _fake_cgroup(tmp_path, monkeypatch, cpus=4, memory_mb=8192, in_use_mb=100, METHOD_MAX_CONCURRENT_JOBS=4)
+    mgr = _manager(manager_module, tmp_path, LONG_RUNNER)
+    first = mgr.submit(file_path=None, params={}, run_id="run-same")
+    assert mgr.submit(file_path=None, params={}, run_id="run-same") == first
+    assert mgr.running_jobs() == 1
+    other = mgr.submit(file_path=None, params={}, run_id="run-other")
+    assert other != first and mgr.running_jobs() == 2
+    mgr.cancel(first)
+    _pid_gone(mgr._procs[first].pid if first in mgr._procs else 0)
+    again = mgr.submit(file_path=None, params={}, run_id="run-same")     # the old job is over: a new one may start
+    assert again != first
+    for jid in (other, again):
+        mgr.cancel(jid)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process-group cancel is POSIX-only")
+def test_cancel_keeps_the_end_of_the_jobs_output(tmp_path, manager_module, monkeypatch):
+    _fake_cgroup(tmp_path, monkeypatch, cpus=1, memory_mb=4096, in_use_mb=100)
+    mgr = _manager(manager_module, tmp_path, CHATTY_LONG_RUNNER)
+    job_id = mgr.submit(file_path=None, params={}, run_id="run-cancel")
+    _wait_for_status(mgr, job_id, {"RUNNING"})
+    time.sleep(0.3)
+    final = mgr.cancel(job_id)
+    assert final["status"] == "CANCELLED" and "step 2 started" in final["log_tail"]
+    assert mgr.status(job_id)["status"] == "CANCELLED"      # a later status request does not change it
+
+
+def test_the_job_process_is_marked_as_a_job_and_knows_the_memory_kill_count(tmp_path, manager_module, monkeypatch):
+    root = _fake_cgroup(tmp_path, monkeypatch, cpus=1, memory_mb=4096, in_use_mb=100)
+    (root / "memory.events").write_text("oom 4\noom_kill 4\n")
+    mgr = _manager(manager_module, tmp_path, CHILD_ENV_RUNNER)
+    job_id = mgr.submit(file_path=None, params={}, run_id="run-child")
+    _wait_for_status(mgr, job_id, {"DONE"})
+    payload, _ = mgr.result(job_id)
+    assert payload == {"ok": True, "child": "1", "oom_baseline": "4"}

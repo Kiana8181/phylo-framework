@@ -8,6 +8,9 @@ A standalone process (separate from the API) that:
   - submits an async job to the method service (/jobs),
   - polls the method job status (stage-based, no fake timers),
   - propagates cancellation to the method service,
+  - enforces the run time limit and the queue-wait limit (workers/limits.py),
+  - fails a run whose method job was lost or whose service stays unreachable,
+  - confirms every artifact is in the object store before a run becomes DONE,
   - persists the final result/error using the existing contracts,
   - resumes orphaned runs after a lease expires.
 
@@ -16,17 +19,20 @@ Run with:  python -m apps.api.workers.run_worker
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import socket
 import sys
+import time
 import traceback
 from typing import Any, Optional
 from uuid import UUID
 
+import httpx
 from sqlalchemy.sql import func
 
 from apps.api.database.base import AsyncSessionLocal
-from apps.api.database.models import RunStatus
+from apps.api.database.models import ArtifactKind, RunStatus
 from apps.api.repositories.artifact_repository import ArtifactRepository
 from apps.api.repositories.file_repository import FileRepository
 from apps.api.repositories.run_repository import RunRepository
@@ -36,6 +42,10 @@ from apps.api.services.artifact_service import (
     ArtifactService,
     ManifestError,
     parse_manifest,
+)
+from apps.api.services.artifact_verification import (
+    ArtifactStoreUnavailable,
+    verify_artifacts,
 )
 from apps.api.preprocess.prepare_input import PREPROCESS_LOG_PREFIX
 from apps.api.security.errors import log_internal_error
@@ -52,13 +62,27 @@ from apps.api.services.run_staging import (
 from apps.api.services.stage_map import progress_for_stage
 from apps.api.services.tree_contract import assemble_unified_tree_result
 from apps.api.services.version_info import attach_version_info
-from apps.api.storage import get_storage
+from apps.api.storage import get_artifact_storage, get_storage
+from apps.api.utils.datetime_util import utc_now
+from apps.api.workers import limits
 from apps.api.workers.capacity import CapacityTracker
 
 POLL_INTERVAL = float(os.getenv("WORKER_POLL_INTERVAL", "3"))
 METHOD_POLL_INTERVAL = float(os.getenv("WORKER_METHOD_POLL_INTERVAL", "10"))
 LEASE_SECONDS = int(os.getenv("WORKER_LEASE_SECONDS", "180"))
 CAPACITY_REFRESH_SECONDS = float(os.getenv("WORKER_CAPACITY_REFRESH_SECONDS", "5"))
+# How often a finished job's result is asked for again when the fetch fails.
+RESULT_FETCH_ATTEMPTS = max(1, int(os.getenv("WORKER_RESULT_FETCH_ATTEMPTS", "3")))
+
+# Codes stored with a failed run (shown to the user as "[CODE] message").
+CODE_TIMEOUT = "TIMEOUT"
+CODE_QUEUE_TIMEOUT = "QUEUE_TIMEOUT"
+CODE_METHOD_RESTARTED = "METHOD_RESTARTED"
+CODE_METHOD_UNREACHABLE = "METHOD_UNREACHABLE"
+CODE_RESULT_UNAVAILABLE = "RESULT_UNAVAILABLE"
+CODE_ARTIFACT_UPLOAD_FAILED = "ARTIFACT_UPLOAD_FAILED"
+CODE_ARTIFACTS_MISSING = "ARTIFACTS_MISSING"
+CODE_ARTIFACT_STORE_UNAVAILABLE = "ARTIFACT_STORE_UNAVAILABLE"
 # Used only while no method service has reported its capacity yet.
 FALLBACK_CONCURRENT_RUNS = 1
 
@@ -87,6 +111,7 @@ def max_concurrent_runs(tracker: CapacityTracker) -> int:
     return max(FALLBACK_CONCURRENT_RUNS, tracker.total_slots())
 
 _storage = None
+_artifact_storage = None
 
 
 def _storage_backend():
@@ -95,6 +120,14 @@ def _storage_backend():
     if _storage is None:
         _storage = get_storage()
     return _storage
+
+
+def _artifact_storage_backend():
+    """Lazily build the artifact-bucket client used to verify uploads."""
+    global _artifact_storage
+    if _artifact_storage is None:
+        _artifact_storage = get_artifact_storage()
+    return _artifact_storage
 
 
 def _log(msg: str, **fields: Any) -> None:
@@ -160,6 +193,62 @@ def _merge_preprocess_logs(
     return merged
 
 
+async def _fail(
+    run_id: UUID,
+    code: str,
+    message: str,
+    *,
+    step: str,
+    details: Optional[dict[str, Any]] = None,
+    extra_logs: Optional[list[dict[str, Any]]] = None,
+) -> None:
+    """Fail a run for a reason the worker itself established."""
+    await _persist_error(
+        run_id,
+        error_message=message,
+        code=code,
+        details=details,
+        result_payload={
+            "ok": False,
+            "error": message,
+            "error_code": code,
+            "logs": [{"step": step, "ok": False, "out": message}, *(extra_logs or [])],
+        },
+    )
+
+
+def _reported_upload_failures(result: dict[str, Any]) -> list[str]:
+    """Names of artifacts the method service says it could not upload."""
+    failures = result.get("artifact_upload_failures")
+    if not isinstance(failures, list):
+        return []
+    names = []
+    for item in failures:
+        if isinstance(item, dict):
+            names.append(str(item.get("filename") or item.get("path") or "artifact"))
+        elif item:
+            names.append(str(item))
+    return names
+
+
+async def _keep_verified_logs(
+    run_id: UUID, artifact_rows: list[dict[str, Any]], verified_keys: set[str]
+) -> None:
+    """A failed run keeps its logs. Register only the ones known to be stored."""
+    log_rows = [
+        row for row in artifact_rows
+        if row.get("artifact_kind") == ArtifactKind.LOG and row.get("object_key") in verified_keys
+    ]
+    if not log_rows:
+        return
+    try:
+        async with AsyncSessionLocal() as db:
+            await ArtifactRepository(db).replace_for_run(run_id, log_rows)
+            await db.commit()
+    except Exception:  # noqa: BLE001 - never let log retention mask the real error
+        traceback.print_exc()
+
+
 async def _persist_done(
     run_id: UUID, method_id: str, method_job_id: str, result: dict[str, Any]
 ) -> None:
@@ -178,13 +267,30 @@ async def _persist_done(
         )
         return
 
-    # 2) Build the lightweight scientific summary + per-tree rows (no base64).
+    # 2) A method that could not store all of its output has not finished the
+    #    run, whatever status it reports.
+    failed_uploads = _reported_upload_failures(result)
+    if failed_uploads:
+        shown = ", ".join(failed_uploads[:5]) + (
+            f", and {len(failed_uploads) - 5} more" if len(failed_uploads) > 5 else ""
+        )
+        await _fail(
+            run_id,
+            CODE_ARTIFACT_UPLOAD_FAILED,
+            f"The analysis finished, but {len(failed_uploads)} result file(s) could not be "
+            f"saved to storage ({shown}). The run was not completed; please run it again.",
+            step="api.worker.artifacts",
+            details={"method_id": method_id, "files": failed_uploads},
+        )
+        return
+
+    # 3) Build the lightweight scientific summary + per-tree rows (no base64).
     unified_result, tree_rows = await asyncio.to_thread(
         assemble_unified_tree_result, method_id, result
     )
 
-    # 3) Build DB rows from the manifest. Files are already in MinIO — the
-    #    method service uploaded them directly using its scoped credentials.
+    # 4) Build DB rows from the manifest. The method service uploaded the files
+    #    itself, using its scoped credentials.
     artifact_service = ArtifactService()
     artifact_rows = artifact_service.ingest(
         run_id=run_id,
@@ -192,7 +298,37 @@ async def _persist_done(
         manifest_artifacts=manifest,
     )
 
-    # 4) Persist run summary + trees + artifact references.
+    # 5) Do not take the manifest's word for it: every declared file must be in
+    #    the object store, with the declared size, before the run is DONE.
+    try:
+        report = await verify_artifacts(artifact_rows, _artifact_storage_backend())
+    except ArtifactStoreUnavailable as exc:
+        _log("artifact verification impossible", run_id=run_id, error=repr(exc.__cause__ or exc))
+        await _fail(
+            run_id,
+            CODE_ARTIFACT_STORE_UNAVAILABLE,
+            "The analysis finished, but the result storage could not be reached to confirm "
+            "that its files were saved. The run was not completed; please run it again.",
+            step="api.worker.artifacts",
+            details={"method_id": method_id, "artifacts": len(artifact_rows)},
+        )
+        return
+    if not report.ok:
+        _log("artifacts not stored as declared", run_id=run_id, problems=report.summary())
+        await _fail(
+            run_id,
+            CODE_ARTIFACTS_MISSING,
+            f"The analysis finished, but {len(report.problems)} of {report.checked} result "
+            f"file(s) are not in storage as expected ({report.summary()}). "
+            "The run was not completed; please run it again.",
+            step="api.worker.artifacts",
+            details={"method_id": method_id, "problems": report.problems},
+        )
+        await _keep_verified_logs(run_id, artifact_rows, report.verified_keys)
+        return
+
+    # 6) Persist run summary + trees + artifact references in ONE transaction:
+    #    a reader either sees the run still running, or DONE with all of them.
     async with AsyncSessionLocal() as db:
         run_repo = RunRepository(db)
         # set_result overwrites `result` wholesale, so re-attach the
@@ -206,7 +342,7 @@ async def _persist_done(
         unified_result = attach_version_info(unified_result, method_id)
         if "version_info" not in unified_result:
             _log("version info unavailable", run_id=run_id, method_id=method_id)
-        await run_repo.set_result(run_id, unified_result, RunStatus.DONE)
+        await run_repo.set_result(run_id, unified_result, RunStatus.DONE, commit=False)
         tree_repo = RunTreeRepository(db)
         await tree_repo.replace_for_run(run_id, tree_rows)
         artifact_repo = ArtifactRepository(db)
@@ -225,17 +361,30 @@ async def _persist_error(
     *,
     error_message: str,
     result_payload: dict[str, Any] | None = None,
+    code: Optional[str] = None,
+    details: Optional[dict[str, Any]] = None,
 ) -> None:
+    """Finish a run as ERROR. With ``code`` the stored error is the structured
+    form the API already understands for staging errors, so the user sees the
+    code next to the message."""
     payload, normalized_error = normalize_failed_result_payload(
         result_payload, fallback_message=error_message
     )
+    stored_error = normalized_error
+    if code:
+        stored_error = json.dumps(
+            {"ok": False, "error": {"code": code, "message": normalized_error, "details": details or {}}},
+            ensure_ascii=True,
+            sort_keys=True,
+            default=str,
+        )
     async with AsyncSessionLocal() as db:
         run_repo = RunRepository(db)
         updated = await run_repo.update(
             run_id,
             status=RunStatus.ERROR,
             stage="ERROR",
-            error=normalized_error,
+            error=stored_error,
             message=normalized_error,
             stage_message=normalized_error,
             progress=100,
@@ -245,12 +394,10 @@ async def _persist_error(
         )
         # Free the owner's turn so their next queued run dispatches promptly.
         await run_repo.promote_next_for_user(updated.user_id if updated else None)
-    _log("run errored", run_id=run_id)
+    _log("run errored", run_id=run_id, code=code)
 
 
 async def _persist_staging_error(run_id: UUID, err: StagingError) -> None:
-    import json
-
     async with AsyncSessionLocal() as db:
         run_repo = RunRepository(db)
         updated = await run_repo.update(
@@ -328,6 +475,24 @@ async def _release_for_capacity(
     _log("run waiting for capacity", run_id=run_id, method_id=method_id, released=released, reason=reason)
 
 
+async def _keep_lease(run_id: UUID, worker_id: str) -> None:
+    """Renew this worker's lease on a run for as long as it is working on it.
+
+    Staging a large input, fetching a large result or waiting for the object
+    store can each take longer than one lease. Without renewal the run would
+    look abandoned and be picked up a second time while still in hand. If the
+    worker dies, this stops with it and the lease expires as intended.
+    """
+    interval = max(1.0, LEASE_SECONDS / 3)
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            async with AsyncSessionLocal() as db:
+                await RunRepository(db).renew_lease(run_id, worker_id, LEASE_SECONDS)
+        except Exception:  # noqa: BLE001 - a missed renewal is retried next round
+            traceback.print_exc()
+
+
 async def process_run(
     run_id: UUID, worker_id: str, tracker: Optional[CapacityTracker] = None
 ) -> None:
@@ -335,6 +500,7 @@ async def process_run(
     workspace = None
     method_id = ""
     reserved = False
+    lease_keeper = asyncio.create_task(_keep_lease(run_id, worker_id))
     try:
         async with AsyncSessionLocal() as db:
             run_repo = RunRepository(db)
@@ -345,6 +511,7 @@ async def process_run(
             method_id = run.method_id
             params = run.params if isinstance(run.params, dict) else {}
             method_job_id = run.method_job_id
+            started_at = run.started_at
             # Until the job is submitted the method service cannot count it, so
             # the tracker holds the slot for it.
             if tracker is not None and not method_job_id:
@@ -418,12 +585,26 @@ async def process_run(
                     file_path=container_path,
                     params=params,
                     run_id=str(run_id),
+                    timeout_seconds=_method_job_deadline(method_id, started_at),
                 )
             except jobs.MethodBusy as busy:
                 # Not a failure: the service is full (or short of memory) right
                 # now. The run goes back to the queue and is offered again.
                 await _release_for_capacity(
                     run_id, worker_id, method_id, busy.reason, busy.retry_after_seconds, tracker
+                )
+                return
+            except httpx.TransportError as exc:
+                # The service did not answer (restarting, or the network). The
+                # run waits in the queue; the queue-wait limit bounds how long.
+                # If the request did reach the service, submitting the same
+                # run_id again returns that job instead of starting another.
+                _log("method service unreachable at submit", run_id=run_id, method_id=method_id, error=repr(exc))
+                await _release_for_capacity(
+                    run_id, worker_id, method_id,
+                    f"The {method_id} service is not reachable right now; "
+                    "the run will start when it is back.",
+                    10, tracker,
                 )
                 return
             if tracker is not None and reserved:
@@ -470,16 +651,115 @@ async def process_run(
             },
         )
     finally:
+        lease_keeper.cancel()
         if tracker is not None and reserved:
             tracker.release(method_id, run_id)
         if workspace is not None:
             await asyncio.to_thread(cleanup_workspace, workspace, run_id)
 
 
+def _elapsed_seconds(started_at: Any) -> Optional[float]:
+    if started_at is None:
+        return None
+    return (utc_now() - started_at).total_seconds()
+
+
+def _method_job_deadline(method_id: str, started_at: Any) -> Optional[float]:
+    """Seconds the method service should allow the job before stopping it by
+    itself: what is left of the run's time limit, plus a margin so that the
+    worker is normally the one that reports the timeout."""
+    limit = limits.run_timeout_seconds(method_id)
+    if limit is None:
+        return None
+    remaining = limit - (_elapsed_seconds(started_at) or 0.0)
+    return max(1.0, remaining) + limits.method_deadline_grace_seconds()
+
+
+def _timeout_message(method_id: str, limit: float) -> str:
+    return (
+        f"The run was stopped because it exceeded the maximum run time of "
+        f"{limits.describe_duration(limit)} for {method_id}. No result was saved. "
+        "Try a smaller dataset or lighter settings, or ask the administrator to raise the limit."
+    )
+
+
+def _job_log_tail(status: Optional[jobs.JobStatus]) -> Optional[str]:
+    """The end of the job's own output, when the method service attached it to
+    the status of a job it stopped."""
+    if status is None:
+        return None
+    raw = status.raw or {}
+    tail = raw.get("log_tail")
+    if not tail and isinstance(status.error, dict):
+        for entry in status.error.get("logs") or []:
+            if isinstance(entry, dict) and entry.get("step") == "method.job.log_tail":
+                tail = entry.get("out")
+    return tail.strip() if isinstance(tail, str) and tail.strip() else None
+
+
+async def _fail_timeout(
+    run_id: UUID,
+    method_id: str,
+    limit: float,
+    *,
+    stop_confirmed: bool,
+    status: Optional[jobs.JobStatus] = None,
+) -> None:
+    # Keep the last lines the job printed: they show how far it got.
+    tail = _job_log_tail(status)
+    await _fail(
+        run_id,
+        CODE_TIMEOUT,
+        _timeout_message(method_id, limit),
+        step="api.worker.timeout",
+        details={
+            "method_id": method_id,
+            "limit_seconds": int(limit),
+            "stop_confirmed": stop_confirmed,
+        },
+        extra_logs=[{"step": "method.job.log_tail", "ok": False, "out": tail}] if tail else None,
+    )
+
+
+def _method_error_code(status: jobs.JobStatus) -> Optional[str]:
+    """Failure code a method service attached to its ERROR status, if any."""
+    raw = status.raw or {}
+    code = raw.get("error_code")
+    if not code and isinstance(status.error, dict):
+        code = status.error.get("error_code")
+    return str(code).strip() if isinstance(code, str) and code.strip() else None
+
+
+async def _fetch_result(method_id: str, method_job_id: str) -> dict[str, Any]:
+    """Fetch a finished job's result, retrying a few times on a failed request."""
+    last: Exception | None = None
+    for attempt in range(1, RESULT_FETCH_ATTEMPTS + 1):
+        try:
+            return await jobs.get_job_result(method_id, method_job_id)
+        except jobs.MethodJobNotFound:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            last = exc
+            if attempt < RESULT_FETCH_ATTEMPTS:
+                await asyncio.sleep(METHOD_POLL_INTERVAL)
+    assert last is not None
+    raise last
+
+
 async def _poll_method_job(
     run_id: UUID, method_id: str, method_job_id: str, worker_id: str
 ) -> None:
-    cancel_sent = False
+    """Follow one method job to a terminal state.
+
+    Every way out of this loop is bounded: the job finishes, is cancelled, runs
+    past its time limit, disappears from its service, or the service stays
+    unreachable for longer than allowed. No run polls for ever.
+    """
+    cancel_sent_at: Optional[float] = None      # user cancel forwarded to the service
+    timed_out_at: Optional[float] = None        # time limit exceeded, stop requested
+    timed_out_limit = 0.0
+    unreachable_since: Optional[float] = None
+
     while True:
         async with AsyncSessionLocal() as db:
             run_repo = RunRepository(db)
@@ -488,39 +768,121 @@ async def _poll_method_job(
         if run is None:
             return
 
+        now = time.monotonic()
         cancel_requested = run.cancel_requested_at is not None
-        if cancel_requested and not cancel_sent:
+        if cancel_requested and cancel_sent_at is None:
             _log("cancel requested -> cancelling method job", run_id=run_id, method_job_id=method_job_id)
             try:
                 await jobs.cancel_job(method_id, method_job_id)
             except Exception:  # noqa: BLE001
                 traceback.print_exc()
-            cancel_sent = True
+            cancel_sent_at = now
             async with AsyncSessionLocal() as db:
                 run_repo = RunRepository(db)
                 await run_repo.update_stage(run_id, "CANCELLING", message="Cancelling...")
 
+        # Time limit, measured from the persisted start so it also holds across
+        # a worker restart.
+        limit = limits.run_timeout_seconds(method_id)
+        elapsed = _elapsed_seconds(run.started_at)
+        if (
+            limit is not None
+            and elapsed is not None
+            and elapsed > limit
+            and timed_out_at is None
+            and not cancel_requested
+        ):
+            _log("run exceeded its time limit -> stopping method job",
+                 run_id=run_id, method_job_id=method_job_id, limit=int(limit), elapsed=int(elapsed))
+            try:
+                await jobs.cancel_job(method_id, method_job_id)
+            except Exception:  # noqa: BLE001
+                traceback.print_exc()
+            timed_out_at = now
+            timed_out_limit = limit
+            async with AsyncSessionLocal() as db:
+                await RunRepository(db).update_stage(
+                    run_id, None, message="Stopping: the run exceeded its maximum run time"
+                )
+
         try:
             status = await jobs.get_job_status(method_id, method_job_id)
+            unreachable_since = None
+        except jobs.MethodJobNotFound:
+            # The service is up but has no record of the job: its job state is
+            # gone (container recreated). The job cannot be followed any more.
+            if cancel_requested:
+                await _mark_cancelled(run_id, "Run cancelled")
+            elif timed_out_at is not None:
+                await _fail_timeout(run_id, method_id, timed_out_limit, stop_confirmed=True)
+            else:
+                await _fail(
+                    run_id,
+                    CODE_METHOD_RESTARTED,
+                    f"The {method_id} service was restarted while this run was in progress, "
+                    "so its work was lost. The run was not repeated automatically; please submit it again.",
+                    step="api.worker.method_job",
+                    details={"method_id": method_id, "method_job_id": method_job_id},
+                )
+            return
         except Exception as exc:  # noqa: BLE001
-            # Transient method-service hiccup; lease keeps the run ours. Retry.
-            _log("status poll failed; retrying", run_id=run_id, error=str(exc))
+            # The service did not answer. Keep the lease and retry, but only for
+            # so long: a service that stays away must not hold the run for ever.
+            if unreachable_since is None:
+                unreachable_since = now
+            waited = now - unreachable_since
+            allowed = limits.method_unreachable_seconds()
+            _log("status poll failed", run_id=run_id, error=str(exc), waited=int(waited), allowed=int(allowed))
+            if waited >= allowed:
+                if cancel_requested:
+                    await _mark_cancelled(run_id, "Run cancelled")
+                elif timed_out_at is not None:
+                    await _fail_timeout(run_id, method_id, timed_out_limit, stop_confirmed=False)
+                else:
+                    await _fail(
+                        run_id,
+                        CODE_METHOD_UNREACHABLE,
+                        f"The {method_id} service stopped responding while this run was in progress "
+                        f"and did not come back within {limits.describe_duration(allowed)}. "
+                        "The run was not repeated automatically; please submit it again.",
+                        step="api.worker.method_job",
+                        details={"method_id": method_id, "method_job_id": method_job_id,
+                                 "waited_seconds": int(waited)},
+                    )
+                return
             await asyncio.sleep(METHOD_POLL_INTERVAL)
             continue
 
         method_status = status.status
 
         if method_status == "DONE":
+            # A job that finished before a stop request took effect is a valid
+            # result; it is kept.
             async with AsyncSessionLocal() as db:
                 run_repo = RunRepository(db)
                 await run_repo.update_stage(
                     run_id, "FETCHING_RESULT", message="Fetching result", progress=95
                 )
-            result = await jobs.get_job_result(method_id, method_job_id)
+            try:
+                result = await _fetch_result(method_id, method_job_id)
+            except Exception as exc:  # noqa: BLE001
+                _log("result fetch failed", run_id=run_id, error=repr(exc))
+                await _fail(
+                    run_id,
+                    CODE_RESULT_UNAVAILABLE,
+                    f"The {method_id} service finished the analysis but its result could not be "
+                    "retrieved. The run was not completed; please run it again.",
+                    step="api.worker.method_job",
+                    details={"method_id": method_id, "method_job_id": method_job_id},
+                )
+                return
             await _persist_done(run_id, method_id, method_job_id, result)
             return
 
         if method_status == "ERROR":
+            if timed_out_at is not None:
+                await _fail_timeout(run_id, method_id, timed_out_limit, stop_confirmed=True, status=status)
+                return
             payload, err_msg = normalize_failed_result_payload(
                 status.raw or {},
                 fallback_message=status.message
@@ -531,15 +893,46 @@ async def _poll_method_job(
             # the status payload carries that manifest under status.error.
             method_result = status.error if isinstance(status.error, dict) else None
             await _ingest_failure_logs(run_id, method_id, method_result)
-            await _persist_error(run_id, error_message=err_msg, result_payload=payload)
+            # A code set by the service (its own time limit, a lost job process,
+            # an out-of-memory kill, a failed upload) is kept with the run.
+            code = _method_error_code(status)
+            await _persist_error(
+                run_id,
+                error_message=err_msg,
+                result_payload=payload,
+                code=code,
+                details={"method_id": method_id, "reported_by": "method service"} if code else None,
+            )
             return
 
         if method_status == "CANCELLED":
+            if timed_out_at is not None and not cancel_requested:
+                await _fail_timeout(run_id, method_id, timed_out_limit, stop_confirmed=True, status=status)
+            else:
+                await _mark_cancelled(run_id, "Run cancelled")
+            return
+
+        # Still in progress. A stop that was asked for must be confirmed within
+        # a bounded time; after that the run is closed regardless.
+        confirm = limits.cancel_confirm_seconds()
+        if timed_out_at is not None and now - timed_out_at >= confirm:
+            await _fail_timeout(run_id, method_id, timed_out_limit, stop_confirmed=False)
+            return
+        if cancel_sent_at is not None and now - cancel_sent_at >= confirm:
+            _log("cancel not confirmed by the method service", run_id=run_id, method_job_id=method_job_id)
             await _mark_cancelled(run_id, "Run cancelled")
             return
 
-        # In-progress: reflect the method's stage/progress/message (no fake timers).
-        if not cancel_requested:
+        if timed_out_at is not None or cancel_sent_at is not None:
+            # Still running after a stop request: ask again (the call is
+            # idempotent), in case the first one never reached the service.
+            try:
+                await jobs.cancel_job(method_id, method_job_id)
+            except Exception:  # noqa: BLE001
+                pass
+
+        # Reflect the method's stage/progress/message (no fake timers).
+        if not cancel_requested and timed_out_at is None:
             poll_stage, poll_progress = _normalize_method_poll_stage(
                 method_status,
                 status.stage,
@@ -557,6 +950,39 @@ async def _poll_method_job(
         await asyncio.sleep(METHOD_POLL_INTERVAL)
 
 
+def _queue_timeout_failure(limit: float) -> dict[str, Any]:
+    message = (
+        f"This run waited more than {limits.describe_duration(limit)} for a free slot of its "
+        "method and was stopped before it started. Nothing was executed; please submit it again later."
+    )
+    details = {"limit_seconds": int(limit)}
+    return {
+        "message": message,
+        "error": json.dumps(
+            {"ok": False, "error": {"code": CODE_QUEUE_TIMEOUT, "message": message, "details": details}},
+            ensure_ascii=True, sort_keys=True,
+        ),
+        "result": {
+            "ok": False,
+            "error": message,
+            "error_code": CODE_QUEUE_TIMEOUT,
+            "logs": [{"step": "api.worker.queue", "ok": False, "out": message}],
+        },
+    }
+
+
+async def expire_waiting_runs() -> list[UUID]:
+    """Fail runs that have waited for a slot longer than the configured limit."""
+    limit = limits.queue_wait_timeout_seconds()
+    if limit is None:
+        return []
+    async with AsyncSessionLocal() as db:
+        expired = await RunRepository(db).expire_waiting_runs(limit, **_queue_timeout_failure(limit))
+    for run_id in expired:
+        _log("run expired in queue", run_id=run_id, limit=int(limit))
+    return expired
+
+
 async def dispatch_once(
     worker_id: str, active: set[UUID], tracker: CapacityTracker
 ) -> list[UUID]:
@@ -568,7 +994,11 @@ async def dispatch_once(
         # last cycle immediately makes the next-ready runs claimable. Idempotent
         # and cheap; the correctness backstop behind per-transition promotion.
         await run_repo.promote_all_eligible()
-        ready_methods = await run_repo.dispatch_ready_methods()
+    # Runs that have waited too long for a slot end here, which also promotes
+    # their owners' next runs before this cycle looks for work.
+    await expire_waiting_runs()
+    async with AsyncSessionLocal() as db:
+        ready_methods = await RunRepository(db).dispatch_ready_methods()
 
     await tracker.refresh(ready_methods)
     eligible = tracker.eligible(ready_methods)

@@ -9,7 +9,7 @@ from urllib.parse import urljoin
 
 import aiofiles
 
-from apps.api.storage.base import StorageInterface
+from apps.api.storage.base import ObjectStat, StorageInterface
 
 
 class LocalStorage(StorageInterface):
@@ -129,6 +129,13 @@ class LocalStorage(StorageInterface):
         """Check if file exists."""
         safe_path, full_path = self._resolve_key(file_path)
         return full_path.exists()
+
+    async def stat(self, file_path: str) -> Optional[ObjectStat]:
+        """Size of a stored file; None when it is absent. No checksum is recorded."""
+        _, full_path = self._resolve_key(file_path)
+        if not full_path.is_file():
+            return None
+        return ObjectStat(size_bytes=full_path.stat().st_size)
 
     async def move(self, src_path: str, dst_path: str) -> str:
         """Rename a file within local storage (atomic on same filesystem)."""

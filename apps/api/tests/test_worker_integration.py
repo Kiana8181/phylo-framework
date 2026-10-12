@@ -14,7 +14,16 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.fixture
-async def queued(session, account, monkeypatch):
+def artifact_store(tmp_path, monkeypatch):
+    """The artifact bucket the worker verifies uploads against (on disk here)."""
+    from apps.api.storage.local_storage import LocalStorage
+    store = LocalStorage(str(tmp_path / 'artifact-bucket'))
+    monkeypatch.setattr(worker, '_artifact_storage', store)
+    return store
+
+
+@pytest.fixture
+async def queued(session, account, monkeypatch, artifact_store):
     monkeypatch.setattr(worker, 'AsyncSessionLocal', async_sessionmaker(session.bind, expire_on_commit=False))
     monkeypatch.setattr(worker, 'METHOD_POLL_INTERVAL', 0)
     repo = RunRepository(session)
@@ -38,7 +47,8 @@ async def fresh(session, run_id):
     return await RunRepository(session).get_by_id(run_id)
 
 
-async def test_worker_recovers_transient_poll_failure_persists_trees_and_artifacts(session, queued, monkeypatch):
+async def test_worker_recovers_transient_poll_failure_persists_trees_and_artifacts(session, queued, monkeypatch, artifact_store):
+    await artifact_store.upload(b'(a:1,b:2)root:0;\n\n', 'runs/test/tree.nwk')
     mock_jobs(monkeypatch, [RuntimeError('transient network failure'),
         JobStatus(True, 'job-1', 'RUNNING', stage='BUILDING_TREES', progress=50),
         JobStatus(True, 'job-1', 'DONE')], {

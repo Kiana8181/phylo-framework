@@ -136,7 +136,7 @@ class RunRepository(BaseRepository[Run]):
         stmt = (
             update(Run)
             .where(Run.id == candidate_id)
-            .values(dispatch_seq=func.nextval(DISPATCH_SEQ))
+            .values(dispatch_seq=func.nextval(DISPATCH_SEQ), dispatch_ready_at=func.now())
             .returning(Run)
         )
         run = (await self.session.execute(stmt)).scalar_one_or_none()
@@ -170,7 +170,7 @@ class RunRepository(BaseRepository[Run]):
                 Run.status == RunStatus.QUEUED,
                 Run.dispatch_seq.is_(None),
             )
-            .values(dispatch_seq=func.nextval(DISPATCH_SEQ))
+            .values(dispatch_seq=func.nextval(DISPATCH_SEQ), dispatch_ready_at=func.now())
             .returning(Run)
         )
         run = (await self.session.execute(stmt)).scalar_one_or_none()
@@ -214,12 +214,16 @@ class RunRepository(BaseRepository[Run]):
         return promoted
 
     async def _terminal_update_and_promote(
-        self, run_id: UUID, **values
+        self, run_id: UUID, *, commit: bool = True, **values
     ) -> Optional[Run]:
         """Apply a terminal status update to a run and, atomically, promote the
         owner's next queued run. The promotion runs in a SAVEPOINT so a racing
         partial-unique violation rolls back only the promotion, never the terminal
         flip (durability of the terminal state is the priority).
+
+        ``commit=False`` leaves the transaction open, so the caller can write the
+        rows that belong to the terminal state (trees, artifacts) and make all of
+        it visible to readers in one commit.
         """
         owner_id = await self.session.scalar(
             select(Run.user_id).where(Run.id == run_id)
@@ -234,7 +238,8 @@ class RunRepository(BaseRepository[Run]):
             except IntegrityError:
                 pass  # already promoted / raced; worker sweep is the backstop
 
-        await self.session.commit()
+        if commit:
+            await self.session.commit()
         return result
 
     async def get_by_user(
@@ -431,6 +436,63 @@ class RunRepository(BaseRepository[Run]):
         released = (await self.session.execute(stmt)).scalar_one_or_none()
         await self.session.commit()
         return released is not None
+
+    async def expire_waiting_runs(
+        self, max_wait_seconds: float, *, error: str, message: str, result: dict
+    ) -> List[UUID]:
+        """Fail runs that have been ready to start for longer than
+        ``max_wait_seconds`` without getting a slot. Nothing has executed for
+        them: they are QUEUED, unclaimed and have no method job.
+
+        Each expired run becomes ERROR and its owner's next run is promoted.
+        Rows a worker is claiming right now are skipped (SKIP LOCKED) and picked
+        up on a later cycle if they are still waiting. Returns the expired ids.
+        """
+        cutoff = utc_now() - timedelta(seconds=max_wait_seconds)
+        candidates = (
+            select(Run.id)
+            .where(
+                Run.status == RunStatus.QUEUED,
+                Run.dispatch_seq.isnot(None),
+                Run.method_job_id.is_(None),
+                Run.worker_lease_until.is_(None),
+                func.coalesce(Run.dispatch_ready_at, Run.created_at) < cutoff,
+            )
+            .order_by(Run.dispatch_seq.asc())
+            .with_for_update(skip_locked=True)
+        )
+        ids = [row[0] for row in (await self.session.execute(candidates)).all()]
+        if not ids:
+            await self.session.commit()
+            return []
+
+        stmt = (
+            update(Run)
+            .where(Run.id.in_(ids), Run.status == RunStatus.QUEUED)
+            .values(
+                status=RunStatus.ERROR,
+                stage="ERROR",
+                error=error,
+                message=message,
+                stage_message=message,
+                progress=100,
+                result=result,
+                finished_at=func.now(),
+                worker_lease_until=None,
+            )
+            .returning(Run.id, Run.user_id)
+        )
+        expired = (await self.session.execute(stmt)).all()
+        for _, owner_id in expired:
+            if owner_id is None:
+                continue
+            try:
+                async with self.session.begin_nested():
+                    await self._promote_next_locked(owner_id)
+            except IntegrityError:
+                pass  # raced; the worker's promotion sweep is the backstop
+        await self.session.commit()
+        return [row[0] for row in expired]
 
     async def claim_next_run(
         self,
@@ -748,10 +810,16 @@ class RunRepository(BaseRepository[Run]):
         run_id: UUID,
         result: dict,
         status: RunStatus = RunStatus.DONE,
+        *,
+        commit: bool = True,
     ) -> Optional[Run]:
-        """Set run result, mark as done, and promote the owner's next queued run."""
+        """Set run result, mark as done, and promote the owner's next queued run.
+
+        With ``commit=False`` nothing is visible to other sessions until the
+        caller commits (see _terminal_update_and_promote)."""
         return await self._terminal_update_and_promote(
             run_id,
+            commit=commit,
             result=result,
             status=status,
             stage="COMPLETED" if status == RunStatus.DONE else None,

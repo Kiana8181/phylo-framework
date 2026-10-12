@@ -128,11 +128,13 @@ def upload_artifact(
     size_bytes = p.stat().st_size
     checksum = _sha256_of(p)
 
-    extra_args: Dict[str, Any] = {}
+    # The checksum travels with the object, so the worker can compare what is
+    # stored with what the manifest declares without downloading the file.
+    extra_args: Dict[str, Any] = {"Metadata": {"sha256": checksum}}
     if content_type:
         extra_args["ContentType"] = content_type
 
-    client.upload_file(str(p), bucket, object_key, ExtraArgs=extra_args or None)
+    client.upload_file(str(p), bucket, object_key, ExtraArgs=extra_args)
 
     return {
         "object_key": object_key,

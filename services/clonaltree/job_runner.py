@@ -16,9 +16,15 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from job_manager import atomic_write_json, now_iso, read_json  # noqa: E402
+import resource_limits  # noqa: E402
+from job_manager import CODE_OUT_OF_MEMORY, atomic_write_json, now_iso, read_json  # noqa: E402
 from app import run_job_sync  # noqa: E402
-from artifact_manifest import materialize_artifacts  # noqa: E402
+from artifact_manifest import (  # noqa: E402
+    UPLOAD_FAILED_CODE,
+    mark_storage_failure,
+    materialize_artifacts,
+    storage_failure,
+)
 from object_storage import upload_artifact  # noqa: E402
 
 
@@ -66,6 +72,7 @@ def _append_log_artifact(payload: Any, run_id: str, job_id: str, log_path: Path)
         )
     except Exception as exc:  # noqa: BLE001
         print(f"[job_runner] job.log upload failed: {exc}", flush=True)
+        payload["log_upload_failed"] = True
         return payload
     payload["artifacts"].append(
         {
@@ -80,6 +87,22 @@ def _append_log_artifact(payload: Any, run_id: str, job_id: str, log_path: Path)
         }
     )
     return payload
+
+
+def _out_of_memory_during_job() -> bool:
+    """True when the kernel killed a process of this container for lack of
+    memory since this job started (the job manager passes the count at start)."""
+    baseline = (os.environ.get("PHYLO_JOB_OOM_BASELINE") or "").strip()
+    current = resource_limits.oom_kill_count()
+    return baseline.isdigit() and current is not None and current > int(baseline)
+
+
+def _out_of_memory_message(original: str) -> str:
+    return (
+        "The analysis ran out of memory and could not finish. Try a smaller dataset, or ask "
+        "the administrator to raise the memory limit of this method. "
+        f"(Reported by the method: {original})"
+    )
 
 
 def main() -> None:
@@ -129,10 +152,19 @@ def main() -> None:
         # artifact_files list with a {object_key, size_bytes, checksum_sha256,
         # ...} manifest. Nothing crosses the service -> API boundary via a
         # shared volume.
+        materialize_error = None
         try:
             payload = materialize_artifacts(payload, run_id=run_id, job_id=args.job_id)
         except Exception as exc:  # noqa: BLE001
+            materialize_error = f"{type(exc).__name__}: {exc}"
             print(f"[clonaltree.job_runner] materialize_artifacts failed: {exc}", flush=True)
+        # A successful analysis whose files are not in storage is not a
+        # finished job: report it as a failure instead of as DONE.
+        not_stored = storage_failure(payload, materialize_error) if ok_flag else None
+        if not_stored:
+            print(f"[clonaltree.job_runner] {not_stored}", flush=True)
+            payload = mark_storage_failure(payload, not_stored)
+            ok_flag = False
         payload = _append_log_artifact(payload, run_id, args.job_id, log_path)
         atomic_write_json(result_path, payload)
         if ok_flag:
@@ -152,11 +184,16 @@ def main() -> None:
             if isinstance(payload, dict) and isinstance(payload.get("error"), str):
                 err_msg = payload["error"]
             err_msg = err_msg or f"Method returned HTTP {status_code}"
+            error_code = payload.get("error_code") if isinstance(payload, dict) else None
+            if error_code != UPLOAD_FAILED_CODE and _out_of_memory_during_job():
+                err_msg = _out_of_memory_message(err_msg)
+                error_code = CODE_OUT_OF_MEMORY
             status.update(
                 {
                     "status": "ERROR",
                     "stage": "ERROR",
                     "message": err_msg,
+                    "error_code": error_code,
                     "error": payload if isinstance(payload, dict) else err_msg,
                     "progress": 100,
                     "finished_at": now_iso(),
@@ -173,11 +210,13 @@ def main() -> None:
         }
         err_payload = _append_log_artifact(err_payload, run_id, args.job_id, log_path)
         atomic_write_json(result_path, err_payload)
+        oom = isinstance(exc, MemoryError) or _out_of_memory_during_job()
         status.update(
             {
                 "status": "ERROR",
                 "stage": "ERROR",
-                "message": str(exc),
+                "message": _out_of_memory_message(str(exc)) if oom else str(exc),
+                "error_code": CODE_OUT_OF_MEMORY if oom else None,
                 "error": err_payload,
                 "progress": 100,
                 "finished_at": now_iso(),

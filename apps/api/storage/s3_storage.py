@@ -8,7 +8,7 @@ import boto3
 from botocore.exceptions import ClientError
 from botocore.config import Config
 
-from apps.api.storage.base import StorageInterface
+from apps.api.storage.base import ObjectStat, StorageInterface
 
 
 class S3Storage(StorageInterface):
@@ -186,6 +186,26 @@ class S3Storage(StorageInterface):
             return True
         except ClientError:
             return False
+
+    async def stat(self, file_path: str) -> Optional[ObjectStat]:
+        """Size and recorded checksum of an object; None only when it is absent."""
+        key = file_path.lstrip("/")
+        try:
+            head = await asyncio.to_thread(
+                self.s3_client.head_object, Bucket=self.bucket_name, Key=key
+            )
+        except ClientError as e:
+            status = (e.response.get("ResponseMetadata") or {}).get("HTTPStatusCode")
+            code = str((e.response.get("Error") or {}).get("Code") or "")
+            if status == 404 or code in {"404", "NoSuchKey", "NotFound"}:
+                return None
+            raise
+        metadata = {str(k).lower(): v for k, v in (head.get("Metadata") or {}).items()}
+        sha256 = metadata.get("sha256")
+        return ObjectStat(
+            size_bytes=int(head.get("ContentLength") or 0),
+            sha256=str(sha256).strip().lower() if sha256 else None,
+        )
 
     async def move(self, src_path: str, dst_path: str) -> str:
         """Move within S3 via copy + delete."""

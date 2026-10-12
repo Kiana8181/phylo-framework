@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from urllib.parse import urlparse
 
-from apps.api.storage.base import StorageInterface
+from apps.api.storage.base import ObjectStat, StorageInterface
 from apps.api.storage.local_storage import LocalStorage
 from apps.api.storage.minio_storage import MinIOStorage
 from apps.api.storage.s3_storage import S3Storage
@@ -103,6 +103,7 @@ def get_storage() -> StorageInterface:
 
 
 __all__ = [
+    "ObjectStat",
     "StorageInterface",
     "LocalStorage",
     "S3Storage",

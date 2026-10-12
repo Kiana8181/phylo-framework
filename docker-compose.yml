@@ -107,6 +107,9 @@ x-method-common-env: &method_common_env
   S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
   # Seconds a cancelled job gets to stop before it is killed.
   JOB_CANCEL_GRACE_SECONDS: ${JOB_CANCEL_GRACE_SECONDS:-5}
+  # Time limit for jobs that arrive without one (the worker always sends one,
+  # taken from RUN_TIMEOUT_SECONDS). Empty = none.
+  METHOD_JOB_TIMEOUT_SECONDS: ${PHYLO_METHOD_JOB_TIMEOUT_SECONDS:-}
   # Share of the container's memory limit a method service keeps free when it
   # decides whether another job may start (see docs/DEPLOYMENT.md).
   METHOD_MEMORY_HEADROOM_PERCENT: ${PHYLO_MEMORY_HEADROOM_PERCENT:-10}

@@ -160,6 +160,21 @@ def memory_in_use_bytes(env: Mapping[str, str] = os.environ) -> Optional[int]:
     return None
 
 
+def oom_kill_count(env: Mapping[str, str] = os.environ) -> Optional[int]:
+    """How many processes of this container the kernel has killed for running
+    out of memory, or None when the counter cannot be read. A job compares the
+    value before and after to tell an out-of-memory kill from other failures."""
+    root = _cgroup_root(env)
+    events = _read(root / "memory.events")
+    if events is not None:
+        return _stat_value(events, "oom_kill")
+    for base in (root / "memory", root):
+        control = _read(base / "memory.oom_control")
+        if control is not None:
+            return _stat_value(control, "oom_kill")
+    return None
+
+
 # --------------------------------------------------------------------------- #
 # Capacity plan
 # --------------------------------------------------------------------------- #

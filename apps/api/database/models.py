@@ -181,6 +181,9 @@ class Run(Base):
     # the global dispatch order. This single column is BOTH the "promoted?" marker
     # and the FCFS sort key (readiness order, independent of created_at).
     dispatch_seq = Column(BigInteger, nullable=True)
+    # When dispatch_seq was assigned, i.e. since when the run has been ready to
+    # start. Bounds how long it may wait for a free method slot.
+    dispatch_ready_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(
         DateTime(timezone=True),
         server_default=func.now(),

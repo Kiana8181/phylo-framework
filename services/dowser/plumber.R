@@ -138,6 +138,16 @@ source_job_manager <- function() {
 }
 source_job_manager()
 JOB_MGR <- job_manager_new("dowser")
+# Jobs that were running when this service last stopped can never finish: report
+# them as failed so their runs do not wait for ever. Only the service does this;
+# a job's own process (job_runner.R loads this file too) must not.
+if (!identical(Sys.getenv("PHYLO_JOB_CHILD", ""), "1")) {
+  closed <- tryCatch(job_manager_recover(JOB_MGR), error = function(e) {
+    message(sprintf("[dowser] recovery of interrupted jobs failed: %s", conditionMessage(e)))
+    0L
+  })
+  if (closed > 0L) message(sprintf("[dowser] closed %d job(s) interrupted by a restart", closed))
+}
 to_plumber_path <- function(p) gsub("\\{job_id\\}", "<job_id>", p, perl = TRUE)
 
 #* @plumber
@@ -156,7 +166,12 @@ function(pr) {
     body <- tryCatch(jsonlite::fromJSON(body_raw, simplifyVector = FALSE), error = function(e) NULL)
     if (is.null(body) || !is.list(body)) { res$status <- 400; return(list(ok = FALSE, error = "JSON body required")) }
     job_id <- tryCatch(
-      job_manager_submit(JOB_MGR, body$file_path %||% NULL, body$params %||% list(), body$run_id %||% NULL),
+      # timeout_seconds: optional time limit for this job, set by the worker
+      # from the run's limit.
+      job_manager_submit(
+        JOB_MGR, body$file_path %||% NULL, body$params %||% list(), body$run_id %||% NULL,
+        timeout_seconds = body$timeout_seconds
+      ),
       error = function(e) e
     )
     if (inherits(job_id, "error")) { res$status <- 500; return(list(ok = FALSE, error = conditionMessage(job_id))) }

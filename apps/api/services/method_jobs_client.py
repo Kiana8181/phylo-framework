@@ -36,6 +36,12 @@ class MethodBusy(Exception):
         self.retry_after_seconds = max(1, int(retry_after_seconds or 10))
 
 
+class MethodJobNotFound(Exception):
+    """The method service answered, but does not know this job (HTTP 404). Its
+    job records are gone, typically because the container was recreated, so the
+    job can no longer be followed."""
+
+
 class MethodCapacityError(Exception):
     """The method service can never run this job with its current limits (HTTP
     507). Waiting will not help; the run fails with this explanation."""
@@ -91,14 +97,23 @@ async def submit_job(
     file_path: Optional[str],
     params: dict[str, Any],
     run_id: Optional[str] = None,
+    timeout_seconds: Optional[float] = None,
 ) -> str:
-    """Submit a job and return its job_id. Returns quickly."""
+    """Submit a job and return its job_id. Returns quickly.
+
+    ``timeout_seconds`` asks the service to stop the job itself after that long,
+    as a backstop for when the worker is not there to do it. Submitting the same
+    ``run_id`` again while its job is still active returns that job's id rather
+    than starting a second one.
+    """
     base = _base_or_raise(method_id)
     routes = get_service_routes(method_id)
     url = f"{base}{routes['jobs']}"
     payload: dict[str, Any] = {"file_path": file_path, "params": params or {}}
     if run_id is not None:
         payload["run_id"] = run_id
+    if timeout_seconds is not None and timeout_seconds > 0:
+        payload["timeout_seconds"] = int(timeout_seconds)
 
     async with httpx.AsyncClient(timeout=JOB_SUBMIT_TIMEOUT, trust_env=False) as client:
         resp = await client.post(url, json=payload)
@@ -179,6 +194,8 @@ async def get_job_status(method_id: str, job_id: str) -> JobStatus:
 
     async with httpx.AsyncClient(timeout=JOB_STATUS_TIMEOUT, trust_env=False) as client:
         resp = await client.get(url)
+        if resp.status_code == 404:
+            raise MethodJobNotFound(f"The {method_id} service does not know job {job_id}.")
         resp.raise_for_status()
         data = resp.json()
 
@@ -207,6 +224,8 @@ async def get_job_result(method_id: str, job_id: str) -> dict[str, Any]:
 
     async with httpx.AsyncClient(timeout=JOB_RESULT_TIMEOUT, trust_env=False) as client:
         resp = await client.get(url)
+        if resp.status_code == 404:
+            raise MethodJobNotFound(f"The {method_id} service does not know job {job_id}.")
         resp.raise_for_status()
         return resp.json()
 

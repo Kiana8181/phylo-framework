@@ -8,7 +8,9 @@ from urllib.parse import urljoin
 from minio import Minio
 from minio.error import S3Error
 
-from apps.api.storage.base import StorageInterface
+from apps.api.storage.base import ObjectStat, StorageInterface
+
+_MISSING_OBJECT_CODES = {"NoSuchKey", "NoSuchObject", "NotFound"}
 
 
 class MinIOStorage(StorageInterface):
@@ -187,6 +189,22 @@ class MinIOStorage(StorageInterface):
             return True
         except S3Error:
             return False
+
+    async def stat(self, file_path: str) -> Optional[ObjectStat]:
+        """Size and recorded checksum of an object; None only when it is absent."""
+        key = file_path.lstrip("/")
+        try:
+            info = await asyncio.to_thread(self.client.stat_object, self.bucket_name, key)
+        except S3Error as e:
+            if e.code in _MISSING_OBJECT_CODES:
+                return None
+            raise
+        metadata = {str(k).lower(): v for k, v in dict(info.metadata or {}).items()}
+        sha256 = metadata.get("x-amz-meta-sha256")
+        return ObjectStat(
+            size_bytes=int(info.size or 0),
+            sha256=str(sha256).strip().lower() if sha256 else None,
+        )
 
     async def move(self, src_path: str, dst_path: str) -> str:
         """Move within MinIO via server-side copy + remove."""

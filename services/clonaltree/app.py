@@ -1235,6 +1235,18 @@ from job_manager import JobManager, JobRejected  # noqa: E402
 job_manager = JobManager(METHOD_ID)
 
 
+@app.on_event("startup")
+async def _recover_interrupted_jobs() -> None:
+    """Jobs that were running when this service last stopped can never finish:
+    report them as failed so their runs do not wait for ever. Runs only when
+    the web server starts, not when a job's own process imports this module."""
+    if os.environ.get("PHYLO_JOB_CHILD") == "1":
+        return
+    closed = job_manager.recover_interrupted_jobs()
+    if closed:
+        print(f"[{METHOD_ID}] closed {closed} job(s) interrupted by a restart", flush=True)
+
+
 def _rejection_response(exc: JobRejected) -> JSONResponse:
     """A job that was not started: 429 when waiting will help (the caller keeps
     it queued and retries), 507 when it cannot fit in this container at all."""
@@ -1313,8 +1325,14 @@ async def submit_job_endpoint(request: Request):
     file_path = body.get("file_path")
     params = body.get("params") or {}
     run_id = body.get("run_id")
+    # Optional time limit for this job, set by the worker from the run's limit.
+    timeout_seconds = body.get("timeout_seconds")
+    if not isinstance(timeout_seconds, (int, float)) or isinstance(timeout_seconds, bool) or timeout_seconds <= 0:
+        timeout_seconds = None
     try:
-        job_id = job_manager.submit(file_path=file_path, params=params, run_id=run_id)
+        job_id = job_manager.submit(
+            file_path=file_path, params=params, run_id=run_id, timeout_seconds=timeout_seconds
+        )
     except JobRejected as rejected:
         return _rejection_response(rejected)
     except Exception as e:  # noqa: BLE001

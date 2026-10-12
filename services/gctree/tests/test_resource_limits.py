@@ -336,3 +336,26 @@ def test_sitecustomize_makes_cpu_count_report_the_job_budget(budget, expected):
     assert reported == [want, want, want]
     if expected is None:
         assert reported[0] >= 1
+
+
+# --------------------------------------------------------------------------- #
+# Out-of-memory kill counter
+# --------------------------------------------------------------------------- #
+def test_oom_kill_count_reads_cgroup_v2_and_v1_and_reports_unknown_as_none(tmp_path):
+    v2 = tmp_path / "v2"
+    v2.mkdir()
+    (v2 / "memory.events").write_text("low 0\nhigh 0\nmax 12\noom 3\noom_kill 2\n")
+    assert rl.oom_kill_count({"PHYLO_CGROUP_ROOT": str(v2)}) == 2
+
+    v1 = tmp_path / "v1"
+    (v1 / "memory").mkdir(parents=True)
+    (v1 / "memory" / "memory.oom_control").write_text("oom_kill_disable 0\nunder_oom 0\noom_kill 5\n")
+    assert rl.oom_kill_count({"PHYLO_CGROUP_ROOT": str(v1)}) == 5
+
+    # An old kernel whose file has no oom_kill line: zero kills are known of.
+    (v1 / "memory" / "memory.oom_control").write_text("oom_kill_disable 0\nunder_oom 0\n")
+    assert rl.oom_kill_count({"PHYLO_CGROUP_ROOT": str(v1)}) == 0
+
+    empty = tmp_path / "none"
+    empty.mkdir()
+    assert rl.oom_kill_count({"PHYLO_CGROUP_ROOT": str(empty)}) is None

@@ -184,10 +184,13 @@ Docker was verified. Without it, use `strict`.
   killed. Jobs take longer; nothing fails.
 - **Memory:** a limit is a hard ceiling and swap is disabled per container, so
   the limit is real. A process that exceeds it is killed by the kernel. If that
-  was a job's own process, only that job is lost; if it was the service's main
-  process, the container restarts automatically. Memory does **not** degrade
-  gracefully: nothing slows down, something is killed. The protection is not
-  starting a job that will not fit (next section).
+  was a job's own process, only that job is lost and its run ends as
+  `ERROR [OUT_OF_MEMORY]`; if it was the service's main process, the container
+  restarts automatically and the run ends as `ERROR [METHOD_RESTARTED]`. Memory
+  does **not** degrade gracefully: nothing slows down, something is killed. The
+  protection is not starting a job that will not fit (next section); what
+  happens when one is killed anyway is described under
+  [When a run cannot finish](#when-a-run-cannot-finish).
 - **Processes:** new processes are refused at the limit; the service keeps
   running and recovers when the extra processes end.
 
@@ -253,7 +256,9 @@ Two cases are not a wait:
 - The method service is unreachable. Its runs wait with "service is not
   reachable right now" and start when it is back.
 
-There is no limit yet on how long a run may wait; that comes with job timeouts.
+Waiting is bounded: a run that has been ready to start for longer than
+`RUN_QUEUE_WAIT_TIMEOUT_SECONDS` (default 48 hours) ends as
+`ERROR [QUEUE_TIMEOUT]` without having executed, and says so.
 
 ### Parallelism inside each method
 
@@ -289,6 +294,110 @@ same moment. Each ran with 2 workers (never 64), one at a time, the other two
 waiting with the message above; CPU peaked at 1.85 of 2.00 cores; GCtree and
 ClonalTree runs submitted at the same moment were not held up; no
 out-of-memory kill.
+
+## When a run cannot finish
+
+Every run ends. It ends as `DONE` only when its result is complete and stored;
+otherwise it ends as `ERROR` with a code and a message written for the user, or
+as `CANCELLED`. No run holds a slot, or waits for one, without limit.
+
+| What happens | Run ends as | Notes |
+|---|---|---|
+| The analysis runs longer than the limit | `ERROR [TIMEOUT]` | The job and every program it started are stopped; the slot is free again |
+| The run waits too long for a free slot | `ERROR [QUEUE_TIMEOUT]` | Nothing was executed |
+| A job is killed for lack of memory | `ERROR [OUT_OF_MEMORY]` | The message tells the user to try a smaller dataset or ask for a higher limit |
+| A job's process dies for another reason | `ERROR [JOB_PROCESS_LOST]` | |
+| The method container restarts or is redeployed during a run | `ERROR [METHOD_RESTARTED]` | Only the runs that were in progress there; never re-run automatically |
+| The method service stays unreachable during a run | `ERROR [METHOD_UNREACHABLE]` | After `WORKER_METHOD_UNREACHABLE_SECONDS` (default 5 minutes) |
+| Result files could not be uploaded | `ERROR [ARTIFACT_UPLOAD_FAILED]` | Reported by the method service |
+| Result files are not in storage as declared | `ERROR [ARTIFACTS_MISSING]` | Found by the worker's own check |
+| Storage cannot be asked at completion | `ERROR [ARTIFACT_STORE_UNAVAILABLE]` | After `ARTIFACT_VERIFY_ATTEMPTS` tries |
+| A finished result cannot be fetched from the method service | `ERROR [RESULT_UNAVAILABLE]` | |
+| The user cancels | `CANCELLED` | Also when the method service is down or does not confirm |
+
+A failed run is not repeated automatically: the user decides whether to submit
+it again. After a failure the user's next queued run moves up as usual.
+
+### Time limits
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `RUN_TIMEOUT_SECONDS` | `86400` (24 h) | Longest a run may execute, counted from the moment it started. `0` = no limit |
+| `RUN_TIMEOUT_SECONDS_<METHOD>` | unset | The same for one method (`DOWSER`, `BREPPHYLO`, `GCTREE`, `CLONALTREE`) |
+| `RUN_QUEUE_WAIT_TIMEOUT_SECONDS` | `172800` (48 h) | Longest a run that is ready to start may wait for a slot. `0` = no limit |
+| `WORKER_METHOD_UNREACHABLE_SECONDS` | `300` | How long a method service may be unreachable while one of its jobs is followed |
+| `WORKER_CANCEL_CONFIRM_SECONDS` | `60` | How long the worker waits for a stop (cancel or timeout) to be confirmed |
+
+These are read by the worker from `.env`. Choose `RUN_TIMEOUT_SECONDS` for your
+largest legitimate analysis: a limit that is too low stops real work. The
+default is generous on purpose.
+
+The time limit is enforced twice. The worker stops a run that passes its limit.
+Independently, each method service stops the job itself shortly after the same
+moment (the worker hands it the remaining time when it submits the job), so the
+limit holds even while the worker is down. The start time is stored with the
+run, so a worker restart does not reset the clock.
+
+A worker restart does not lose runs either: the new worker takes over the runs
+in progress and keeps following their jobs. It does not submit them a second
+time; a method service that receives the same run again while its job is
+active returns that job.
+
+### A result counts only when it is stored
+
+Method services upload their result files to the object store themselves. A
+run becomes `DONE` only after two independent checks:
+
+1. the method service reports every file it could not upload, and a job with
+   such a file ends as a failure, not as a success;
+2. the worker asks the object store for every declared file and compares its
+   size (and the SHA-256 the uploader recorded on the object) with what the
+   method declared.
+
+Then the run's status, its trees and its file list are saved in one database
+transaction, so nothing can observe a `DONE` run whose files are not listed yet.
+
+If the object store is down when a job finishes, the run therefore ends as
+`ERROR` and the user is asked to run it again. It is never shown as completed
+with nothing to download.
+
+### Measured
+
+On the isolated test stack and on a throwaway copy of the production profile
+(default resource plan, methods uploading with the write-only storage account):
+
+- **Object store unreachable while a job runs**, each of the four methods: the
+  run ended as `ERROR [ARTIFACT_UPLOAD_FAILED]` naming the files; once the store
+  was back, the same user's next run completed with all its files.
+- **Files not where the worker looks for them:** `ERROR [ARTIFACTS_MISSING]`.
+- **Run limit shorter than the analysis** (Dowser, GCtree): `ERROR [TIMEOUT]`
+  within a second of the limit, no job process left in the container, the slot
+  free; a ClonalTree run without a short limit was unaffected.
+- **Worker stopped right after submitting:** the method service stopped the job
+  by itself at its deadline; when the worker returned, the run ended as
+  `ERROR [TIMEOUT]`.
+- **Dowser's service process killed during a run** (production profile, nobody
+  intervening): the container restarted by its restart policy, the run ended
+  as `ERROR [METHOD_RESTARTED]` 17 seconds later, the next run completed.
+- **Method container recreated during a run:** `ERROR [METHOD_RESTARTED]`,
+  nothing resubmitted. **Left down:** `ERROR [METHOD_UNREACHABLE]` after the
+  allowed time, while a new run for that method waited and later completed.
+- **Worker restarted during a run:** the run completed; exactly one job had
+  been started for it.
+- **A ClonalTree job that needed more memory than its container had**
+  (limit lowered to 90 MiB for the test): the kernel killed the job, the run
+  ended as `ERROR [OUT_OF_MEMORY]`, the container stayed up and accepted the
+  next job. With the limit lowered further the kernel killed the service
+  itself instead; that is the `METHOD_RESTARTED` case above.
+- **Run waiting for a method that was down** with a 12-second waiting limit:
+  `ERROR [QUEUE_TIMEOUT]` after 12 seconds, never started; the user's next run
+  for another method completed.
+- **User cancel** during a Dowser, BrepPhylo and GCtree job: `CANCELLED`, no job
+  process left. (ClonalTree's sample job finishes before a cancel can land.)
+
+What these tests do not cover: datasets larger than the samples, cgroup v1
+hosts, and an out-of-memory kill inside the R services (their handling of it is
+tested with a simulated kernel counter, not with a real kill).
 
 ## Restarts and logs
 

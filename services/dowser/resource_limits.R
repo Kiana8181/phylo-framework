@@ -158,6 +158,20 @@ rl_memory_in_use_bytes <- function() {
   NA_real_
 }
 
+# How many processes of this container the kernel has killed for running out of
+# memory; NA when the counter cannot be read. A job compares the value before
+# and after to tell an out-of-memory kill from other failures.
+rl_oom_kill_count <- function() {
+  root <- .rl_root()
+  events <- .rl_read(file.path(root, "memory.events"))
+  if (!is.null(events)) return(.rl_stat_value(events, "oom_kill"))
+  for (base in c(file.path(root, "memory"), root)) {
+    control <- .rl_read(file.path(base, "memory.oom_control"))
+    if (!is.null(control)) return(.rl_stat_value(control, "oom_kill"))
+  }
+  NA_real_
+}
+
 # ---------------------------------------------------------------------------
 # Capacity plan
 # ---------------------------------------------------------------------------

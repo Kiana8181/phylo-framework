@@ -147,6 +147,7 @@ MinIO is never exposed to the browser.
 - Dependency and image security audit (what was scanned, what is still open, how to re-run it): [docs/SECURITY-AUDIT.md](./docs/SECURITY-AUDIT.md).
 - Resource budget, container limits, network layout and secret isolation on a shared server: [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md#resource-budget-and-container-limits).
 - How many jobs run at once, how threads are limited inside each method, and why a run may show "waiting for capacity": [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md#job-execution-inside-the-budget).
+- Run time limits, what happens to a run when a method container restarts, the object store is down or a job runs out of memory, and what each error code means: [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md#when-a-run-cannot-finish).
 - Replacing the unmaintained MinIO image (investigation and recommendation, not yet applied): [docs/OBJECT-STORAGE-OPTIONS.md](./docs/OBJECT-STORAGE-OPTIONS.md).
 
 ---

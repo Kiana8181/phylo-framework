@@ -322,3 +322,72 @@ def test_every_method_can_run_at_least_one_job_under_the_resource_plan(tmp_path,
         assert capacity.job_slots * capacity.threads_per_job <= max(1, int(cpus)), (method, capacity)
         idle = capacity.baseline_memory_mb * 1024 * 1024
         assert rl.admit(capacity, 0, idle).accepted, method
+
+
+# --------------------------------------------------------------------------- #
+# Run limits and recovery (timeouts, lost jobs, artifact persistence)
+# --------------------------------------------------------------------------- #
+SHARED_SERVICE_FILES = {
+    ("gctree", "clonaltree"): ["job_manager.py", "resource_limits.py", "object_storage.py", "artifact_manifest.py"],
+    ("dowser", "brepphylo"): ["job_manager.R", "job_runner.R", "resource_limits.R", "object_storage.R",
+                              "artifact_manifest.R"],
+}
+
+
+@pytest.mark.parametrize("pair,filename", [(pair, f) for pair, files in SHARED_SERVICE_FILES.items() for f in files])
+def test_shared_service_files_do_not_drift_apart(pair, filename):
+    """Each pair of services ships its own copy of these files. A fix applied
+    to one copy only would leave the other service with the old behaviour."""
+    first, second = (ROOT / "services" / name / filename for name in pair)
+    assert first.read_bytes() == second.read_bytes(), f"{first} and {second} differ"
+
+
+def test_python_job_runners_differ_only_in_their_log_prefix():
+    gctree = (ROOT / "services/gctree/job_runner.py").read_text()
+    clonaltree = (ROOT / "services/clonaltree/job_runner.py").read_text()
+    assert gctree.replace("[gctree.job_runner]", "[clonaltree.job_runner]") == clonaltree
+
+
+@pytest.mark.parametrize("name", METHODS)
+def test_methods_can_be_given_a_fallback_job_time_limit(name):
+    assert SERVICES[name]["environment"]["METHOD_JOB_TIMEOUT_SECONDS"] == "${PHYLO_METHOD_JOB_TIMEOUT_SECONDS:-}"
+
+
+def test_documented_run_limits_match_the_built_in_defaults():
+    """.env.example states the defaults; they must be the ones the code uses."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("worker_limits", ROOT / "apps/api/workers/limits.py")
+    limits = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(limits)
+    example = (ROOT / ".env.example").read_text()
+
+    def documented(name: str) -> str:
+        lines = [l for l in example.splitlines() if l.lstrip("# ").startswith(f"{name}=")]
+        assert lines, f"{name} is not documented in .env.example"
+        return lines[0].lstrip("# ").split("=", 1)[1].strip()
+
+    assert int(documented("RUN_TIMEOUT_SECONDS")) == limits.DEFAULT_RUN_TIMEOUT_SECONDS
+    assert int(documented("RUN_QUEUE_WAIT_TIMEOUT_SECONDS")) == limits.DEFAULT_QUEUE_WAIT_TIMEOUT_SECONDS
+    assert int(documented("WORKER_METHOD_UNREACHABLE_SECONDS")) == limits.DEFAULT_METHOD_UNREACHABLE_SECONDS
+    assert int(documented("WORKER_CANCEL_CONFIRM_SECONDS")) == limits.DEFAULT_CANCEL_CONFIRM_SECONDS
+    for name in ("RUN_TIMEOUT_SECONDS_DOWSER", "ARTIFACT_VERIFY_ATTEMPTS", "ARTIFACT_VERIFY_RETRY_SECONDS",
+                 "ARTIFACT_VERIFY_TIMEOUT_SECONDS", "PHYLO_METHOD_JOB_TIMEOUT_SECONDS"):
+        documented(name)
+
+
+def test_run_limits_reach_the_worker_through_dotenv_not_through_fixed_values():
+    """The worker reads its limits from .env (env_file); compose must not pin them."""
+    text = (ROOT / "docker-compose.yml").read_text()
+    for name in ("RUN_TIMEOUT_SECONDS", "RUN_QUEUE_WAIT_TIMEOUT_SECONDS", "WORKER_METHOD_UNREACHABLE_SECONDS"):
+        assert f"{name}:" not in text
+    assert "env_file" in SERVICES["api-worker-prod"]
+
+
+@pytest.mark.parametrize("name", R_METHODS)
+def test_r_service_images_keep_coreutils_for_the_job_time_limit(name):
+    """The R job manager enforces a job's time limit with coreutils `timeout`;
+    the Fedora base images ship coreutils and the Dockerfile must not remove it."""
+    dockerfile = (ROOT / "services" / name / "Dockerfile").read_text()
+    removals = [l for l in dockerfile.splitlines() if "coreutils" in l and ("remove" in l or "erase" in l)]
+    assert not removals, removals

@@ -29,6 +29,8 @@ async def test_storage_contract(backend, tmp_path):
     try:
         assert await backend.upload(b'ACGT\nACGA', key, 'text/plain') == key
         assert await backend.exists(key)
+        assert (await backend.stat(key)).size_bytes == 9
+        assert await backend.stat(key + '.absent') is None
         assert await backend.download(key) == b'ACGT\nACGA'
         chunks = [c async for c in backend.stream_download(key, chunk_size=3)]
         assert chunks == [b'ACG', b'T\nA', b'CGA']
