@@ -21,6 +21,17 @@
 #     failed at start-up (job_manager_recover).
 # Submitting the same run_id again while its job is active returns that job
 # instead of starting a second one.
+#
+# Disk use returns to where it was after every job:
+#   - each job gets its own temporary directory (<job>/tmp, exported as TMPDIR
+#     to the job's whole process tree), so everything R and the tools it starts
+#     write as scratch data is in one known place; it is removed as soon as the
+#     job is over, however it ended;
+#   - the small job record that remains (status, result, log) is removed when
+#     the worker confirms it has taken the result (job_manager_delete), or by
+#     itself after METHOD_JOB_RETENTION_HOURS if no confirmation ever comes;
+#   - the job's log is offered and uploaded in bounded form (at most
+#     METHOD_JOB_LOG_MAX_MB, keeping its beginning and its end).
 
 suppressWarnings(suppressMessages(library(jsonlite)))
 
@@ -41,6 +52,42 @@ suppressWarnings(suppressMessages(library(jsonlite)))
 # A freshly started job has no pid in status.json until its Rscript is up.
 .job_start_grace_seconds <- 300
 .job_log_tail_bytes <- 4000L
+
+.job_positive_number <- function(name, default) {
+  v <- suppressWarnings(as.numeric(Sys.getenv(name, "")))
+  if (length(v) != 1 || is.na(v) || v <= 0) default else v
+}
+
+# Largest log offered for download or uploaded (METHOD_JOB_LOG_MAX_MB).
+job_log_max_bytes <- function() floor(.job_positive_number("METHOD_JOB_LOG_MAX_MB", 5) * 1024 * 1024)
+
+# How long a finished job's record is kept when nobody collects it.
+.job_retention_seconds <- function() .job_positive_number("METHOD_JOB_RETENTION_HOURS", 24) * 3600
+
+# The log at `path` as raw bytes, cut to `max_bytes` when it is larger: its
+# first and last parts are kept (how it started, how it ended) and a line in
+# the middle says how much was left out. Returns list(content, truncated).
+job_bounded_log <- function(path, max_bytes = job_log_max_bytes()) {
+  size <- suppressWarnings(file.info(path)$size)
+  if (length(size) != 1 || is.na(size)) return(list(content = raw(0), truncated = FALSE))
+  con <- file(path, "rb")
+  on.exit(close(con), add = TRUE)
+  if (size <= max_bytes) return(list(content = readBin(con, what = "raw", n = size), truncated = FALSE))
+  half <- max(1, floor(max_bytes / 2))
+  head <- readBin(con, what = "raw", n = half)
+  seek(con, size - half)
+  tail <- readBin(con, what = "raw", n = half)
+  note <- charToRaw(sprintf(paste0(
+    "\n\n[... %.0f bytes of this log were left out: it is %.0f bytes long and logs are kept up to ",
+    "%.0f bytes. The beginning and the end are shown. ...]\n\n"), size - 2 * half, size, max_bytes))
+  list(content = c(head, note, tail), truncated = TRUE)
+}
+
+# Job ids are generated here (32 hex characters); anything else, such as a
+# path, is not a job.
+.job_is_id <- function(x) {
+  is.character(x) && length(x) == 1 && !is.na(x) && grepl("^[A-Za-z0-9]{1,64}$", x)
+}
 
 # Failure codes this manager reports in status$error_code.
 JOB_CODE_TIMEOUT <- "TIMEOUT"
@@ -143,6 +190,14 @@ job_manager_new <- function(method_id) {
 
 .job_state_dir <- function(mgr, job_id) file.path(mgr$root, job_id)
 
+# The job's own temporary directory (its TMPDIR).
+.job_work_dir <- function(mgr, job_id) file.path(.job_state_dir(mgr, job_id), "tmp")
+
+.job_remove_work_dir <- function(mgr, job_id) {
+  unlink(.job_work_dir(mgr, job_id), recursive = TRUE, force = TRUE)
+  invisible(NULL)
+}
+
 # The end of the job's own output, for the failure report.
 .job_log_tail <- function(mgr, job_id) {
   p <- file.path(.job_state_dir(mgr, job_id), "job.log")
@@ -174,6 +229,7 @@ job_manager_new <- function(method_id) {
   st$error <- payload; st$error_code <- code
   st$progress <- 100; st$finished_at <- .job_now_iso(); st$ok <- FALSE
   .job_write_json_atomic(file.path(sd, "status.json"), st)
+  .job_remove_work_dir(mgr, job_id)
   message(sprintf("[job_manager] job %s failed: %s: %s", job_id, code, message))
   st
 }
@@ -184,6 +240,7 @@ job_manager_new <- function(method_id) {
   tail <- .job_log_tail(mgr, job_id)
   if (nzchar(tail)) st$log_tail <- tail
   .job_write_json_atomic(file.path(.job_state_dir(mgr, job_id), "status.json"), st)
+  .job_remove_work_dir(mgr, job_id)
   st
 }
 
@@ -277,7 +334,13 @@ job_manager_running <- function(mgr) {
   keep <- character(0)
   for (id in mgr$state$active) {
     st <- .job_settle(mgr, id)
-    if (is.null(st) || .job_status_of(st) %in% .job_terminal) next
+    if (is.null(st) || .job_status_of(st) %in% .job_terminal) {
+      # Over, and its process has exited or will not be waited for: the
+      # scratch data is no longer needed by anyone.
+      pid <- if (is.null(st)) NULL else st$pid
+      if (is.null(pid) || length(pid) == 0 || is.na(pid) || !.job_pid_running(pid)) .job_remove_work_dir(mgr, id)
+      next
+    }
     keep <- c(keep, id)
   }
   mgr$state$active <- keep
@@ -298,7 +361,63 @@ job_manager_recover <- function(mgr) {
     .job_settle(mgr, job_id)
     closed <- closed + 1L
   }
+  job_manager_purge_expired(mgr)
   closed
+}
+
+# The job's log in bounded form, or NULL for an unknown job.
+job_manager_log <- function(mgr, job_id) {
+  if (!.job_is_id(job_id)) return(NULL)
+  sd <- .job_state_dir(mgr, job_id)
+  if (!file.exists(file.path(sd, "status.json"))) return(NULL)
+  job_bounded_log(file.path(sd, "job.log"))
+}
+
+.job_purge <- function(mgr, job_id) {
+  mgr$state$active <- setdiff(mgr$state$active, job_id)
+  mgr$state$submitted[[job_id]] <- NULL
+  mgr$state$runs[[job_id]] <- NULL
+  unlink(.job_state_dir(mgr, job_id), recursive = TRUE, force = TRUE)
+  200L
+}
+
+# Remove everything kept for a finished job. HTTP-style result: 200 removed,
+# 404 unknown, 409 still running (nothing is removed).
+job_manager_delete <- function(mgr, job_id) {
+  if (!.job_is_id(job_id)) return(404L)
+  sd <- .job_state_dir(mgr, job_id)
+  st <- .job_settle(mgr, job_id)
+  if (is.null(st)) return(if (dir.exists(sd)) .job_purge(mgr, job_id) else 404L)
+  if (!(.job_status_of(st) %in% .job_terminal)) return(409L)
+  .job_purge(mgr, job_id)
+}
+
+# Remove the records of finished jobs nobody collected in time, and the scratch
+# data of any finished job. Returns how many records went.
+job_manager_purge_expired <- function(mgr, now = Sys.time()) {
+  removed <- 0L
+  keep_for <- .job_retention_seconds()
+  for (job_id in list.dirs(mgr$root, full.names = FALSE, recursive = FALSE)) {
+    sd <- .job_state_dir(mgr, job_id)
+    st <- .job_read_json(file.path(sd, "status.json"))
+    if (!is.null(st)) {
+      if (!(.job_status_of(st) %in% .job_terminal)) next          # running or not settled yet
+      pid <- st$pid
+      if (!is.null(pid) && length(pid) == 1 && !is.na(pid) && job_id %in% mgr$state$active && .job_pid_running(pid)) next
+    } else if (job_id %in% mgr$state$active) {
+      next
+    }
+    # Age first: removing the scratch data touches the directory.
+    mtimes <- suppressWarnings(file.info(c(sd, list.files(sd, full.names = TRUE)))$mtime)
+    newest <- suppressWarnings(max(mtimes, na.rm = TRUE))
+    age <- as.numeric(difftime(now, newest, units = "secs"))
+    .job_remove_work_dir(mgr, job_id)
+    if (is.finite(age) && age > keep_for) {
+      .job_purge(mgr, job_id)
+      removed <- removed + 1L
+    }
+  }
+  removed
 }
 
 job_manager_admission <- function(mgr) {
@@ -337,9 +456,15 @@ job_manager_submit <- function(mgr, file_path, params, run_id, timeout_seconds =
   if (!identical(decision$code, RL_ACCEPT)) {
     return(list(rejected = TRUE, admission = decision))
   }
+  # A good moment to drop what earlier jobs left behind.
+  job_manager_purge_expired(mgr)
   job_id <- .job_gen_id()
   sd <- .job_state_dir(mgr, job_id)
   dir.create(sd, recursive = TRUE, showWarnings = FALSE)
+  # Everything the job writes as scratch data goes into its own directory,
+  # which is removed when the job is over.
+  work_dir <- .job_work_dir(mgr, job_id)
+  dir.create(work_dir, recursive = TRUE, showWarnings = FALSE)
   .job_write_json_atomic(
     file.path(sd, "request.json"),
     list(file_path = file_path, params = params, run_id = run_id)
@@ -379,7 +504,8 @@ job_manager_submit <- function(mgr, file_path, params, run_id, timeout_seconds =
   # The job's whole process tree inherits its CPU budget. PHYLO_JOB_CHILD marks
   # the tree as a job (not the service); the memory-kill count at start lets the
   # job tell an out-of-memory kill of one of its tools from another failure.
-  job_env <- c(rl_thread_environment(mgr$capacity$threads_per_job), list(PHYLO_JOB_CHILD = "1"))
+  job_env <- c(rl_thread_environment(mgr$capacity$threads_per_job),
+               list(PHYLO_JOB_CHILD = "1", TMPDIR = work_dir, TMP = work_dir, TEMP = work_dir))
   if (!is.na(oom_kills)) job_env$PHYLO_JOB_OOM_BASELINE <- as.character(oom_kills)
   env_prefix <- paste(sprintf("%s=%s", names(job_env), shQuote(as.character(job_env))), collapse = " ")
   # `timeout` signals the job's whole process group when the limit passes

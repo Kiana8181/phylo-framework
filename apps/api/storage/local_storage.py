@@ -137,6 +137,19 @@ class LocalStorage(StorageInterface):
             return None
         return ObjectStat(size_bytes=full_path.stat().st_size)
 
+    async def delete_prefix(self, prefix: str) -> int:
+        """Delete every file whose key starts with ``prefix``."""
+        key = prefix.lstrip("/")
+        if not key:
+            raise ValueError("refusing to delete with an empty prefix")
+        self._resolve_key(key.rstrip("/") or key)          # must stay inside the storage directory
+        deleted = 0
+        for path in sorted(self.base_path.rglob("*")):
+            if path.is_file() and path.relative_to(self.base_path).as_posix().startswith(key):
+                path.unlink()
+                deleted += 1
+        return deleted
+
     async def move(self, src_path: str, dst_path: str) -> str:
         """Rename a file within local storage (atomic on same filesystem)."""
         _, src = self._resolve_key(src_path)

@@ -104,6 +104,13 @@ class StorageInterface(ABC):
         """
         raise NotImplementedError
 
+    async def delete_prefix(self, prefix: str) -> int:
+        """Delete every object whose key starts with ``prefix``; return how many
+        were deleted. Nothing there is not an error (0). Unlike ``delete``, a
+        store that cannot be reached or refuses raises, so the caller knows the
+        objects may still exist and tries again later."""
+        raise NotImplementedError
+
     @abstractmethod
     async def move(self, src_path: str, dst_path: str) -> str:
         """

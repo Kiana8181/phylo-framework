@@ -729,6 +729,8 @@ ROUTES_JSON        <- modifyList(
     jobStatus = "/jobs/{job_id}/status",
     jobResult = "/jobs/{job_id}/result",
     jobCancel = "/jobs/{job_id}/cancel",
+    jobLog = "/jobs/{job_id}/log",
+    job = "/jobs/{job_id}",
     capacity = "/capacity"
   ),
   ROUTES_JSON
@@ -1461,6 +1463,23 @@ function(pr) {
   }
   pr$handle("POST", to_plumber_path(ROUTES_JSON$jobCancel), serializer = SER, cancel_fn)
   pr$handle("DELETE", to_plumber_path(ROUTES_JSON$jobCancel), serializer = SER, cancel_fn)
+  # The job's log as text, cut to the configured size (beginning and end kept).
+  # Used by the worker to keep a log for jobs that could not upload their own.
+  pr$handle("GET", to_plumber_path(ROUTES_JSON$jobLog), serializer = plumber::serializer_content_type("text/plain; charset=utf-8"),
+    function(req, res, job_id) {
+      found <- job_manager_log(JOB_MGR, job_id)
+      if (is.null(found)) { res$status <- 404; return("Job not found") }
+      res$setHeader("X-Log-Truncated", if (isTRUE(found$truncated)) "true" else "false")
+      found$content
+    })
+  # Forget a finished job: the worker calls this once it has taken the result,
+  # so nothing of the job stays on this container's disk.
+  pr$handle("DELETE", to_plumber_path(ROUTES_JSON$job), serializer = SER, function(req, res, job_id) {
+    code <- job_manager_delete(JOB_MGR, job_id)
+    if (code == 404L) { res$status <- 404; return(list(ok = FALSE, error = "Job not found")) }
+    if (code == 409L) { res$status <- 409; return(list(ok = FALSE, error = "Job is still running")) }
+    list(ok = TRUE, job_id = job_id, deleted = TRUE)
+  })
 
   pr_set_error(pr, function(req, res, err) {
     res$status <- 500

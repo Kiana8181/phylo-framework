@@ -54,3 +54,30 @@ async def test_unconfigured_service(monkeypatch):
     monkeypatch.setattr(jobs, 'method_service_url', lambda _: None)
     with pytest.raises(jobs.MethodServiceUnavailable):
         await jobs.get_job_status('missing', 'j')
+
+
+@pytest.mark.parametrize('method', ['gctree', 'clonaltree', 'dowser', 'brepphylo'])
+async def test_log_and_forget_contract(method, monkeypatch):
+    """After a job: its (bounded) log as text, then the service may forget it."""
+    requests, answers = [], [httpx.Response(200, text='line 1\nline 2\n'), httpx.Response(404, json={}),
+                             httpx.Response(405, json={}), httpx.Response(500, json={}),
+                             httpx.Response(200, json={'deleted': True}), httpx.Response(404, json={}),
+                             httpx.Response(409, json={'error': 'still running'})]
+
+    def handle(request):
+        requests.append(request)
+        return answers.pop(0)
+
+    original = httpx.AsyncClient
+    monkeypatch.setattr(jobs.httpx, 'AsyncClient', lambda **kw: original(transport=httpx.MockTransport(handle), **kw))
+    assert await jobs.get_job_log(method, 'j1') == 'line 1\nline 2\n'
+    assert await jobs.get_job_log(method, 'j1') is None          # the service no longer has the job
+    assert await jobs.get_job_log(method, 'j1') is None          # an older build without the route
+    with pytest.raises(httpx.HTTPStatusError):
+        await jobs.get_job_log(method, 'j1')
+    assert await jobs.delete_job(method, 'j1') is True
+    assert await jobs.delete_job(method, 'j1') is True           # nothing to forget is fine
+    assert await jobs.delete_job(method, 'j1') is False          # refused: the job is still running
+    assert [r.method for r in requests] == ['GET'] * 4 + ['DELETE'] * 3
+    assert all(str(r.url).endswith('/jobs/j1/log') for r in requests[:4])
+    assert all(str(r.url).endswith('/jobs/j1') for r in requests[4:])

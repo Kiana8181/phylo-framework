@@ -136,6 +136,7 @@ def build_run_email(notification: NotificationOutbox, run: Run) -> templates.Ema
         finished_at=run.finished_at,
         error_code=code,
         error_message=message,
+        expires_at=run.expires_at,
     )
     return templates.run_finished(notification.outcome, facts, run_url=f"{FRONTEND_URL}/dashboard?runId={run.id}")
 

@@ -4,7 +4,7 @@ from typing import Iterable, Optional, List
 from uuid import UUID, uuid4
 from datetime import date, datetime, timezone, timedelta
 
-from sqlalchemy import String, and_, case, cast, exists, false, func, or_, select, update
+from sqlalchemy import String, and_, case, cast, delete, exists, false, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,8 +15,10 @@ from apps.api.database.models import (
     NotificationStatus,
     Run,
     RunStatus,
+    RunTree,
 )
 from apps.api.repositories.base_repository import BaseRepository
+from apps.api.services.retention import retention_period
 from apps.api.utils.datetime_util import utc_now
 
 TERMINAL_RUN_STATUSES = (RunStatus.DONE, RunStatus.ERROR, RunStatus.CANCELLED)
@@ -256,6 +258,14 @@ class RunRepository(BaseRepository[Run]):
                 promoted += 1
         return promoted
 
+    @staticmethod
+    def _expiry_values() -> dict:
+        """What to set on a run that ends now: the date until which its results
+        are kept. Fixed here once; later changes of the retention setting do
+        not move it."""
+        period = retention_period()
+        return {"expires_at": func.now() + period} if period is not None else {}
+
     async def _enqueue_run_notification(self, run_id: UUID, user_id: Optional[UUID], outcome: str) -> None:
         """Record, in the current transaction, that the owner is owed an email
         about this run. Does not commit. A run without an owner gets none, and a
@@ -291,6 +301,8 @@ class RunRepository(BaseRepository[Run]):
         owner_id = await self.session.scalar(
             select(Run.user_id).where(Run.id == run_id)
         )
+        if values.get("status") in TERMINAL_RUN_STATUSES:
+            values = {**self._expiry_values(), **values}
         stmt = update(Run).where(Run.id == run_id).values(**values).returning(Run)
         result = (await self.session.execute(stmt)).scalar_one_or_none()
 
@@ -552,6 +564,7 @@ class RunRepository(BaseRepository[Run]):
                 result=result,
                 finished_at=func.now(),
                 worker_lease_until=None,
+                **self._expiry_values(),
             )
             .returning(Run.id, Run.user_id)
         )
@@ -718,6 +731,7 @@ class RunRepository(BaseRepository[Run]):
                 cancel_requested_at=now,
                 finished_at=func.now(),
                 worker_lease_until=None,
+                **self._expiry_values(),
             )
             .returning(Run.id, Run.user_id)
         )
@@ -763,6 +777,7 @@ class RunRepository(BaseRepository[Run]):
                 cancel_requested_at=now,
                 finished_at=func.now(),
                 worker_lease_until=None,
+                **self._expiry_values(),
             )
             .returning(Run)
         )
@@ -957,14 +972,70 @@ class RunRepository(BaseRepository[Run]):
             worker_lease_until=None,
         )
 
-    async def get_expired_runs(self) -> List[Run]:
-        """Get all runs that have expired."""
+    # --------------------------------------------------------------------- #
+    # Result retention (services/retention.py, workers/retention.py)
+    # --------------------------------------------------------------------- #
+    async def runs_due_for_expiry(self, limit: int = 50) -> List[UUID]:
+        """Runs that have ended, whose results are past their date and still
+        there. Never a run that is waiting or running."""
         result = await self.session.execute(
-            select(Run)
-            .where(Run.expires_at.isnot(None))
-            .where(Run.expires_at < utc_now())
+            select(Run.id)
+            .where(
+                Run.status.in_(TERMINAL_RUN_STATUSES),
+                Run.expires_at.isnot(None),
+                Run.expires_at < func.now(),
+                Run.results_expired_at.is_(None),
+            )
+            .order_by(Run.expires_at.asc())
+            .limit(limit)
         )
-        return list(result.scalars().all())
+        return [row[0] for row in result.all()]
+
+    async def is_due_for_expiry(self, run_id: UUID) -> bool:
+        """The same rule as :meth:`runs_due_for_expiry`, for one run. Checked
+        again right before anything is deleted."""
+        found = await self.session.execute(
+            select(Run.id).where(
+                Run.id == run_id,
+                Run.status.in_(TERMINAL_RUN_STATUSES),
+                Run.expires_at.isnot(None),
+                Run.expires_at < func.now(),
+                Run.results_expired_at.is_(None),
+            )
+        )
+        return found.scalar_one_or_none() is not None
+
+    async def mark_results_expired(self, run_id: UUID) -> bool:
+        """Remove what the database holds of a run's results (its trees, its
+        stored result and logs, its settled notification) and mark the run as
+        expired. Call only after its files are gone from the object store.
+        Does nothing to a run that is not finished or is already marked."""
+        marked = (
+            await self.session.execute(
+                update(Run)
+                .where(
+                    Run.id == run_id,
+                    Run.status.in_(TERMINAL_RUN_STATUSES),
+                    Run.results_expired_at.is_(None),
+                )
+                .values(result=None, results_expired_at=func.now())
+                .returning(Run.id)
+            )
+        ).scalar_one_or_none()
+        if marked is None:
+            await self.session.rollback()
+            return False
+        await self.session.execute(delete(RunTree).where(RunTree.run_id == run_id))
+        # A notification still waiting to be sent is left alone: it will be
+        # sent, or given up, on its own schedule.
+        await self.session.execute(
+            delete(NotificationOutbox).where(
+                NotificationOutbox.run_id == run_id,
+                NotificationOutbox.status != NotificationStatus.PENDING.value,
+            )
+        )
+        await self.session.commit()
+        return True
 
     async def get_by_same_input_file(
         self,
@@ -999,6 +1070,8 @@ class RunRepository(BaseRepository[Run]):
             .where(Run.input_file_id.in_(input_file_ids))
             .where(Run.id != exclude_run_id)
             .where(Run.status == RunStatus.DONE)
+            # A run whose results have expired has no trees left to compare.
+            .where(Run.results_expired_at.is_(None))
             .order_by(Run.created_at.desc())
             .limit(limit)
         )
@@ -1031,6 +1104,7 @@ class RunRepository(BaseRepository[Run]):
             .where(or_(has_input, has_file_for_run))
             .where(Run.id != exclude_run_id)
             .where(Run.status == RunStatus.DONE)
+            .where(Run.results_expired_at.is_(None))
             .order_by(Run.created_at.desc())
             .limit(limit)
         )

@@ -1,4 +1,5 @@
 from __future__ import annotations
+import asyncio
 import os
 
 # Force UTC for datetime/zoneinfo (avoids Windows Errno 22 with DB timestamps)
@@ -18,6 +19,7 @@ from apps.api.security.errors import log_internal_error
 from apps.api.security.production_config import enforce_production_config
 from apps.api.security.startup_report import log_auth_protection
 from apps.api.services import email as mailer
+from apps.api.services.upload_cleanup import upload_cleanup_loop
 
 configure_logging()
 
@@ -51,11 +53,17 @@ async def _report_email_configuration() -> None:
     # sent; a broken mail configuration never stops the API from starting.
     mailer.log_configuration("api")
     log_auth_protection()
+    # Partial uploads are written by this process, so it is this process that
+    # removes the ones nobody finished.
+    app.state.upload_cleanup = asyncio.create_task(upload_cleanup_loop(), name="upload-cleanup")
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """Close database connections on shutdown."""
+    cleanup = getattr(app.state, "upload_cleanup", None)
+    if cleanup is not None:
+        cleanup.cancel()
     await close_db()
 
 

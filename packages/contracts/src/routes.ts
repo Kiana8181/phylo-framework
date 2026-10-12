@@ -30,6 +30,7 @@ export const API_ROUTES = {
   datasetDownload: (id: string) => `/datasets/${encodeURIComponent(id)}/download`,
   datasetFastaIdStyle: (id: string) => `/datasets/${encodeURIComponent(id)}/fasta-id-style`,
   uploadInit: () => `/uploads/init`,
+  uploadLimits: () => `/uploads/limits`,
   uploadContent: (uploadId: string) => `/uploads/${encodeURIComponent(uploadId)}/content`,
   uploadCancel: (uploadId: string) => `/uploads/${encodeURIComponent(uploadId)}`,
   authLogin: () => `/auth/login`,

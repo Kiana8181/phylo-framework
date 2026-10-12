@@ -17,6 +17,9 @@ worker see the current values.
   WORKER_CANCEL_CONFIRM_SECONDS    how long to wait for a method service to
                                    confirm that a job it was told to stop has
                                    stopped (default 60)
+  RUN_STAGING_TIMEOUT_SECONDS      longest the worker may take to fetch and
+                                   prepare a run's input before the method is
+                                   started (default 1800 = 30 min; 0 disables)
   WORKER_METHOD_DEADLINE_GRACE_SECONDS  extra time a method service's own
                                    deadline gets on top of the run's limit
                                    (default 120), so that the worker is
@@ -34,6 +37,7 @@ DEFAULT_QUEUE_WAIT_TIMEOUT_SECONDS = 48 * 3600
 DEFAULT_METHOD_UNREACHABLE_SECONDS = 300
 DEFAULT_CANCEL_CONFIRM_SECONDS = 60
 METHOD_DEADLINE_GRACE_SECONDS = 120
+DEFAULT_STAGING_TIMEOUT_SECONDS = 1800
 
 
 def _seconds(name: str) -> Optional[float]:
@@ -76,6 +80,14 @@ def method_unreachable_seconds() -> float:
 def cancel_confirm_seconds() -> float:
     value = _seconds("WORKER_CANCEL_CONFIRM_SECONDS")
     return float(DEFAULT_CANCEL_CONFIRM_SECONDS) if value is None or value < 0 else value
+
+
+def staging_timeout_seconds() -> Optional[float]:
+    """Longest input preparation may take; None when there is no limit."""
+    value = _seconds("RUN_STAGING_TIMEOUT_SECONDS")
+    if value is None:
+        value = float(DEFAULT_STAGING_TIMEOUT_SECONDS)
+    return value if value > 0 else None
 
 
 def method_deadline_grace_seconds() -> float:

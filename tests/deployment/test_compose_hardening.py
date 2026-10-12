@@ -394,6 +394,87 @@ def test_r_service_images_keep_coreutils_for_the_job_time_limit(name):
 
 
 # --------------------------------------------------------------------------- #
+# Storage lifecycle: retention, upload limit, job records
+# --------------------------------------------------------------------------- #
+def _documented(name: str) -> str:
+    example = (ROOT / ".env.example").read_text()
+    lines = [l for l in example.splitlines() if l.lstrip("# ").startswith(f"{name}=")]
+    assert lines, f"{name} is not documented in .env.example"
+    return lines[0].lstrip("# ").split("=", 1)[1].strip()
+
+
+def _constant(path: str, name: str) -> float:
+    """A numeric module-level constant, read from the source (the module itself
+    may need packages this test environment does not have)."""
+    import re
+
+    match = re.search(rf"^{name}\s*(?:<-|=)\s*([0-9.]+)", (ROOT / path).read_text(), re.MULTILINE)
+    assert match, f"{name} not found in {path}"
+    return float(match.group(1))
+
+
+def test_documented_retention_settings_match_the_built_in_defaults():
+    source = "apps/api/services/retention.py"
+    assert float(_documented("RESULT_RETENTION_DAYS")) == _constant(source, "DEFAULT_RESULT_RETENTION_DAYS") == 60
+    assert float(_documented("MAX_UPLOAD_MB")) == _constant(source, "DEFAULT_MAX_UPLOAD_MB")
+    assert float(_documented("UPLOAD_SESSION_GRACE_HOURS")) == _constant(source, "DEFAULT_UPLOAD_SESSION_GRACE_HOURS")
+    assert float(_documented("RETENTION_SWEEP_SECONDS")) == _constant(source, "DEFAULT_SWEEP_SECONDS")
+    assert float(_documented("RUN_STAGING_TIMEOUT_SECONDS")) == _constant(
+        "apps/api/workers/limits.py", "DEFAULT_STAGING_TIMEOUT_SECONDS")
+
+
+def test_the_retention_setting_is_explained_where_it_is_set():
+    """Results are deleted by design: whoever sets the value must read what it does."""
+    example = (ROOT / ".env.example").read_text()
+    block = example[example.index("# Storage lifecycle"):example.index("RESULT_RETENTION_DAYS=")]
+    for needed in ("removed", "stays in the history", "datasets are NOT removed", "0 = keep results for ever"):
+        assert needed in block, needed
+    guide = (ROOT / "docs/DEPLOYMENT.md").read_text()
+    assert "## Storage lifecycle and retention" in guide
+    assert "RESULT_RETENTION_DAYS" in guide and "410" in guide and "No backup" in guide
+
+
+@pytest.mark.parametrize("name", METHODS)
+def test_methods_get_their_log_limit_and_job_retention_from_the_same_two_settings(name):
+    env = SERVICES[name]["environment"]
+    assert env["METHOD_JOB_LOG_MAX_MB"] == "${PHYLO_JOB_LOG_MAX_MB:-5}"
+    assert env["METHOD_JOB_RETENTION_HOURS"] == "${PHYLO_JOB_RETENTION_HOURS:-24}"
+
+
+def test_job_log_and_record_defaults_agree_between_compose_python_and_r():
+    assert float(_documented("PHYLO_JOB_LOG_MAX_MB")) == 5 == _constant("services/gctree/job_manager.py", "DEFAULT_LOG_MAX_MB")
+    assert float(_documented("PHYLO_JOB_RETENTION_HOURS")) == 24 == _constant(
+        "services/gctree/job_manager.py", "DEFAULT_JOB_RETENTION_HOURS")
+    r_source = (ROOT / "services/dowser/job_manager.R").read_text()
+    assert '.job_positive_number("METHOD_JOB_LOG_MAX_MB", 5)' in r_source
+    assert '.job_positive_number("METHOD_JOB_RETENTION_HOURS", 24)' in r_source
+
+
+def test_retention_reaches_api_and_worker_through_dotenv_not_through_fixed_values():
+    text = (ROOT / "docker-compose.yml").read_text()
+    for name in ("RESULT_RETENTION_DAYS", "MAX_UPLOAD_MB", "RUN_STAGING_TIMEOUT_SECONDS", "UPLOAD_SESSION_GRACE_HOURS"):
+        assert f"{name}:" not in text
+    for service in ("api-prod", "api-worker-prod"):
+        assert "env_file" in SERVICES[service]
+
+
+@pytest.mark.parametrize("name", METHODS)
+def test_every_method_declares_the_log_and_forget_routes(name):
+    import json
+
+    routes = json.loads((ROOT / "packages/contracts/methods" / name / "service.routes.json").read_text())
+    routes = routes.get("routes", routes)
+    assert routes["jobLog"] == "/jobs/{job_id}/log" and routes["job"] == "/jobs/{job_id}"
+
+
+def test_no_phase_introduces_automatic_backups():
+    """Retention deletes; it must not be mistaken for, or bundled with, a backup job."""
+    text = (ROOT / "docker-compose.yml").read_text().lower()
+    for word in ("pg_dump", "backup", "restic", "borg"):
+        assert word not in text, word
+
+
+# --------------------------------------------------------------------------- #
 # Limits on creating runs
 # --------------------------------------------------------------------------- #
 def test_documented_run_creation_limits_match_the_built_in_defaults():

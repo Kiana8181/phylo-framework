@@ -17,7 +17,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import resource_limits  # noqa: E402
-from job_manager import CODE_OUT_OF_MEMORY, atomic_write_json, now_iso, read_json  # noqa: E402
+from job_manager import CODE_OUT_OF_MEMORY, atomic_write_json, bounded_log, now_iso, read_json  # noqa: E402
 from app import run_job_sync  # noqa: E402
 from artifact_manifest import (  # noqa: E402
     UPLOAD_FAILED_CODE,
@@ -63,8 +63,15 @@ def _append_log_artifact(payload: Any, run_id: str, job_id: str, log_path: Path)
     except Exception:
         pass
     try:
+        # Logs are stored in bounded form: a very long one keeps its beginning
+        # and its end (METHOD_JOB_LOG_MAX_MB).
+        content, was_cut = bounded_log(log_path)
+        source = log_path
+        if was_cut:
+            source = log_path.with_name("job.log.bounded")
+            source.write_bytes(content)
         uploaded = upload_artifact(
-            log_path,
+            source,
             run_id=run_id,
             job_id=job_id,
             filename="job.log",
@@ -226,5 +233,20 @@ def main() -> None:
         atomic_write_json(status_path, status)
 
 
+def _remove_scratch_data() -> None:
+    """Delete this job's temporary directory (its TMPDIR, set by the job
+    manager). By now every result file has been uploaded."""
+    import shutil
+    import tempfile
+
+    work_dir = os.environ.get("TMPDIR") or ""
+    if os.environ.get("PHYLO_JOB_CHILD") == "1" and work_dir and Path(work_dir).name == "tmp":
+        shutil.rmtree(work_dir, ignore_errors=True)
+    tempfile.tempdir = None
+
+
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        _remove_scratch_data()

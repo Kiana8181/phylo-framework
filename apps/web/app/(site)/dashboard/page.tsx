@@ -22,6 +22,7 @@ import { useContractSpec, useMethods } from "@/features/methods/hooks";
 import { RunsApi } from "@/features/runs/api";
 import { useCancelQueuedRun, useDashboardRuns, useRunQuota, useRunResult, useRunStatus } from "@/features/runs/hooks";
 import RunQuotaNotice from "@/components/phylo/RunQuotaNotice";
+import ResultRetentionNotice from "@/components/phylo/ResultRetentionNotice";
 import { useUploadSession } from "@/features/uploads/hooks";
 import { notify } from "@/lib/notify";
 import { formatRunDuration } from "@/lib/runDuration";
@@ -80,13 +81,16 @@ function RunResultsSurface({ runId, onBack }: { runId: string; onBack: () => voi
   const isFailed = currentStatus === "ERROR" || currentStatus === "CANCELLED";
   const isActive = currentStatus === "RUNNING" || currentStatus === "QUEUED" || currentStatus === "PENDING";
 
-  const resultEnabled = isDone || isFailed;
+  // Once the results have expired only the run's history is left: nothing more
+  // is asked of the API (it would answer 410), and the page says so instead.
+  const resultsExpired = status?.results_expired === true;
+  const resultEnabled = (isDone || isFailed) && !resultsExpired;
   const { data: result } = useRunResult(runId, resultEnabled);
 
   const { data: sameDatasetRuns } = useQuery({
     queryKey: ["runSameDataset", runId],
     queryFn: () => RunsApi.sameDataset(runId),
-    enabled: isDone,
+    enabled: isDone && !resultsExpired,
   });
 
   const runMethodKey = status?.method_id ?? result?.method_id ?? null;
@@ -158,6 +162,8 @@ function RunResultsSurface({ runId, onBack }: { runId: string; onBack: () => voi
         />
       )}
 
+      {currentStatus === "ERROR" && <ResultRetentionNotice run={status} what="log" />}
+
       {isFailed && (
         <RunErrorState
           runId={runId}
@@ -183,8 +189,9 @@ function RunResultsSurface({ runId, onBack }: { runId: string; onBack: () => voi
         />
       )}
 
-      {result && isDone && (
+      {isDone && (result || resultsExpired) && (
         <section className="space-y-6">
+          <ResultRetentionNotice run={status} />
           <Card className="p-4 space-y-4">
             <div className="flex items-start justify-between gap-3 flex-wrap">
               <div>
@@ -199,12 +206,14 @@ function RunResultsSurface({ runId, onBack }: { runId: string; onBack: () => voi
                     Time spent: {runDurationLabel}
                   </span>
                 )}
-                <Link href={`/dashboard/comparison?baseRunId=${encodeURIComponent(runId)}`}>
-                  <Button variant="outline" size="sm" className="gap-1.5">
-                    <GitCompare className="h-4 w-4" />
-                    Sequence Trace
-                  </Button>
-                </Link>
+                {!resultsExpired && (
+                  <Link href={`/dashboard/comparison?baseRunId=${encodeURIComponent(runId)}`}>
+                    <Button variant="outline" size="sm" className="gap-1.5">
+                      <GitCompare className="h-4 w-4" />
+                      Sequence Trace
+                    </Button>
+                  </Link>
+                )}
                 <Button variant="default" size="sm" onClick={onBack}>
                   Start another run
                 </Button>
@@ -224,12 +233,14 @@ function RunResultsSurface({ runId, onBack }: { runId: string; onBack: () => voi
                 <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Dataset</p>
                 <p className="text-sm break-words">{runDatasetLabel}</p>
               </div>
-              <div>
-                <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Same datasets</p>
-                <p className="text-sm">
-                  {sameDatasetRuns?.length ?? 0} run{(sameDatasetRuns?.length ?? 0) === 1 ? "" : "s"}
-                </p>
-              </div>
+              {!resultsExpired && (
+                <div>
+                  <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Same datasets</p>
+                  <p className="text-sm">
+                    {sameDatasetRuns?.length ?? 0} run{(sameDatasetRuns?.length ?? 0) === 1 ? "" : "s"}
+                  </p>
+                </div>
+              )}
             </div>
 
             {runMethodKey && (
@@ -253,7 +264,7 @@ function RunResultsSurface({ runId, onBack }: { runId: string; onBack: () => voi
             </div>
           )}
 
-          <ResultsView runId={runId} methodId={runMethodKey} result={result} />
+          {result && !resultsExpired && <ResultsView runId={runId} methodId={runMethodKey} result={result} />}
         </section>
       )}
     </main>

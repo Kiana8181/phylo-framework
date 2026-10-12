@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 import resource_limits
 from validators import validate_clonaltree_input
@@ -55,6 +55,8 @@ _DEFAULT_ROUTES = {
     "jobStatus": "/jobs/{job_id}/status",
     "jobResult": "/jobs/{job_id}/result",
     "jobCancel": "/jobs/{job_id}/cancel",
+    "jobLog": "/jobs/{job_id}/log",
+    "job": "/jobs/{job_id}",
     "capacity": "/capacity",
 }
 ROUTES = {**_DEFAULT_ROUTES, **(_read_json(ROUTES_JSON_PATH, {}) or {})}
@@ -1372,3 +1374,28 @@ async def job_cancel_delete_endpoint(job_id: str):
     if st is None:
         return err("Job not found", 404)
     return ok(st)
+
+
+@app.get(ROUTES["jobLog"])
+async def job_log_endpoint(job_id: str):
+    """The job's log as text, cut to the configured size (beginning and end
+    kept). Used by the worker to keep a log for jobs that could not upload
+    their own (stopped, timed out, crashed)."""
+    found = job_manager.log(job_id)
+    if found is None:
+        return err("Job not found", 404)
+    content, was_cut = found
+    return Response(content=content, media_type="text/plain; charset=utf-8",
+                    headers={"X-Log-Truncated": "true" if was_cut else "false"})
+
+
+@app.delete(ROUTES["job"])
+async def job_delete_endpoint(job_id: str):
+    """Forget a finished job: the worker calls this once it has taken the
+    result, so nothing of the job stays on this container's disk."""
+    code = job_manager.delete(job_id)
+    if code == 404:
+        return err("Job not found", 404)
+    if code == 409:
+        return err("Job is still running", 409)
+    return ok({"ok": True, "job_id": job_id, "deleted": True})

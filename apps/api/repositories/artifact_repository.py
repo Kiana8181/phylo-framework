@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Optional
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.database.models import ArtifactKind, RunArtifact, StorageState
@@ -51,6 +51,48 @@ class ArtifactRepository:
         # Flush (not commit) so the caller can persist trees + artifacts atomically.
         await self.session.flush()
         return rows
+
+    async def add_for_run(self, run_id: UUID, artifacts: list[dict[str, Any]]) -> None:
+        """Add artifact rows to a run without touching the ones it has. Flushes;
+        the caller commits."""
+        for item in artifacts:
+            kind = item.get("artifact_kind", ArtifactKind.OTHER)
+            if isinstance(kind, str):
+                kind = ArtifactKind(kind)
+            self.session.add(RunArtifact(
+                run_id=run_id,
+                tree_id=None,
+                storage_backend=str(item.get("storage_backend") or ""),
+                storage_bucket=item.get("storage_bucket"),
+                object_key=str(item["object_key"]),
+                filename=str(item.get("filename") or "artifact"),
+                content_type=item.get("content_type"),
+                size_bytes=int(item.get("size_bytes") or 0),
+                checksum_sha256=item.get("checksum_sha256"),
+                artifact_kind=kind,
+                artifact_role=item.get("artifact_role"),
+                is_previewable=bool(item.get("is_previewable", False)),
+            ))
+        await self.session.flush()
+
+    async def has_log(self, run_id: UUID) -> bool:
+        result = await self.session.execute(
+            select(RunArtifact.id).where(
+                RunArtifact.run_id == run_id,
+                RunArtifact.artifact_kind == ArtifactKind.LOG,
+                RunArtifact.storage_state == StorageState.ACTIVE,
+            ).limit(1)
+        )
+        return result.scalar_one_or_none() is not None
+
+    async def mark_all_deleted_for_run(self, run_id: UUID) -> int:
+        """Record that every stored object of a run is gone. Flushes; the caller commits."""
+        result = await self.session.execute(
+            update(RunArtifact)
+            .where(RunArtifact.run_id == run_id, RunArtifact.storage_state == StorageState.ACTIVE)
+            .values(storage_state=StorageState.DELETED, object_deleted_at=utc_now())
+        )
+        return result.rowcount or 0
 
     async def list_for_run(
         self,

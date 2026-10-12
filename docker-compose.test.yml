@@ -58,6 +58,11 @@ services:
       NOTIFICATION_POLL_SECONDS: "0.5"
       NOTIFICATION_RETRY_BASE_SECONDS: "2"
       NOTIFICATION_RETRY_MAX_SECONDS: "4"
+      # Storage lifecycle: the default 60 days, looked for every 2 seconds so a
+      # test that moves a run's date into the past sees it expire; small upload
+      # limit so the refusal can be exercised with a modest file.
+      RETENTION_SWEEP_SECONDS: "2"
+      MAX_UPLOAD_MB: "20"
       # Sign-in protection is ON here, as in a deployment: the CAPTCHA (kept
       # easy so tests stay quick) and, because a mail server is configured,
       # email verification. Every test client runs from one address, so the

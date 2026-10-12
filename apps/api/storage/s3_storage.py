@@ -207,6 +207,23 @@ class S3Storage(StorageInterface):
             sha256=str(sha256).strip().lower() if sha256 else None,
         )
 
+    async def delete_prefix(self, prefix: str) -> int:
+        """Delete every object under ``prefix``. Raises if the store fails."""
+        key = prefix.lstrip("/")
+        if not key:
+            raise ValueError("refusing to delete with an empty prefix")
+
+        def _delete_all() -> int:
+            deleted = 0
+            paginator = self.s3_client.get_paginator("list_objects_v2")
+            for page in paginator.paginate(Bucket=self.bucket_name, Prefix=key):
+                for obj in page.get("Contents") or []:
+                    self.s3_client.delete_object(Bucket=self.bucket_name, Key=obj["Key"])
+                    deleted += 1
+            return deleted
+
+        return await asyncio.to_thread(_delete_all)
+
     async def move(self, src_path: str, dst_path: str) -> str:
         """Move within S3 via copy + delete."""
         src_key = src_path.lstrip("/")

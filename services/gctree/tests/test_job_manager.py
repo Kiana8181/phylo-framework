@@ -554,3 +554,145 @@ def test_the_job_process_is_marked_as_a_job_and_knows_the_memory_kill_count(tmp_
     _wait_for_status(mgr, job_id, {"DONE"})
     payload, _ = mgr.result(job_id)
     assert payload == {"ok": True, "child": "1", "oom_baseline": "4"}
+
+
+# --------------------------------------------------------------------------- #
+# Disk use returns to where it was: scratch data, job records, bounded logs
+# --------------------------------------------------------------------------- #
+SCRATCH_RUNNER = _RUNNER_PRELUDE + """
+import tempfile
+work = tempfile.mkdtemp(prefix="method_")            # what the methods do
+with open(os.path.join(work, "big.tmp"), "wb") as f:
+    f.write(b"x" * 100000)
+write("result.json", {"ok": True, "tmpdir": os.environ.get("TMPDIR"), "work": work})
+if a.job_id and os.environ.get("STAY") == "1":
+    time.sleep(60)
+st.update({"status": "DONE", "stage": "COMPLETED", "progress": 100, "ok": True})
+write("status.json", st)
+"""
+
+SCRATCH_LONG_RUNNER = _RUNNER_PRELUDE + """
+import tempfile
+work = tempfile.mkdtemp(prefix="method_")
+with open(os.path.join(work, "big.tmp"), "wb") as f:
+    f.write(b"x" * 100000)
+with open(os.path.join(sd, "job.log"), "w") as f:
+    f.write("started\\n")
+time.sleep(60)
+"""
+
+
+def _job_dir(mgr, job_id) -> Path:
+    return mgr.jobs_root / job_id
+
+
+def test_each_job_gets_its_own_scratch_directory_which_is_removed_when_it_ends(tmp_path, manager_module, monkeypatch):
+    _fake_cgroup(tmp_path, monkeypatch, cpus=1, memory_mb=4096, in_use_mb=100)
+    mgr = _manager(manager_module, tmp_path, SCRATCH_RUNNER)
+    job_id = mgr.submit(file_path=None, params={}, run_id="run-scratch")
+    assert _wait_for_status(mgr, job_id, {"DONE"})["status"] == "DONE"
+    payload, _ = mgr.result(job_id)
+    scratch = _job_dir(mgr, job_id) / "tmp"
+    assert payload["tmpdir"] == str(scratch)                          # TMPDIR pointed into the job's own directory
+    assert Path(payload["work"]).parent == scratch                    # so the method's temp files landed there
+    assert _wait_idle(mgr) == 0
+    assert not scratch.exists()                                       # gone as soon as the job is over
+    assert (_job_dir(mgr, job_id) / "result.json").exists()           # the small record stays until collected
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process-group termination is POSIX-only")
+@pytest.mark.parametrize("ending", ["cancel", "timeout"])
+def test_scratch_data_is_removed_however_the_job_ends(tmp_path, manager_module, monkeypatch, ending):
+    _fake_cgroup(tmp_path, monkeypatch, cpus=1, memory_mb=4096, in_use_mb=100)
+    monkeypatch.setattr(manager_module, "CANCEL_GRACE_SECONDS", 0.5)
+    mgr = _manager(manager_module, tmp_path, SCRATCH_LONG_RUNNER)
+    job_id = mgr.submit(file_path=None, params={}, run_id="run-x", timeout_seconds=1 if ending == "timeout" else None)
+    scratch = _job_dir(mgr, job_id) / "tmp"
+    deadline = time.time() + 10
+    while not any(scratch.glob("*/big.tmp")) and time.time() < deadline:
+        time.sleep(0.05)
+    assert any(scratch.glob("*/big.tmp"))                             # 100 kB of scratch data exists
+    if ending == "cancel":
+        assert mgr.cancel(job_id)["status"] == "CANCELLED"
+    else:
+        assert _wait_for_status(mgr, job_id, {"ERROR"}, timeout=15)["error_code"] == "TIMEOUT"
+    assert not scratch.exists()
+
+
+def test_a_log_is_offered_whole_when_small_and_with_its_ends_when_large(tmp_path, manager_module):
+    log = tmp_path / "job.log"
+    log.write_bytes(b"line\n" * 10)
+    assert manager_module.bounded_log(log, 1000) == (b"line\n" * 10, False)
+
+    body = b"".join(f"{i:07d}\n".encode() for i in range(50_000))    # 400 kB
+    log.write_bytes(body)
+    content, was_cut = manager_module.bounded_log(log, 10_000)
+    assert was_cut and len(content) < 10_000 + 400
+    assert content.startswith(b"0000000\n0000001\n")                  # how it began
+    assert content.endswith(b"0049998\n0049999\n")                    # how it ended
+    assert b"390000 bytes of this log were left out" in content and b"400000 bytes long" in content
+    assert manager_module.bounded_log(tmp_path / "missing.log", 10) == (b"", False)
+
+
+def test_log_size_setting(manager_module, monkeypatch):
+    monkeypatch.delenv("METHOD_JOB_LOG_MAX_MB", raising=False)
+    assert manager_module.log_max_bytes() == 5 * 1024 * 1024
+    monkeypatch.setenv("METHOD_JOB_LOG_MAX_MB", "0.5")
+    assert manager_module.log_max_bytes() == 524288
+    for junk in ("0", "-1", "big"):
+        monkeypatch.setenv("METHOD_JOB_LOG_MAX_MB", junk)
+        assert manager_module.log_max_bytes() == 5 * 1024 * 1024
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process-group cancel is POSIX-only")
+def test_a_finished_job_can_be_collected_and_then_nothing_of_it_remains(tmp_path, manager_module, monkeypatch):
+    _fake_cgroup(tmp_path, monkeypatch, cpus=2, memory_mb=8192, in_use_mb=100, METHOD_MAX_CONCURRENT_JOBS=2)
+    monkeypatch.setenv("METHOD_JOB_LOG_MAX_MB", "0.001")              # about 1 kB
+    mgr = _manager(manager_module, tmp_path, SCRATCH_LONG_RUNNER)
+    running = mgr.submit(file_path=None, params={}, run_id="run-live")
+    _wait_for_status(mgr, running, {"RUNNING"})
+    assert mgr.delete(running) == 409 and _job_dir(mgr, running).is_dir()   # never while it runs
+
+    (_job_dir(mgr, running) / "job.log").write_bytes(b"y" * 5000)
+    content, was_cut = mgr.log(running)
+    assert was_cut and len(content) < 1500                            # served in bounded form
+    assert mgr.log("0" * 32) is None
+
+    mgr.cancel(running)
+    assert mgr.delete(running) == 200
+    assert not _job_dir(mgr, running).exists()
+    assert mgr.status(running) is None and mgr.delete(running) == 404
+    assert mgr.running_jobs() == 0
+    # Only real job ids are accepted: a path is not a job.
+    for bad in ("../" + running, "..", ".", "a/b", "", "x" * 100):
+        assert mgr.delete(bad) == 404
+    assert mgr.jobs_root.is_dir()
+
+
+def test_records_nobody_collected_are_removed_after_the_retention_time(tmp_path, manager_module, monkeypatch):
+    _fake_cgroup(tmp_path, monkeypatch, cpus=1, memory_mb=4096, in_use_mb=100)
+    monkeypatch.setenv("METHOD_JOB_RETENTION_HOURS", "24")
+    mgr = _manager(manager_module, tmp_path, DONE_RUNNER)
+    old_time = time.time() - 25 * 3600
+    for job_id, status, aged in (("oldfinished", "DONE", True), ("oldfailed", "ERROR", True),
+                                 ("recent", "DONE", False), ("interrupted", "RUNNING", True)):
+        state = mgr.jobs_root / job_id
+        (state / "tmp" / "leftover").mkdir(parents=True)
+        (state / "status.json").write_text(json.dumps({"job_id": job_id, "status": status}))
+        if aged:
+            for path in (state / "status.json", state / "tmp" / "leftover", state / "tmp", state):
+                os.utime(path, (old_time, old_time))
+    assert mgr.purge_expired() == 2
+    assert not (mgr.jobs_root / "oldfinished").exists() and not (mgr.jobs_root / "oldfailed").exists()
+    assert (mgr.jobs_root / "recent" / "status.json").exists()        # kept: within the retention time
+    assert not (mgr.jobs_root / "recent" / "tmp").exists()            # but its scratch data is not
+    assert (mgr.jobs_root / "interrupted" / "tmp").exists()           # unsettled jobs are left to recovery
+    # Start-up recovery closes the interrupted job and tidies up in the same pass.
+    assert mgr.recover_interrupted_jobs() == 1
+    assert not (mgr.jobs_root / "interrupted" / "tmp").exists()
+    # Submitting a job tidies up as well.
+    os.utime(mgr.jobs_root / "recent" / "status.json", (old_time, old_time))
+    os.utime(mgr.jobs_root / "recent", (old_time, old_time))
+    job_id = mgr.submit(file_path=None, params={}, run_id="run-new")
+    assert not (mgr.jobs_root / "recent").exists()
+    _wait_for_status(mgr, job_id, {"DONE"})

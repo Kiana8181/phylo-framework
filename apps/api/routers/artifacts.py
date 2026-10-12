@@ -13,6 +13,7 @@ from apps.api.database import get_db
 from apps.api.database.models import RunArtifact, StorageState, User
 from apps.api.repositories.artifact_repository import ArtifactRepository
 from apps.api.repositories.run_repository import RunRepository
+from apps.api.services import retention
 from apps.api.storage import get_artifact_storage
 
 router = APIRouter(tags=["artifacts"])
@@ -58,13 +59,28 @@ async def _run_owned_or_403(run_id: UUID, current_user: User, db: AsyncSession):
     return run
 
 
+def _expired(run) -> HTTPException:
+    expired_at = run.results_expired_at
+    return HTTPException(
+        status_code=410,
+        detail={
+            "code": retention.CODE_RESULT_EXPIRED,
+            "message": retention.expired_message(expired_at),
+            "expired_at": expired_at.isoformat() if expired_at else None,
+        },
+    )
+
+
 async def _load_artifact_or_404(
     artifact_id: UUID, current_user: User, db: AsyncSession
 ) -> RunArtifact:
     artifact = await ArtifactRepository(db).get_by_id(artifact_id)
     if artifact is None:
         raise HTTPException(404, "Artifact not found")
-    await _run_owned_or_403(artifact.run_id, current_user, db)
+    run = await _run_owned_or_403(artifact.run_id, current_user, db)
+    # Removed by retention: say so, with the date, rather than "deleted".
+    if run.results_expired_at is not None:
+        raise _expired(run)
     return artifact
 
 
@@ -80,7 +96,9 @@ async def list_run_artifacts(
     shown inline in the tree carousel via /artifacts/{id}/preview, and the
     Downloads UI should only list standalone outputs (bundle ZIP, log file).
     """
-    await _run_owned_or_403(run_id, current_user, db)
+    run = await _run_owned_or_403(run_id, current_user, db)
+    if run.results_expired_at is not None:
+        raise _expired(run)
     artifacts = await ArtifactRepository(db).list_for_run(
         run_id, exclude_tree_images=True
     )

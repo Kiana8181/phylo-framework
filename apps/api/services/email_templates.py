@@ -113,6 +113,8 @@ class RunFacts:
     # For failures: the code and the message already shown to the user in the app.
     error_code: Optional[str] = None
     error_message: Optional[str] = None
+    # Until when the results (and the log) are kept, if they expire at all.
+    expires_at: Optional[datetime] = None
 
 
 def _describe(run: RunFacts) -> str:
@@ -149,6 +151,11 @@ def run_finished(outcome: str, run: RunFacts, *, run_url: str) -> EmailContent:
         lines = [f"Your {what} has finished and its results are ready."]
         if finished:
             lines.append(f"Finished: {finished}")
+        if run.expires_at:
+            lines.append(
+                f"The results are kept until {run.expires_at:%Y-%m-%d}. Download what you need "
+                "before then; after that date they are removed."
+            )
         lines.append(reference)
         link = ("View the results", run_url)
 

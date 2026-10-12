@@ -267,6 +267,9 @@ def mock_jobs(monkeypatch, statuses, result=None):
     monkeypatch.setattr(worker.jobs, "get_job_result", AsyncMock(return_value=result))
     cancel = AsyncMock(return_value=True)
     monkeypatch.setattr(worker.jobs, "cancel_job", cancel)
+    # Housekeeping after the job (see test_retention.py); no real service here.
+    monkeypatch.setattr(worker.jobs, "get_job_log", AsyncMock(return_value=None))
+    monkeypatch.setattr(worker.jobs, "delete_job", AsyncMock(return_value=True))
     return submit, cancel
 
 

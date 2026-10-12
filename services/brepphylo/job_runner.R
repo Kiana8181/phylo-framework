@@ -57,9 +57,19 @@ finalize_with_log <- function(result) {
     TRUE
   }, error = function(e) FALSE)
   if (!isTRUE(src_loaded) || !exists("upload_artifact", mode = "function")) return(result)
+  # Logs are stored in bounded form: a very long one keeps its beginning and
+  # its end (METHOD_JOB_LOG_MAX_MB).
+  upload_path <- log_path
+  if (exists("job_bounded_log", mode = "function")) {
+    bounded <- tryCatch(job_bounded_log(log_path), error = function(e) NULL)
+    if (!is.null(bounded) && isTRUE(bounded$truncated)) {
+      upload_path <- file.path(state_dir, "job.log.bounded")
+      writeBin(bounded$content, upload_path)
+    }
+  }
   uploaded <- tryCatch(
     upload_artifact(
-      local_path = log_path,
+      local_path = upload_path,
       run_id = run_id, job_id = job_id,
       filename = "job.log", content_type = "text/plain"
     ),

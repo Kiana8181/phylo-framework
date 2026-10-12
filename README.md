@@ -150,6 +150,7 @@ MinIO is never exposed to the browser.
 - How many runs a user may start per hour, what counts, and what the wizard shows when the limit is reached: [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md#limits-on-creating-runs).
 - Sign-in protection: the self-hosted CAPTCHA, rate limits, the reverse-proxy setting they depend on, and email verification: [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md#sign-in-protection).
 - Email: SMTP settings, which runs send a notification, retries and what a mail outage does (nothing to runs): [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md#email-and-run-notifications).
+- How long results are kept (60 days by default), what expires and what does not, the upload size limit and clean-up: [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md#storage-lifecycle-and-retention).
 - Run time limits, what happens to a run when a method container restarts, the object store is down or a job runs out of memory, and what each error code means: [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md#when-a-run-cannot-finish).
 - Replacing the unmaintained MinIO image (investigation and recommendation, not yet applied): [docs/OBJECT-STORAGE-OPTIONS.md](./docs/OBJECT-STORAGE-OPTIONS.md).
 

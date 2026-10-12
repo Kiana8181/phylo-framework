@@ -10,6 +10,7 @@ import { useMethodSpec } from "@/features/methods/hooks";
 import { useCreateRun, useRunQuota } from "@/features/runs/hooks";
 import { runLimitCode, runLimitTitle } from "@/features/runs/quota";
 import RunQuotaNotice from "@/components/phylo/RunQuotaNotice";
+import { isUploadTooLargeError } from "@/features/runs/retention";
 import { useAuth } from "@/features/auth/context";
 import { needsEmailVerification } from "@/lib/auth/storage";
 import { useUploadSession } from "@/features/uploads/hooks";
@@ -114,6 +115,8 @@ export default function RunWizard({
     } catch (e: unknown) {
       if ((e as { aborted?: boolean })?.aborted) {
         notify.error("Upload cancelled", "The file upload was cancelled.");
+      } else if (isUploadTooLargeError(e)) {
+        notify.error("File too large", (e as Error)?.message ?? "This file is larger than the upload limit.");
       } else if (!runLimitCode(e)) {
         // A refused run (limit reached) has already been explained by useCreateRun.
         notify.error("Run failed", (e as Error)?.message ?? "Unknown error");

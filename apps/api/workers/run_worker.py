@@ -13,14 +13,18 @@ A standalone process (separate from the API) that:
   - confirms every artifact is in the object store before a run becomes DONE,
   - persists the final result/error using the existing contracts,
   - resumes orphaned runs after a lease expires,
-  - delivers run notifications from the outbox (workers/notifier.py), as a
-    separate task that cannot affect run processing.
+  - keeps a log for failed jobs and tells the method service to forget a job
+    once its result is stored,
+  - delivers run notifications from the outbox (workers/notifier.py) and
+    removes results past their date (workers/retention.py), as separate tasks
+    that cannot affect run processing.
 
 Run with:  python -m apps.api.workers.run_worker
 """
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import socket
@@ -68,6 +72,7 @@ from apps.api.services.run_staging import (
     cleanup_workspace,
     normalize_failed_result_payload,
     prepare_method_input,
+    run_work_root,
 )
 from apps.api.services.stage_map import progress_for_stage
 from apps.api.services.tree_contract import assemble_unified_tree_result
@@ -77,6 +82,7 @@ from apps.api.utils.datetime_util import utc_now
 from apps.api.workers import limits
 from apps.api.workers.capacity import CapacityTracker
 from apps.api.workers.notifier import notification_loop
+from apps.api.workers.retention import retention_loop
 
 POLL_INTERVAL = float(os.getenv("WORKER_POLL_INTERVAL", "3"))
 METHOD_POLL_INTERVAL = float(os.getenv("WORKER_METHOD_POLL_INTERVAL", "10"))
@@ -94,6 +100,7 @@ CODE_RESULT_UNAVAILABLE = "RESULT_UNAVAILABLE"
 CODE_ARTIFACT_UPLOAD_FAILED = "ARTIFACT_UPLOAD_FAILED"
 CODE_ARTIFACTS_MISSING = "ARTIFACTS_MISSING"
 CODE_ARTIFACT_STORE_UNAVAILABLE = "ARTIFACT_STORE_UNAVAILABLE"
+CODE_STAGING_TIMEOUT = "STAGING_TIMEOUT"
 # Used only while no method service has reported its capacity yet.
 FALLBACK_CONCURRENT_RUNS = 1
 
@@ -563,14 +570,34 @@ async def process_run(
                     await run_repo.update_stage(
                         run_id, "PREPROCESSING", message="Preparing input", progress=10
                     )
+                staging_limit = limits.staging_timeout_seconds()
                 try:
-                    staged = await prepare_method_input(
-                        run_id=run_id,
-                        method_id=method_id,
-                        original_storage_path=input_storage_path,
-                        params=params,
-                        storage=_storage_backend(),
+                    # Bounded like everything else a run does: fetching and
+                    # converting the input must not hold the run for ever.
+                    staged = await asyncio.wait_for(
+                        prepare_method_input(
+                            run_id=run_id,
+                            method_id=method_id,
+                            original_storage_path=input_storage_path,
+                            params=params,
+                            storage=_storage_backend(),
+                        ),
+                        timeout=staging_limit,
                     )
+                except asyncio.TimeoutError:
+                    # Its work directory is derived from the run id, so it can
+                    # be removed although the preparation never returned it.
+                    workspace = run_work_root(run_id)
+                    await _fail(
+                        run_id,
+                        CODE_STAGING_TIMEOUT,
+                        f"Preparing the input file took longer than {limits.describe_duration(staging_limit)} "
+                        "and was stopped. The analysis was not started. The file may be too large or in a "
+                        "format that is slow to convert; try a smaller file.",
+                        step="api.worker.staging",
+                        details={"method_id": method_id, "limit_seconds": int(staging_limit)},
+                    )
+                    return
                 except StagingError as err:
                     if staged_workspace := getattr(err, "workspace", None):
                         workspace = staged_workspace
@@ -640,6 +667,7 @@ async def process_run(
             _log("submitted method job", run_id=run_id, method_id=method_id, method_job_id=method_job_id)
 
         await _poll_method_job(run_id, method_id, method_job_id, worker_id)
+        await _after_job(run_id, method_id, method_job_id)
 
     except jobs.MethodServiceUnavailable as exc:
         await _persist_error(run_id, error_message=str(exc))
@@ -680,6 +708,65 @@ async def process_run(
             tracker.release(method_id, run_id)
         if workspace is not None:
             await asyncio.to_thread(cleanup_workspace, workspace, run_id)
+
+
+async def _keep_job_log(run_id: UUID, method_id: str, method_job_id: str) -> bool:
+    """Give a failed run a downloadable log when it has none.
+
+    A job that ends normally uploads its own log. One that was stopped at its
+    time limit, crashed or was killed could not; its service still has the log
+    and offers it in bounded form. Fetch it, store it as the run's log file and
+    register it, so that every failed run has a log to download and the log
+    expires with the run's other files. Returns True when a log was stored.
+    """
+    async with AsyncSessionLocal() as db:
+        if await ArtifactRepository(db).has_log(run_id):
+            return False
+    text = await jobs.get_job_log(method_id, method_job_id)
+    if not text or not text.strip():
+        return False
+    data = text.encode("utf-8")
+    object_key = f"artifacts/{run_id}/{method_job_id}/job.log"
+    await _artifact_storage_backend().upload(data, object_key, "text/plain")
+    service = ArtifactService()
+    row = {
+        "storage_backend": service.backend,
+        "storage_bucket": service.bucket,
+        "object_key": object_key,
+        "filename": "job.log",
+        "content_type": "text/plain",
+        "size_bytes": len(data),
+        "checksum_sha256": hashlib.sha256(data).hexdigest(),
+        "artifact_kind": ArtifactKind.LOG,
+        "artifact_role": "log",
+        "is_previewable": True,
+    }
+    async with AsyncSessionLocal() as db:
+        await ArtifactRepository(db).add_for_run(run_id, [row])
+        await db.commit()
+    _log("job log kept", run_id=run_id, bytes=len(data))
+    return True
+
+
+async def _after_job(run_id: UUID, method_id: str, method_job_id: str) -> None:
+    """Housekeeping once a run's method job has reached its end: keep the log
+    of a failed job, then let the service forget the job so nothing of it stays
+    on the service's disk. Best effort: the run's outcome is already stored and
+    nothing here may change it (a service that does not answer keeps the job
+    record until its own retention time removes it)."""
+    try:
+        async with AsyncSessionLocal() as db:
+            run = await RunRepository(db).get_by_id(run_id)
+        if run is None or run.status not in (RunStatus.DONE, RunStatus.ERROR, RunStatus.CANCELLED):
+            return                       # e.g. handed back to the queue: the job is not over
+        if run.status == RunStatus.ERROR:
+            try:
+                await _keep_job_log(run_id, method_id, method_job_id)
+            except Exception as exc:  # noqa: BLE001
+                _log("job log not kept", run_id=run_id, error=repr(exc))
+        await jobs.delete_job(method_id, method_job_id)
+    except Exception as exc:  # noqa: BLE001
+        _log("job record not removed at the service", run_id=run_id, method_job_id=method_job_id, error=repr(exc))
 
 
 def _elapsed_seconds(started_at: Any) -> Optional[float]:
@@ -1071,6 +1158,8 @@ async def main() -> None:
     # processing except the database, so a mail server that is down or slow
     # cannot delay a run or change its outcome.
     notifier = asyncio.create_task(notification_loop(), name="notifications")
+    # So is the removal of results that are past their date.
+    cleaner = asyncio.create_task(retention_loop(), name="retention")
 
     while True:
         try:
@@ -1084,6 +1173,7 @@ async def main() -> None:
                 await asyncio.sleep(POLL_INTERVAL)
         except asyncio.CancelledError:
             notifier.cancel()
+            cleaner.cancel()
             break
         except Exception:  # noqa: BLE001
             traceback.print_exc()

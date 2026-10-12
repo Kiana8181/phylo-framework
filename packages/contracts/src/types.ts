@@ -98,6 +98,12 @@ export type RunSummary = {
   created_at: string | null;
   started_at?: string | null;
   finished_at?: string | null;
+  /** When the stored results (files, trees, logs) are removed; null when they are kept for ever
+   *  or the run has not ended. ISO 8601. */
+  expires_at?: string | null;
+  /** True once the results have been removed. The run itself stays as history. */
+  results_expired?: boolean;
+  results_expired_at?: string | null;
 };
 
 export type FileSummary = {
@@ -139,6 +145,21 @@ export type RunStatus = {
     message?: string;
     details?: Record<string, unknown>;
   };
+  /** When the stored results (files, trees, logs) are removed; null when they are kept for ever
+   *  or the run has not ended. ISO 8601. */
+  expires_at?: string | null;
+  /** True once the results have been removed. The run itself stays as history. */
+  results_expired?: boolean;
+  results_expired_at?: string | null;
+};
+
+/** GET /uploads/limits: what the user may still upload. */
+export type UploadLimitsResponse = {
+  /** Largest single file accepted. */
+  max_upload_bytes: number;
+  quota_bytes: number;
+  used_bytes: number;
+  remaining_bytes: number;
 };
 
 export type UploadInitResponse = {
@@ -737,4 +758,10 @@ export type RunResult = {
   artifact_count?: number;
   started_at?: string | null;
   finished_at?: string | null;
+  /** When the stored results (files, trees, logs) are removed; null when they are kept for ever
+   *  or the run has not ended. ISO 8601. */
+  expires_at?: string | null;
+  /** True once the results have been removed. The run itself stays as history. */
+  results_expired?: boolean;
+  results_expired_at?: string | null;
 };

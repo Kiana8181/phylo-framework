@@ -344,9 +344,11 @@ recovery_runner <- function() {
     'mode <- request$params$mode',
     'write_state <- function(x) { p <- file.path(sd,"status.json"); writeLines(toJSON(x,auto_unbox=TRUE),paste0(p,".tmp")); file.rename(paste0(p,".tmp"),p) }',
     'cat("step 1 done\\nstep 2 started\\n")',
+    'scratch <- Sys.getenv("TMPDIR"); if (nzchar(scratch)) writeLines("intermediate", file.path(scratch, "scratch.dat"))',
     'child <- if (identical(mode, "slow")) as.integer(system("sleep 120 >/dev/null 2>&1 & echo $!", intern=TRUE)) else NULL',
     'write_state(list(status="RUNNING", pid=Sys.getpid(), child_pid=child,',
-    '                 job_child=Sys.getenv("PHYLO_JOB_CHILD"), oom_baseline=Sys.getenv("PHYLO_JOB_OOM_BASELINE")))',
+    '                 job_child=Sys.getenv("PHYLO_JOB_CHILD"), oom_baseline=Sys.getenv("PHYLO_JOB_OOM_BASELINE"),',
+    '                 tmpdir=scratch, r_tempdir=tempdir()))',
     'if (identical(mode, "slow")) Sys.sleep(120)',
     'if (identical(mode, "crash")) quit(status = 3)',
     'if (identical(mode, "oom")) {',
@@ -612,4 +614,135 @@ testthat::test_that('a file that cannot be uploaded is reported, not dropped, an
   blank <- mark_storage_failure(NULL, 'x')
   testthat::expect_equal(blank$artifacts, list()); testthat::expect_false(blank$ok)
   unlink(c(good, bad))
+})
+
+
+# ---------------------------------------------------------------------------
+# Nothing of a finished job stays on the service's disk: its scratch data goes
+# when it ends, its record when the worker has collected it (or after a while),
+# and its log is offered in bounded form until then.
+# ---------------------------------------------------------------------------
+testthat::test_that('a long log is offered with its beginning and its end, and says what was left out', {
+  small <- tempfile(); writeLines(c('first line', 'last line'), small)
+  whole <- job_bounded_log(small, 1024)
+  testthat::expect_false(whole$truncated)
+  testthat::expect_equal(rawToChar(whole$content), "first line\nlast line\n")
+
+  big <- tempfile()
+  writeLines(c('THE-BEGINNING', rep(strrep('x', 99), 2000), 'THE-END'), big)
+  size <- file.info(big)$size
+  cut <- job_bounded_log(big, 4096)
+  text <- rawToChar(cut$content)
+  testthat::expect_true(cut$truncated)
+  testthat::expect_true(startsWith(text, 'THE-BEGINNING')); testthat::expect_true(endsWith(text, "THE-END\n"))
+  testthat::expect_match(text, sprintf('%.0f bytes of this log were left out', size - 4096))
+  testthat::expect_match(text, sprintf('it is %.0f bytes long', size))
+  testthat::expect_lt(length(cut$content), 4096 + 300)                     # the limit plus the note
+  exact <- job_bounded_log(big, size)
+  testthat::expect_false(exact$truncated); testthat::expect_equal(length(exact$content), size)
+
+  missing <- job_bounded_log(file.path(tempdir(), 'no-such-log'))
+  testthat::expect_false(missing$truncated); testthat::expect_equal(length(missing$content), 0)
+
+  Sys.unsetenv("METHOD_JOB_LOG_MAX_MB"); testthat::expect_equal(job_log_max_bytes(), 5 * 1024 * 1024)
+  Sys.setenv(METHOD_JOB_LOG_MAX_MB = "0.5"); testthat::expect_equal(job_log_max_bytes(), 524288)
+  for (bad in c("junk", "0", "-3")) {
+    Sys.setenv(METHOD_JOB_LOG_MAX_MB = bad); testthat::expect_equal(job_log_max_bytes(), 5 * 1024 * 1024)
+  }
+  Sys.unsetenv("METHOD_JOB_LOG_MAX_MB")
+  Sys.setenv(METHOD_JOB_RETENTION_HOURS = "2"); testthat::expect_equal(.job_retention_seconds(), 7200)
+  Sys.setenv(METHOD_JOB_RETENTION_HOURS = "junk"); testthat::expect_equal(.job_retention_seconds(), 86400)
+  Sys.unsetenv("METHOD_JOB_RETENTION_HOURS")
+  unlink(c(small, big))
+})
+
+testthat::test_that('each job has its own scratch directory, removed when the job is stopped', {
+  with_recovery_runner({
+    env <- one_slot_manager('phylo-r-scratch-'); mgr <- env$mgr
+    id <- job_manager_submit(mgr, NULL, list(mode = "slow"), 'run-scratch', timeout_seconds = 300)
+    testthat::expect_true(wait_for(function() !is.null(job_manager_status(mgr, id)$pid)))
+    running <- job_manager_status(mgr, id)
+    withr::defer(system(sprintf('kill -KILL %d %d 2>/dev/null', running$pid, running$child_pid)))
+    work <- .job_work_dir(mgr, id)
+    testthat::expect_equal(normalizePath(running$tmpdir), normalizePath(work))   # the job's TMPDIR
+    testthat::expect_true(startsWith(normalizePath(running$r_tempdir), normalizePath(work)))  # R's tempdir() is inside it
+    testthat::expect_true(file.exists(file.path(work, 'scratch.dat')))
+    testthat::expect_equal(job_manager_delete(mgr, id), 409L)               # running: nothing is removed
+    testthat::expect_true(file.exists(file.path(work, 'scratch.dat')))
+
+    testthat::expect_equal(job_manager_cancel(mgr, id)$status, 'CANCELLED')
+    testthat::expect_false(dir.exists(work))                                # scratch data gone at once
+    log <- job_manager_log(mgr, id)                                         # the record and the log are still there
+    testthat::expect_false(log$truncated); testthat::expect_match(rawToChar(log$content), 'step 2 started')
+
+    testthat::expect_equal(job_manager_delete(mgr, id), 200L)               # the worker has what it needs
+    testthat::expect_false(dir.exists(.job_state_dir(mgr, id)))
+    testthat::expect_null(job_manager_status(mgr, id)); testthat::expect_null(job_manager_log(mgr, id))
+    testthat::expect_equal(job_manager_delete(mgr, id), 404L)               # repeatable
+    finish_recovery_test(mgr)
+  })
+})
+
+testthat::test_that('scratch data is removed after a timeout and after a normal end', {
+  with_recovery_runner({
+    env <- one_slot_manager('phylo-r-scratch-end-'); mgr <- env$mgr
+    slow <- job_manager_submit(mgr, NULL, list(mode = "slow"), 'run-slow', timeout_seconds = 3)
+    testthat::expect_true(wait_for(function() !is.null(job_manager_status(mgr, slow)$child_pid)))
+    running <- job_manager_status(mgr, slow)
+    testthat::expect_true(file.exists(file.path(.job_work_dir(mgr, slow), 'scratch.dat')))
+    withr::defer(system(sprintf('kill -KILL %d %d 2>/dev/null', running$pid, running$child_pid)))
+    wait_status(mgr, slow, 'ERROR')
+    testthat::expect_false(dir.exists(.job_work_dir(mgr, slow)))
+    testthat::expect_match(rawToChar(job_manager_log(mgr, slow)$content), 'step 2 started')   # the log outlives it
+
+    testthat::expect_true(wait_for(function() job_manager_running(mgr) == 0L))
+    fast <- job_manager_submit(mgr, NULL, list(mode = "fast"), 'run-fast', timeout_seconds = 300)
+    wait_status(mgr, fast, 'DONE')
+    testthat::expect_true(wait_for(function() job_manager_running(mgr) == 0L))
+    testthat::expect_false(dir.exists(.job_work_dir(mgr, fast)))
+    testthat::expect_equal(job_manager_result(mgr, fast)$code, 200)         # the result is not scratch data
+    finish_recovery_test(mgr)
+  })
+})
+
+testthat::test_that('job ids that are not ids are never turned into paths', {
+  env <- one_slot_manager('phylo-r-ids-'); mgr <- env$mgr
+  outside <- file.path(dirname(mgr$root), paste0('precious-', basename(mgr$root)))
+  dir.create(outside); writeLines('keep', file.path(outside, 'status.json'))
+  for (bad in list(file.path('..', basename(outside)), '../..', '.', '', 'a/b', NA_character_, NULL, c('a', 'b'))) {
+    testthat::expect_equal(job_manager_delete(mgr, bad), 404L)
+    testthat::expect_null(job_manager_log(mgr, bad))
+  }
+  testthat::expect_true(file.exists(file.path(outside, 'status.json')))
+  unlink(outside, recursive = TRUE)
+  finish_recovery_test(mgr)
+})
+
+testthat::test_that('records nobody collected are removed after the retention time, never a running job', {
+  with_recovery_runner({
+    Sys.setenv(METHOD_JOB_RETENTION_HOURS = "24")
+    env <- one_slot_manager('phylo-r-purge-'); mgr <- env$mgr
+    done <- job_manager_submit(mgr, NULL, list(mode = "fast"), 'run-done')
+    wait_status(mgr, done, 'DONE')
+    testthat::expect_true(wait_for(function() job_manager_running(mgr) == 0L))
+    active <- job_manager_submit(mgr, NULL, list(mode = "slow"), 'run-active')
+    testthat::expect_true(wait_for(function() !is.null(job_manager_status(mgr, active)$pid)))
+    running <- job_manager_status(mgr, active)
+    withr::defer(system(sprintf('kill -KILL %d %d 2>/dev/null', running$pid, running$child_pid)))
+
+    testthat::expect_equal(job_manager_purge_expired(mgr), 0L)              # too recent
+    testthat::expect_equal(job_manager_status(mgr, done)$status, 'DONE')
+    testthat::expect_equal(job_manager_purge_expired(mgr, Sys.time() + 23 * 3600), 0L)
+    testthat::expect_equal(job_manager_purge_expired(mgr, Sys.time() + 25 * 3600), 1L)
+    testthat::expect_false(dir.exists(.job_state_dir(mgr, done)))
+    testthat::expect_equal(job_manager_status(mgr, active)$status, 'RUNNING')     # however old: still running
+    testthat::expect_true(file.exists(file.path(.job_work_dir(mgr, active), 'scratch.dat')))
+    testthat::expect_equal(job_manager_purge_expired(mgr, Sys.time() + 25 * 3600), 0L)
+
+    job_manager_cancel(mgr, active)
+    testthat::expect_equal(job_manager_purge_expired(mgr, Sys.time() + 25 * 3600), 1L)
+    testthat::expect_equal(length(list.dirs(mgr$root, recursive = FALSE)), 0L)   # the service's disk is back to empty
+    Sys.unsetenv("METHOD_JOB_RETENTION_HOURS")
+    finish_recovery_test(mgr)
+  })
 })

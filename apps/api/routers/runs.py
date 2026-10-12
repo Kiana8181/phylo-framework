@@ -21,7 +21,7 @@ from apps.api.repositories.file_repository import FileRepository
 from apps.api.repositories.run_repository import RunRepository
 from apps.api.repositories.run_tree_repository import RunTreeRepository
 from apps.api.security.errors import internal_error
-from apps.api.services import run_quota
+from apps.api.services import retention, run_quota
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
@@ -34,6 +34,31 @@ TERMINAL_STATUSES = (RunStatus.DONE, RunStatus.ERROR, RunStatus.CANCELLED)
 # --------------------------------------------------------------------------- #
 # Serialization helpers
 # --------------------------------------------------------------------------- #
+def _retention_fields(run: Run) -> dict[str, Any]:
+    """Until when a run's results are kept, and whether they are gone already."""
+    expires_at = getattr(run, "expires_at", None)
+    expired_at = getattr(run, "results_expired_at", None)
+    return {
+        "expires_at": expires_at.isoformat() if expires_at else None,
+        "results_expired": expired_at is not None,
+        "results_expired_at": expired_at.isoformat() if expired_at else None,
+    }
+
+
+def _ensure_results_available(run: Run) -> None:
+    """410 for a run whose results have been removed by retention."""
+    expired_at = getattr(run, "results_expired_at", None)
+    if expired_at is not None:
+        raise HTTPException(
+            status_code=410,
+            detail={
+                "code": retention.CODE_RESULT_EXPIRED,
+                "message": retention.expired_message(expired_at),
+                "expired_at": expired_at.isoformat(),
+            },
+        )
+
+
 def _normalized_run_params(run: Run) -> dict[str, Any]:
     raw = getattr(run, "params", None)
     return raw if isinstance(raw, dict) else {}
@@ -162,6 +187,7 @@ def _public_status(
         "cancel_requested": getattr(run, "cancel_requested_at", None) is not None,
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+        **_retention_fields(run),
     }
     raw_error = getattr(run, "error", None)
     if raw_error:
@@ -196,6 +222,7 @@ def _run_summary(run) -> dict:
         "created_at": run.created_at.isoformat() if run.created_at else None,
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+        **_retention_fields(run),
     }
 
 
@@ -611,6 +638,7 @@ async def run_result(
 
     if run.status not in (RunStatus.DONE, RunStatus.ERROR, RunStatus.CANCELLED):
         raise HTTPException(409, "Run not finished")
+    _ensure_results_available(run)
 
     dataset_name, dataset_files = await _resolve_dataset_meta(run, file_repo)
     if isinstance(run.result, dict):
@@ -653,6 +681,7 @@ async def run_result(
     )
     payload.setdefault("started_at", run.started_at.isoformat() if run.started_at else None)
     payload.setdefault("finished_at", run.finished_at.isoformat() if run.finished_at else None)
+    payload.update(_retention_fields(run))
 
     # Lightweight, base64-free additions: a dataset descriptor (incl. deletion
     # state for history) and an artifact count. Binaries are fetched lazily via
@@ -674,6 +703,7 @@ async def list_run_trees(
     run = await _load_run_with_access(run_id, current_user=current_user, run_repo=run_repo)
     if run.status != RunStatus.DONE:
         raise HTTPException(409, "Run not finished")
+    _ensure_results_available(run)
 
     tree_repo = RunTreeRepository(db)
     trees = await tree_repo.list_for_run(run.id)
@@ -701,6 +731,7 @@ async def get_run_tree_payload(
     run = await _load_run_with_access(run_id, current_user=current_user, run_repo=run_repo)
     if run.status != RunStatus.DONE:
         raise HTTPException(409, "Run not finished")
+    _ensure_results_available(run)
 
     tree_repo = RunTreeRepository(db)
     payload = await tree_repo.get_tree_payload(run.id, tree_id)

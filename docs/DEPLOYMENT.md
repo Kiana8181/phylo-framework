@@ -361,6 +361,7 @@ as `CANCELLED`. No run holds a slot, or waits for one, without limit.
 |---|---|---|
 | The analysis runs longer than the limit | `ERROR [TIMEOUT]` | The job and every program it started are stopped; the slot is free again |
 | The run waits too long for a free slot | `ERROR [QUEUE_TIMEOUT]` | Nothing was executed |
+| Fetching and preparing the input takes too long | `ERROR [STAGING_TIMEOUT]` | The method was not started; the work directory is removed |
 | A job is killed for lack of memory | `ERROR [OUT_OF_MEMORY]` | The message tells the user to try a smaller dataset or ask for a higher limit |
 | A job's process dies for another reason | `ERROR [JOB_PROCESS_LOST]` | |
 | The method container restarts or is redeployed during a run | `ERROR [METHOD_RESTARTED]` | Only the runs that were in progress there; never re-run automatically |
@@ -382,6 +383,7 @@ it again. After a failure the user's next queued run moves up as usual.
 | `RUN_TIMEOUT_SECONDS` | `86400` (24 h) | Longest a run may execute, counted from the moment it started. `0` = no limit |
 | `RUN_TIMEOUT_SECONDS_<METHOD>` | unset | The same for one method (`DOWSER`, `BREPPHYLO`, `GCTREE`, `CLONALTREE`) |
 | `RUN_QUEUE_WAIT_TIMEOUT_SECONDS` | `172800` (48 h) | Longest a run that is ready to start may wait for a slot. `0` = no limit |
+| `RUN_STAGING_TIMEOUT_SECONDS` | `1800` (30 min) | Longest the worker may take to fetch and prepare a run's input before the method starts. `0` = no limit |
 | `WORKER_METHOD_UNREACHABLE_SECONDS` | `300` | How long a method service may be unreachable while one of its jobs is followed |
 | `WORKER_CANCEL_CONFIRM_SECONDS` | `60` | How long the worker waits for a stop (cancel or timeout) to be confirmed |
 
@@ -479,6 +481,132 @@ On the isolated test stack and on a throwaway copy of the production profile
 What these tests do not cover: datasets larger than the samples, cgroup v1
 hosts, and an out-of-memory kill inside the R services (their handling of it is
 tested with a simulated kernel counter, not with a real kill).
+
+## Storage lifecycle and retention
+
+Nothing here grows without limit: results expire, unfinished uploads are
+cleaned up, method containers keep nothing of a finished job, and one upload
+has a maximum size. **This section describes automatic, permanent deletion of
+user data. Read it before changing `RESULT_RETENTION_DAYS`.**
+
+### What is kept and for how long
+
+| What | Kept | Removed by |
+|---|---|---|
+| A run's result files (bundle, trees, images, tables, log) in the object store | `RESULT_RETENTION_DAYS` after the run ended (default 60) | The worker's retention task |
+| A run's trees, stored result and logs in the database | The same date | The same task, after the files are gone |
+| The run itself: method, parameters, dataset name, status, message, times | For ever, marked "results expired" | Never |
+| Uploaded datasets | Until the owner deletes them (they count against the storage quota) | **Never automatically** |
+| Uploads that were started and never finished | `UPLOAD_SESSION_GRACE_HOURS` (default 24) | The API's upload clean-up |
+| A job's scratch data inside a method container | Until the job ends | The method service |
+| A finished job's record and log inside a method container | Until the worker has collected the result; at most `PHYLO_JOB_RETENTION_HOURS` (default 24) | The worker, or the method service itself |
+| The record of a run's notification email | With the run's results (a notification still waiting to be sent is left alone) | The retention task |
+
+Runs of every final state get a date: `DONE`, `ERROR` and `CANCELLED`. A run
+that is waiting or running has none and is never touched.
+
+### Settings
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `RESULT_RETENTION_DAYS` | `60` | Days results are kept after a run ended. `0` = keep for ever (nothing is ever removed) |
+| `MAX_UPLOAD_MB` | `500` | Largest single file a user may upload |
+| `UPLOAD_SESSION_GRACE_HOURS` | `24` | Age after which an unfinished upload is cleaned up |
+| `RETENTION_SWEEP_SECONDS` | `3600` | How often expired results and abandoned uploads are looked for |
+| `PHYLO_JOB_LOG_MAX_MB` | `5` | Largest execution log kept for a run |
+| `PHYLO_JOB_RETENTION_HOURS` | `24` | How long a method service keeps a finished job nobody collected |
+| `RUN_STAGING_TIMEOUT_SECONDS` | `1800` | See [Time limits](#time-limits) |
+
+The first four are read from `.env` by the API and the worker; the two
+`PHYLO_JOB_*` values are passed to the method containers by compose. A value
+that is not a number is ignored in favour of the default; it never switches
+retention off by accident.
+
+### How the date is set, and what changing the setting does
+
+- The date is fixed at the moment a run ends (`runs.expires_at`) and does not
+  move afterwards. Changing `RESULT_RETENTION_DAYS` applies to runs that end
+  **after** the change. A date the user has already been shown is kept, in both
+  directions: shortening the period deletes nothing earlier than promised.
+- **Runs that had already ended when this version was first deployed** got
+  their date counted from the day of that deployment (migration
+  `016_result_retention`), not from the day they ended. No existing result is
+  removed on upgrade day, however old it is. The migration reads
+  `RESULT_RETENTION_DAYS` from the environment of the container that runs it;
+  with `0` those runs get no date.
+- Setting `RESULT_RETENTION_DAYS=0` stops all removal at once, including for
+  runs whose date has passed but which have not been cleaned up yet.
+
+### What the user sees
+
+- On a finished run's page: "These results are kept until 2026-12-11 (60 days
+  left)", highlighted during the last 7 days. The run history shows the same
+  date, and the notification email for a finished run states it.
+- After the date: the run is still in the history, marked "Results expired".
+  Its page shows the method, the dataset name and the parameters (which can be
+  reused for a new run) and says when the results were removed.
+- The API answers `410 Gone` with `code: RESULT_EXPIRED` for the result, the
+  trees and every file of such a run, and reports `expires_at`,
+  `results_expired` and `results_expired_at` on the run. Expired runs are no
+  longer offered for comparison with other runs.
+
+### How removal works
+
+The worker runs the retention task next to run processing (start-up log line:
+`result retention: 60 days after a run ends`). For each run that has ended and
+is past its date it
+
+1. deletes everything under the run's prefix in the artifact bucket
+   (`artifacts/<run id>/`), which also catches files a failed run uploaded
+   without registering them;
+2. only when that succeeded, marks the file records deleted, removes the trees
+   and the stored result, and marks the run expired, in one transaction.
+
+If the object store cannot be reached, nothing changes in the database and the
+run is tried again at the next sweep. If the worker stops between the two
+steps, the next sweep finds no files and completes the second step. The check
+that a run has ended and is due is made again immediately before its files are
+deleted. Running the task twice changes nothing.
+
+**No backup is taken before deletion, and this project sets up no automatic
+backups.** Removal is permanent. Whoever needs results for longer must download
+them before the date, or the retention period must be chosen accordingly.
+
+### Uploads
+
+A file larger than `MAX_UPLOAD_MB` is refused with `413` and
+`code: UPLOAD_TOO_LARGE`: at once when the browser announces the size, and
+otherwise while the bytes arrive (the partial file is deleted). `GET
+/uploads/limits` reports the limit and the user's remaining storage quota.
+
+The reverse proxy in front of the application must accept request bodies at
+least as large as `MAX_UPLOAD_MB` (for nginx: `client_max_body_size`), or
+uploads fail at the proxy with an error the application cannot explain.
+
+An upload that was started and not finished (closed tab, lost connection, API
+restart) leaves a partial file in the API container's temporary directory.
+These are removed once they are older than `UPLOAD_SESSION_GRACE_HOURS`.
+Finished uploads are datasets and are not touched.
+
+### Execution logs
+
+Every run that failed has a log to download, including runs that were stopped
+at their time limit or whose job was killed: when the job could not upload its
+own log, the worker fetches it from the method service and stores it with the
+run's files. A log longer than `PHYLO_JOB_LOG_MAX_MB` keeps its beginning and
+its end, with a line in between saying how much was left out. Logs expire with
+the run's other files. The one exception is a run whose method container was
+replaced while it ran (a redeploy): the job's files, its log among them, were
+inside that container and went with it.
+
+### Method containers
+
+Each job gets its own scratch directory, set as `TMPDIR` for the job and every
+tool it starts. It is deleted when the job ends, however it ends (finished,
+failed, timed out, cancelled, killed). Once the worker has taken a job's result
+it tells the service to forget the job; a job the worker never collected is
+forgotten after `PHYLO_JOB_RETENTION_HOURS`. A method container's disk use
+therefore returns to its baseline between jobs.
 
 ## Sign-in protection
 

@@ -241,3 +241,28 @@ async def cancel_job(method_id: str, job_id: str) -> bool:
         resp = await client.post(url)
         # A terminal job may return 200 or 409; both are acceptable for idempotency.
         return resp.status_code < 500
+
+
+async def get_job_log(method_id: str, job_id: str) -> Optional[str]:
+    """The job's log as the service offers it (already cut to its size limit).
+    None when the service has no such job or no log route (an older build)."""
+    base = _base_or_raise(method_id)
+    routes = get_service_routes(method_id)
+    url = _job_url(base, routes["jobLog"], job_id)
+    async with httpx.AsyncClient(timeout=JOB_RESULT_TIMEOUT, trust_env=False) as client:
+        resp = await client.get(url)
+    if resp.status_code in (404, 405):
+        return None
+    resp.raise_for_status()
+    return resp.text
+
+
+async def delete_job(method_id: str, job_id: str) -> bool:
+    """Tell the service it may forget a finished job (its record, log and any
+    leftover scratch data). True when it did or had nothing to forget."""
+    base = _base_or_raise(method_id)
+    routes = get_service_routes(method_id)
+    url = _job_url(base, routes["job"], job_id)
+    async with httpx.AsyncClient(timeout=JOB_CANCEL_TIMEOUT, trust_env=False) as client:
+        resp = await client.delete(url)
+    return resp.status_code in (200, 204, 404)

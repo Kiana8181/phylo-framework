@@ -206,6 +206,21 @@ class MinIOStorage(StorageInterface):
             sha256=str(sha256).strip().lower() if sha256 else None,
         )
 
+    async def delete_prefix(self, prefix: str) -> int:
+        """Delete every object under ``prefix``. Raises if the store fails."""
+        key = prefix.lstrip("/")
+        if not key:
+            raise ValueError("refusing to delete with an empty prefix")
+
+        def _delete_all() -> int:
+            deleted = 0
+            for obj in self.client.list_objects(self.bucket_name, prefix=key, recursive=True):
+                self.client.remove_object(self.bucket_name, obj.object_name)
+                deleted += 1
+            return deleted
+
+        return await asyncio.to_thread(_delete_all)
+
     async def move(self, src_path: str, dst_path: str) -> str:
         """Move within MinIO via server-side copy + remove."""
         from minio.commonconfig import CopySource

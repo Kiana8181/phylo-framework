@@ -110,6 +110,10 @@ x-method-common-env: &method_common_env
   # Time limit for jobs that arrive without one (the worker always sends one,
   # taken from RUN_TIMEOUT_SECONDS). Empty = none.
   METHOD_JOB_TIMEOUT_SECONDS: ${PHYLO_METHOD_JOB_TIMEOUT_SECONDS:-}
+  # Largest execution log offered or uploaded for a job (MB), and how long a
+  # finished job nobody collected is kept on the service's disk (hours).
+  METHOD_JOB_LOG_MAX_MB: ${PHYLO_JOB_LOG_MAX_MB:-5}
+  METHOD_JOB_RETENTION_HOURS: ${PHYLO_JOB_RETENTION_HOURS:-24}
   # Share of the container's memory limit a method service keeps free when it
   # decides whether another job may start (see docs/DEPLOYMENT.md).
   METHOD_MEMORY_HEADROOM_PERCENT: ${PHYLO_MEMORY_HEADROOM_PERCENT:-10}

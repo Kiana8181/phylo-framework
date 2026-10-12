@@ -202,7 +202,11 @@ class Run(Base):
     )
     started_at = Column(DateTime(timezone=True), nullable=True)
     finished_at = Column(DateTime(timezone=True), nullable=True)
+    # Until when this run's results are kept; fixed when the run ends
+    # (services/retention.py). NULL = no expiry.
     expires_at = Column(DateTime(timezone=True), nullable=True)
+    # When the results were removed. The run row itself stays as history.
+    results_expired_at = Column(DateTime(timezone=True), nullable=True)
 
     # Relationships
     user = relationship("User", back_populates="runs")
