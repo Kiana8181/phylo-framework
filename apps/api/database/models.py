@@ -213,6 +213,8 @@ class Run(Base):
         Index("idx_runs_status", "status"),
         Index("idx_runs_created_at", "created_at"),
         Index("idx_runs_method_id", "method_id"),
+        # Per-user rolling quota: "this user's runs of the last hour".
+        Index("idx_runs_user_created_at", "user_id", "created_at"),
         # Drives the dispatcher claim query (ORDER BY dispatch_seq over promoted rows).
         Index("idx_runs_status_dispatch_seq", "status", "dispatch_seq"),
     )

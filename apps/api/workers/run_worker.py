@@ -47,6 +47,12 @@ from apps.api.services.artifact_verification import (
     ArtifactStoreUnavailable,
     verify_artifacts,
 )
+from apps.api.services.completion import (
+    CODE_INCOMPLETE_RESULT,
+    LOG_MISSING_WARNING,
+    has_execution_log,
+    missing_requirements,
+)
 from apps.api.preprocess.prepare_input import PREPROCESS_LOG_PREFIX
 from apps.api.security.errors import log_internal_error
 from apps.api.security.production_config import (
@@ -298,7 +304,29 @@ async def _persist_done(
         manifest_artifacts=manifest,
     )
 
-    # 5) Do not take the manifest's word for it: every declared file must be in
+    # 5) A result is only a result if it has what this method always delivers
+    #    (at least one tree and its result bundle). Without this, a method that
+    #    reports success but declares nothing would pass the file check below
+    #    with an empty list.
+    missing = missing_requirements(method_id, result, tree_rows, artifact_rows)
+    if missing:
+        _log("result incomplete", run_id=run_id, method_id=method_id, missing="; ".join(missing))
+        await _fail(
+            run_id,
+            CODE_INCOMPLETE_RESULT,
+            f"The {method_id} analysis reported success, but its result is incomplete: "
+            f"{'; '.join(missing)}. The run was not completed; please run it again, and "
+            "contact support if it keeps happening.",
+            step="api.worker.completion",
+            details={"method_id": method_id, "missing": missing},
+        )
+        return
+    if not has_execution_log(artifact_rows):
+        # The scientific output is complete; keep it and say what is missing.
+        unified_result = dict(unified_result)
+        unified_result["warnings"] = [*(unified_result.get("warnings") or []), dict(LOG_MISSING_WARNING)]
+
+    # 6) Do not take the manifest's word for it: every declared file must be in
     #    the object store, with the declared size, before the run is DONE.
     try:
         report = await verify_artifacts(artifact_rows, _artifact_storage_backend())
@@ -327,7 +355,7 @@ async def _persist_done(
         await _keep_verified_logs(run_id, artifact_rows, report.verified_keys)
         return
 
-    # 6) Persist run summary + trees + artifact references in ONE transaction:
+    # 7) Persist run summary + trees + artifact references in ONE transaction:
     #    a reader either sees the run still running, or DONE with all of them.
     async with AsyncSessionLocal() as db:
         run_repo = RunRepository(db)
@@ -455,11 +483,13 @@ async def _ingest_failure_logs(
         traceback.print_exc()
 
 
-async def _mark_cancelled(run_id: UUID, message: str = "Run cancelled") -> None:
+async def _mark_cancelled(
+    run_id: UUID, message: str = "Run cancelled", *, never_started: bool = False
+) -> None:
     async with AsyncSessionLocal() as db:
         run_repo = RunRepository(db)
-        await run_repo.mark_cancelled(run_id, message)
-    _log("run cancelled", run_id=run_id)
+        await run_repo.mark_cancelled(run_id, message, never_started=never_started)
+    _log("run cancelled", run_id=run_id, never_started=never_started or None)
 
 
 async def _release_for_capacity(
@@ -523,8 +553,9 @@ async def process_run(
         # Resume path: a reclaimed run already submitted a method job.
         if not method_job_id:
             if cancel_requested:
-                # Cancelled before we submitted anything to the method service.
-                await _mark_cancelled(run_id, "Cancelled before execution")
+                # Cancelled before we submitted anything to the method service:
+                # the analysis never started, so the run is free for the quota.
+                await _mark_cancelled(run_id, "Cancelled before execution", never_started=True)
                 return
 
             # Stage + preprocess input.
@@ -570,7 +601,9 @@ async def process_run(
                 run_repo = RunRepository(db)
                 fresh = await run_repo.get_by_id(run_id)
                 if fresh is not None and fresh.cancel_requested_at is not None:
-                    await run_repo.mark_cancelled(run_id, "Cancelled before submission")
+                    await run_repo.mark_cancelled(
+                        run_id, "Cancelled before submission", never_started=True
+                    )
                     return
                 await run_repo.update_stage(
                     run_id,

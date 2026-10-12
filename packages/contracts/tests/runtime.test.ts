@@ -15,6 +15,7 @@ describe('public client contract', () => {
   it('encodes run and tree identifiers independently', () => {
     expect(API_ROUTES.runTree('a/b', 'x y')).toBe('/runs/a%2Fb/trees/x%20y');
     expect(API_ROUTES.createRun('a&b')).toBe('/runs?method=a%26b');
+    expect(API_ROUTES.runQuota()).toBe('/runs/quota');
   });
   it.each([['http://api///', '///runs', 'http://api/runs'], ['', '/runs', '/runs']])('joins URL %s %s', (a, b, expected) => {
     expect(withBase(a, b)).toBe(expected);

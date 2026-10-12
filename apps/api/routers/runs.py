@@ -20,14 +20,14 @@ from apps.api.repositories.file_repository import FileRepository
 from apps.api.repositories.run_repository import RunRepository
 from apps.api.repositories.run_tree_repository import RunTreeRepository
 from apps.api.security.errors import internal_error
+from apps.api.services import run_quota
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
 TERMINAL_STATUSES = (RunStatus.DONE, RunStatus.ERROR, RunStatus.CANCELLED)
 
-# A user may have 1 active turn + up to MAX_QUEUED queued behind it (MAX_QUEUED + 1
-# non-terminal runs total).
-MAX_QUEUED = 5
+# Limits on creating runs (hourly quota, queue size, submission ceiling) live in
+# apps/api/services/run_quota.py and are configurable through the environment.
 
 
 # --------------------------------------------------------------------------- #
@@ -263,6 +263,35 @@ class CreateRunBody(BaseModel):
     file_id: Optional[str] = None
 
 
+def _limit_error(quota: run_quota.QuotaState) -> HTTPException:
+    """The refusal for a run that may not be created right now.
+
+    A full queue is a conflict with the user's own unfinished runs (409, as
+    before). The two rolling limits are rate limits (429) and say when to try
+    again, in the body and in a Retry-After header.
+    """
+    blocked = quota.blocked_by
+    if blocked == run_quota.CODE_QUEUE_FULL:
+        return HTTPException(
+            status_code=409,
+            detail={"code": blocked, "message": quota.message, "limit": quota.max_queued},
+        )
+    window = quota.hourly if blocked == run_quota.CODE_QUOTA else quota.submissions
+    retry_after = quota.retry_after_seconds or 1
+    return HTTPException(
+        status_code=429,
+        detail={
+            "code": blocked,
+            "message": quota.message,
+            "limit": window.limit,
+            "used": window.used,
+            "reset_at": window.reset_at.isoformat() if window.reset_at else None,
+            "retry_after_seconds": retry_after,
+        },
+        headers={"Retry-After": str(retry_after)},
+    )
+
+
 @router.post("")
 async def create_run(
     method: str = Query(..., description="Method ID (e.g., 'dowser')"),
@@ -303,23 +332,6 @@ async def create_run(
             "This method requires an input file. Upload a file first and pass its file_id.",
         )
 
-    # Per-user queue quota: 1 active turn + up to MAX_QUEUED queued (MAX_QUEUED+1
-    # non-terminal total). Enforced atomically here; the partial-unique index backs
-    # the "one active turn" half.
-    nonterminal = await run_repo.count_nonterminal_for_user(user_id)
-    if nonterminal >= MAX_QUEUED + 1:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "QUEUE_FULL",
-                "message": (
-                    f"Your run queue is full ({MAX_QUEUED} queued behind your active "
-                    "run). Wait for a run to finish or cancel a queued one."
-                ),
-                "limit": MAX_QUEUED,
-            },
-        )
-
     existing_file = None
     if file_id:
         try:
@@ -339,6 +351,15 @@ async def create_run(
                     "dataset_id": str(existing_file.id),
                 },
             )
+
+    # Limits, checked and enforced as one step: from here until the new run is
+    # committed no other request of this user can create a run, so concurrent
+    # requests cannot each pass a check that only one of them should.
+    await run_repo.lock_run_creation(user_id)
+    quota = await run_quota.quota_state(run_repo, user_id)
+    if quota.blocked_by is not None:
+        await db.rollback()  # nothing was written; release the lock at once
+        raise _limit_error(quota)
 
     run = await run_repo.create_run(
         method_id=method,
@@ -489,6 +510,7 @@ async def get_dashboard(
     active = await run_repo.get_active_turn_run_for_user(current_user.id)
     queue = await run_repo.get_personal_queue_for_user(current_user.id)
     nonterminal = await run_repo.count_nonterminal_for_user(current_user.id)
+    max_queued = run_quota.max_queued_runs()
 
     active_payload = None
     if active is not None:
@@ -504,11 +526,25 @@ async def get_dashboard(
         "active": active_payload,
         "queue": [_run_summary(r) for r in queue],
         "limits": {
-            "max_queued": MAX_QUEUED,
+            "max_queued": max_queued,
             "queued_count": len(queue),
-            "can_add": nonterminal < MAX_QUEUED + 1,
+            "can_add": nonterminal < max_queued + 1,
         },
     }
+
+
+@router.get("/quota")
+async def get_run_quota(
+    current_user: User = Depends(get_current_user_required),
+    db: AsyncSession = Depends(get_db),
+):
+    """Where the current user stands against the limits on creating runs: the
+    rolling hourly quota, the submission ceiling and the queue size. The same
+    rules decide POST /runs, so a client can tell beforehand whether a new run
+    would be accepted and, if not, why and until when.
+    """
+    quota = await run_quota.quota_state(RunRepository(db), current_user.id)
+    return quota.as_dict()
 
 
 # Declare same-dataset before other /{run_id}/... routes so the path "same-dataset" is matched

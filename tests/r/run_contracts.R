@@ -596,6 +596,13 @@ testthat::test_that('a file that cannot be uploaded is reported, not dropped, an
   testthat::expect_false(failed$ok); testthat::expect_equal(failed$error_code, UPLOAD_FAILED_CODE)
   testthat::expect_equal(failed$error, message); testthat::expect_equal(failed$manifest_version, 1L)
 
+  # A declared file that is not on disk is reported too; entries without a path are ignored.
+  gone <- materialize_artifacts(list(ok = TRUE, artifact_files = list(
+    list(path = good, filename = 'tree.nwk'), list(path = file.path(tempdir(), 'never-written.zip')), list())), 'run', 'job')
+  testthat::expect_length(gone$artifacts, 1)
+  testthat::expect_equal(gone$artifact_upload_failures[[1]]$filename, 'never-written.zip')
+  testthat::expect_match(gone$artifact_upload_failures[[1]]$error, 'does not exist')
+
   clean <- materialize_artifacts(list(ok = TRUE, artifact_files = list(list(path = good, filename = 'tree.nwk'))), 'run', 'job')
   testthat::expect_null(clean$artifact_upload_failures)
   testthat::expect_null(storage_failure(clean)); testthat::expect_null(storage_failure(NULL))

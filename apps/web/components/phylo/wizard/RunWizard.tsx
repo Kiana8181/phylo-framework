@@ -7,7 +7,9 @@ import { Card } from "@/components/ui/card";
 import { Loading } from "@/components/ui/loading";
 import MethodsGrid from "@/components/phylo/MethodsGrid";
 import { useMethodSpec } from "@/features/methods/hooks";
-import { useCreateRun } from "@/features/runs/hooks";
+import { useCreateRun, useRunQuota } from "@/features/runs/hooks";
+import { runLimitCode, runLimitTitle } from "@/features/runs/quota";
+import RunQuotaNotice from "@/components/phylo/RunQuotaNotice";
 import { useUploadSession } from "@/features/uploads/hooks";
 import { notify } from "@/lib/notify";
 import type { MethodInfo } from "@phylo/contracts";
@@ -49,6 +51,14 @@ export default function RunWizard({
   const { data: spec, isLoading: specLoading } = useMethodSpec(selectedMethod?.id);
   const createRun = useCreateRun();
   const uploadSession = useUploadSession();
+  // Limits on creating runs (hourly quota, queue size). The server decides;
+  // this only keeps the user from preparing a run it would refuse.
+  const quotaQuery = useRunQuota();
+  const quota = quotaQuery.data;
+  const runBlockedReason =
+    quota && !quota.can_submit
+      ? (quota.message ?? (quota.blocked_by ? runLimitTitle(quota.blocked_by) : "Runs are limited right now."))
+      : null;
 
   const selectMethod = (m: MethodInfo) => {
     if (m.id !== selectedMethod?.id) setChosen(null);
@@ -76,6 +86,16 @@ export default function RunWizard({
   async function handleRun(values: Record<string, unknown>) {
     if (!selectedMethod || !chosen) return;
     try {
+      // Ask again before uploading anything: the allowance may have been used
+      // in another tab since this form was opened.
+      const latest = (await quotaQuery.refetch()).data;
+      if (latest && !latest.can_submit) {
+        notify.error(
+          latest.blocked_by ? runLimitTitle(latest.blocked_by) : "Runs are limited",
+          latest.message ?? undefined,
+        );
+        return;
+      }
       let fileId: string | null = chosen.kind === "existing" ? chosen.fileId : null;
       if (chosen.kind === "upload") {
         const uploaded = await uploadSession.upload(chosen.file);
@@ -90,7 +110,8 @@ export default function RunWizard({
     } catch (e: unknown) {
       if ((e as { aborted?: boolean })?.aborted) {
         notify.error("Upload cancelled", "The file upload was cancelled.");
-      } else {
+      } else if (!runLimitCode(e)) {
+        // A refused run (limit reached) has already been explained by useCreateRun.
         notify.error("Run failed", (e as Error)?.message ?? "Unknown error");
       }
     }
@@ -115,6 +136,12 @@ export default function RunWizard({
         onStepClick={(target: WizardStepIndex) => {
           if (target < step) setStep(target as Step);
         }}
+      />
+
+      <RunQuotaNotice
+        quota={quota}
+        fetchedAt={quotaQuery.dataUpdatedAt}
+        onReset={() => void quotaQuery.refetch()}
       />
 
       {step === 1 && (
@@ -145,6 +172,7 @@ export default function RunWizard({
             defaults={usingDefaults ? (initialParams ?? undefined) : undefined}
             onRun={handleRun}
             onBack={() => setStep(2)}
+            runBlockedReason={runBlockedReason}
           />
         ))}
 

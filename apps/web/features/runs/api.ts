@@ -5,6 +5,7 @@ import {
   type CreateRunResponse,
   type DashboardRunsResponse,
   type RunArtifactsResponse,
+  type RunQuotaResponse,
   type RunResult,
   type RunTreePayload,
   type RunTreesListResponse,
@@ -55,6 +56,17 @@ export const RunsApi = {
     return serviceHandler<DashboardRunsResponse>({
       method: Method.Get,
       url: API_ROUTES.runDashboard(),
+    });
+  },
+
+  /** Where the user stands against the limits on creating runs. */
+  async quota(): Promise<RunQuotaResponse> {
+    // allowDuplicateRequests: several components may ask at once; the dedup
+    // cache would otherwise hand one of them `null`.
+    return serviceHandler<RunQuotaResponse>({
+      method: Method.Get,
+      url: API_ROUTES.runQuota(),
+      allowDuplicateRequests: true,
     });
   },
 

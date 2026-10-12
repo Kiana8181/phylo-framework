@@ -41,6 +41,43 @@ export type DashboardRunsResponse = {
   };
 };
 
+/** Use of one rolling 60-minute limit. */
+export type RunQuotaWindow = {
+  /** Null when the limit is switched off. */
+  limit: number | null;
+  used: number;
+  remaining: number | null;
+  window_seconds: number;
+  /** Set only while the limit is reached: when one more run becomes possible (ISO 8601). */
+  reset_at: string | null;
+  retry_after_seconds: number | null;
+};
+
+/** Why a new run would be refused right now. */
+export type RunLimitCode = "RUN_QUOTA_EXCEEDED" | "RUN_SUBMISSION_LIMIT_EXCEEDED" | "QUEUE_FULL";
+
+/** GET /runs/quota: where the user stands against the limits on creating runs.
+ *  POST /runs applies the same rules. */
+export type RunQuotaResponse = {
+  can_submit: boolean;
+  blocked_by: RunLimitCode | null;
+  /** Explanation for the user while blocked. */
+  message: string | null;
+  /** Seconds until submitting can work again; null when a run has to finish first (full queue). */
+  retry_after_seconds: number | null;
+  /** Runs that count against the hourly quota (runs that never started do not). */
+  hourly: RunQuotaWindow;
+  /** Every run created in the window, including cancelled ones. */
+  submissions: RunQuotaWindow;
+  queue: {
+    max_queued: number;
+    queued_count: number;
+    unfinished: number;
+    can_add: boolean;
+  };
+  server_time: string;
+};
+
 export type RunParams = Record<string, unknown>;
 
 export type RunDatasetMeta = {

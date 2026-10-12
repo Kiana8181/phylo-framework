@@ -49,13 +49,18 @@ materialize_artifacts <- function(result, run_id, job_id) {
       src <- entry$path
       if (is.null(src) || !nzchar(as.character(src)[1])) next
       src <- as.character(src)[1]
-      if (!file.exists(src)) {
-        warning(sprintf("materialize_artifacts: skipped missing file %s", src))
-        next
-      }
       default_name <- basename(src)
       filename <- as.character(entry$filename %||% default_name)[1]
       safe_name <- .sanitize_name(filename, default_name)
+      if (!file.exists(src)) {
+        # The method declared this file as part of its result, but it is not
+        # there: the result is incomplete, not merely smaller.
+        message(sprintf("materialize_artifacts: declared file is missing: %s", src))
+        failures[[length(failures) + 1L]] <- list(
+          filename = safe_name, error = "the file the method declared does not exist"
+        )
+        next
+      }
       content_type <- if (is.null(entry$content_type)) NULL else as.character(entry$content_type)[1]
       upload_error <- NULL
       uploaded <- tryCatch(

@@ -295,6 +295,62 @@ waiting with the message above; CPU peaked at 1.85 of 2.00 cores; GCtree and
 ClonalTree runs submitted at the same moment were not held up; no
 out-of-memory kill.
 
+## Limits on creating runs
+
+Three limits apply to each user. They are read by the API from `.env`; a
+restart applies a change.
+
+| Setting | Default | Limits |
+|---|---|---|
+| `MAX_RUNS_PER_USER_PER_HOUR` | `5` | Runs in any rolling 60 minutes. `0` = no limit |
+| `MAX_QUEUED_RUNS_PER_USER` | `5` | Runs waiting behind the user's active run |
+| `MAX_RUN_SUBMISSIONS_PER_USER_PER_HOUR` | `30` | Every run created in 60 minutes, whatever became of it. `0` = no ceiling |
+
+**What counts against the hourly limit.** Every run the user created in the
+last 60 minutes, whether it is waiting, running, finished or failed — except
+runs whose analysis never started:
+
+- a run cancelled while it was still queued, or after a worker picked it up but
+  before anything was submitted to the method service;
+- a run that expired in the queue (`QUEUE_TIMEOUT`).
+
+A run cancelled after its analysis started counts. So does a run that failed
+while its input was being prepared: work was done for it.
+
+The window is rolling, not a clock hour: the sixth run becomes possible exactly
+60 minutes after the first of the five was created.
+
+**Why there is a third limit.** Runs that never start are free. Without a
+ceiling, submitting and cancelling in a loop would be free too. The submission
+ceiling counts every created run and cannot be earned back by cancelling. The
+queue limit is separate again: it counts runs that have not finished, so
+neither cancelling nor a queue timeout lets a user hold more than
+`1 + MAX_QUEUED_RUNS_PER_USER` unfinished runs.
+
+**What the user sees.** The run wizard shows "3 of 5 runs used this hour".
+When a limit is reached the Run and Add run buttons are disabled and a notice
+gives the reason and a countdown to the next possible run. The server remains
+the judge: the wizard asks again just before uploading a file, and the API
+refuses a run that is over a limit whatever the page shows.
+
+**API.**
+
+- `GET /runs/quota` returns the user's standing: `can_submit`, `blocked_by`,
+  `message`, `retry_after_seconds`, and `limit` / `used` / `remaining` /
+  `reset_at` for the hourly limit and the submission ceiling, plus the queue.
+- `POST /runs` answers `429` with code `RUN_QUOTA_EXCEEDED` or
+  `RUN_SUBMISSION_LIMIT_EXCEEDED`, a `Retry-After` header and `reset_at` in the
+  body; a full queue is `409 QUEUE_FULL`, as before.
+
+Two requests of the same user arriving at the same moment cannot both take the
+last allowance: limit check and run creation happen as one step per user
+(a PostgreSQL advisory lock held for that transaction). Different users do not
+wait for each other.
+
+Measured: ten simultaneous requests for a user's last allowance admitted
+exactly one; twelve simultaneous requests against a queue limit of two admitted
+exactly three (one active, two queued).
+
 ## When a run cannot finish
 
 Every run ends. It ends as `DONE` only when its result is complete and stored;
@@ -311,6 +367,7 @@ as `CANCELLED`. No run holds a slot, or waits for one, without limit.
 | The method service stays unreachable during a run | `ERROR [METHOD_UNREACHABLE]` | After `WORKER_METHOD_UNREACHABLE_SECONDS` (default 5 minutes) |
 | Result files could not be uploaded | `ERROR [ARTIFACT_UPLOAD_FAILED]` | Reported by the method service |
 | Result files are not in storage as declared | `ERROR [ARTIFACTS_MISSING]` | Found by the worker's own check |
+| The method reports success without a tree or without its result bundle | `ERROR [INCOMPLETE_RESULT]` | Per-method success criteria, see below |
 | Storage cannot be asked at completion | `ERROR [ARTIFACT_STORE_UNAVAILABLE]` | After `ARTIFACT_VERIFY_ATTEMPTS` tries |
 | A finished result cannot be fetched from the method service | `ERROR [RESULT_UNAVAILABLE]` | |
 | The user cancels | `CANCELLED` | Also when the method service is down or does not confirm |
@@ -346,16 +403,40 @@ active returns that job.
 ### A result counts only when it is stored
 
 Method services upload their result files to the object store themselves. A
-run becomes `DONE` only after two independent checks:
+run becomes `DONE` only after three independent checks:
 
-1. the method service reports every file it could not upload, and a job with
-   such a file ends as a failure, not as a success;
-2. the worker asks the object store for every declared file and compares its
+1. the method service reports every file it could not upload, and every file
+   it declared but did not produce; a job with such a file ends as a failure,
+   not as a success;
+2. the worker checks the result against the method's **success criteria**
+   (below);
+3. the worker asks the object store for every declared file and compares its
    size (and the SHA-256 the uploader recorded on the object) with what the
    method declared.
 
 Then the run's status, its trees and its file list are saved in one database
 transaction, so nothing can observe a `DONE` run whose files are not listed yet.
+
+**Success criteria.** Checking declared files is not enough on its own: a
+method that reports success but declares nothing would pass with an empty
+list. Each method therefore states what a successful run always delivers, in
+`packages/contracts/methods/<method>/completion.json`:
+
+| Method | At least | Must include |
+|---|---|---|
+| GCtree, ClonalTree, Dowser, BrepPhylo | 1 tree | the result bundle (the downloadable archive, role `clone_bundle_zip`) |
+
+A result that misses one of these ends as `ERROR [INCOMPLETE_RESULT]`. A method
+added later without such a file still needs at least one tree and one output
+file.
+
+Deliberately **not** required, because methods legitimately finish without
+them: rendered tree images (a method may build a tree it then fails to draw; it
+says so in its warnings, and the tree is still shown from its Newick),
+method-specific extras (GCtree's abundance charts, BrepPhylo's PDFs), and the
+execution log. A run whose scientific output is complete and stored but whose
+log could not be saved stays `DONE` and carries the warning
+`EXECUTION_LOG_MISSING`.
 
 If the object store is down when a job finishes, the run therefore ends as
 `ERROR` and the user is asked to run it again. It is never shown as completed

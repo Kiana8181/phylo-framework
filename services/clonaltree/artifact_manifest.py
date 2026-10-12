@@ -66,11 +66,15 @@ def materialize_artifacts(payload: Any, *, run_id: str, job_id: str) -> Any:
             if not isinstance(src, str) or not src:
                 continue
             src_path = Path(src)
-            if not src_path.is_file():
-                continue
             default_name = src_path.name
             filename = entry.get("filename") or default_name
             safe_name = _sanitize_name(str(filename), default_name)
+            if not src_path.is_file():
+                # The method declared this file as part of its result, but it
+                # is not there: the result is incomplete, not merely smaller.
+                print(f"[artifact_manifest] declared file is missing: {src_path}", flush=True)
+                failures.append({"filename": safe_name, "error": "the file the method declared does not exist"})
+                continue
             content_type = entry.get("content_type")
             try:
                 uploaded = upload_artifact(

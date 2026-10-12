@@ -391,3 +391,42 @@ def test_r_service_images_keep_coreutils_for_the_job_time_limit(name):
     dockerfile = (ROOT / "services" / name / "Dockerfile").read_text()
     removals = [l for l in dockerfile.splitlines() if "coreutils" in l and ("remove" in l or "erase" in l)]
     assert not removals, removals
+
+
+# --------------------------------------------------------------------------- #
+# Limits on creating runs
+# --------------------------------------------------------------------------- #
+def test_documented_run_creation_limits_match_the_built_in_defaults():
+    source = (ROOT / "apps/api/services/run_quota.py").read_text()
+    defaults = {}
+    for name in ("DEFAULT_RUNS_PER_HOUR", "DEFAULT_MAX_QUEUED", "DEFAULT_SUBMISSIONS_PER_HOUR", "WINDOW_SECONDS"):
+        line = next(l for l in source.splitlines() if l.startswith(f"{name} = "))
+        defaults[name] = int(line.split("=", 1)[1])
+    assert defaults == {"DEFAULT_RUNS_PER_HOUR": 5, "DEFAULT_MAX_QUEUED": 5,
+                        "DEFAULT_SUBMISSIONS_PER_HOUR": 30, "WINDOW_SECONDS": 3600}
+    example = {l.split("=", 1)[0]: l.split("=", 1)[1].strip()
+               for l in (ROOT / ".env.example").read_text().splitlines()
+               if l and not l.startswith("#") and "=" in l}
+    assert int(example["MAX_RUNS_PER_USER_PER_HOUR"]) == defaults["DEFAULT_RUNS_PER_HOUR"]
+    assert int(example["MAX_QUEUED_RUNS_PER_USER"]) == defaults["DEFAULT_MAX_QUEUED"]
+    assert int(example["MAX_RUN_SUBMISSIONS_PER_USER_PER_HOUR"]) == defaults["DEFAULT_SUBMISSIONS_PER_HOUR"]
+
+
+def test_run_creation_limits_are_not_pinned_in_compose():
+    """They reach the API through .env (env_file), so the server's .env decides."""
+    text = (ROOT / "docker-compose.yml").read_text()
+    for name in ("MAX_RUNS_PER_USER_PER_HOUR", "MAX_QUEUED_RUNS_PER_USER", "MAX_RUN_SUBMISSIONS_PER_USER_PER_HOUR"):
+        assert name not in text
+    assert "env_file" in SERVICES["api-prod"]
+
+
+@pytest.mark.parametrize("name", METHODS)
+def test_every_method_ships_its_success_criteria(name):
+    import json
+
+    contract = json.loads((ROOT / "packages/contracts/methods" / name / "completion.json").read_text())
+    assert contract["minTrees"] >= 1
+    assert "clone_bundle_zip" in contract["requiredArtifactRoles"]
+    # The role must be one the method really declares, or no run could ever finish.
+    sources = "".join(p.read_text() for p in (ROOT / "services" / name).glob("*.[pR]*") if p.is_file())
+    assert "clone_bundle_zip" in sources, f"{name} never declares a clone_bundle_zip artifact"

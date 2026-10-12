@@ -8,6 +8,7 @@ export const API_ROUTES = {
   runsList: () => `/runs`,
   runCurrent: () => `/runs/current`,
   runDashboard: () => `/runs/dashboard`,
+  runQuota: () => `/runs/quota`,
   runStatus: (runId: string) => `/runs/${encodeURIComponent(runId)}/status`,
   runResult: (runId: string) => `/runs/${encodeURIComponent(runId)}/result`,
   runCancel: (runId: string) => `/runs/${encodeURIComponent(runId)}/cancel`,

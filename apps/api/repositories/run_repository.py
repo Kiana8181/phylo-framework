@@ -16,6 +16,10 @@ TERMINAL_RUN_STATUSES = (RunStatus.DONE, RunStatus.ERROR, RunStatus.CANCELLED)
 
 # Postgres sequence backing the global dispatch order (see migration 009).
 DISPATCH_SEQ = "runs_dispatch_seq"
+# First key of the advisory lock that serializes one user's run creation
+# (the second key is a hash of the user id). Any fixed number; it only has to
+# differ from other advisory locks this application takes.
+RUN_CREATION_LOCK_NAMESPACE = 7306
 
 
 class RunRepository(BaseRepository[Run]):
@@ -77,6 +81,32 @@ class RunRepository(BaseRepository[Run]):
             .where(Run.status.in_(ACTIVE_RUN_STATUSES))
         )
         return int(result.scalar() or 0)
+
+    async def lock_run_creation(self, user_id: UUID) -> None:
+        """Serialize run creation for one user until this transaction ends.
+
+        Limit checks and the insert that follows must not interleave with
+        another request of the same user, or both could pass a check that only
+        one of them should. Other users are not affected.
+        """
+        await self.session.execute(
+            select(func.pg_advisory_xact_lock(RUN_CREATION_LOCK_NAMESPACE, func.hashtext(str(user_id))))
+        )
+
+    async def recent_run_creations(self, user_id: UUID, since: datetime) -> List[tuple[datetime, bool]]:
+        """Creation time of every run the user created after ``since``, oldest
+        first, each with whether it ended without ever starting (cancelled
+        while queued, or expired in the queue)."""
+        never_started = and_(
+            Run.started_at.is_(None),
+            Run.status.in_((RunStatus.CANCELLED, RunStatus.ERROR)),
+        )
+        result = await self.session.execute(
+            select(Run.created_at, never_started)
+            .where(Run.user_id == user_id, Run.created_at > since)
+            .order_by(Run.created_at.asc(), Run.id.asc())
+        )
+        return [(row[0], bool(row[1])) for row in result.all()]
 
     async def get_active_turn_run_for_user(self, user_id: UUID) -> Optional[Run]:
         """The user's active-turn run: RUNNING, or QUEUED with dispatch_seq assigned."""
@@ -724,10 +754,17 @@ class RunRepository(BaseRepository[Run]):
         await self.session.commit()
         return result.scalar_one_or_none()
 
-    async def mark_cancelled(self, run_id: UUID, message: Optional[str] = None) -> Optional[Run]:
-        """Finalize a run as CANCELLED, release the lease, and promote the owner's next run."""
-        return await self._terminal_update_and_promote(
-            run_id,
+    async def mark_cancelled(
+        self, run_id: UUID, message: Optional[str] = None, *, never_started: bool = False
+    ) -> Optional[Run]:
+        """Finalize a run as CANCELLED, release the lease, and promote the owner's next run.
+
+        ``never_started``: the run was cancelled after a worker took it but
+        before anything was submitted to its method service. Its execution
+        start is cleared, as it is for a run cancelled while still queued, so
+        the run does not count against the owner's hourly quota.
+        """
+        values: dict[str, object] = dict(
             status=RunStatus.CANCELLED,
             stage="CANCELLED",
             stage_message=message or "Run cancelled",
@@ -735,6 +772,9 @@ class RunRepository(BaseRepository[Run]):
             finished_at=func.now(),
             worker_lease_until=None,
         )
+        if never_started:
+            values["started_at"] = None
+        return await self._terminal_update_and_promote(run_id, **values)
 
     async def update_progress(
         self,

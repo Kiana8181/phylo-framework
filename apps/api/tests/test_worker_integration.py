@@ -49,11 +49,14 @@ async def fresh(session, run_id):
 
 async def test_worker_recovers_transient_poll_failure_persists_trees_and_artifacts(session, queued, monkeypatch, artifact_store):
     await artifact_store.upload(b'(a:1,b:2)root:0;\n\n', 'runs/test/tree.nwk')
+    await artifact_store.upload(b'zip', 'runs/test/bundle.zip')
     mock_jobs(monkeypatch, [RuntimeError('transient network failure'),
         JobStatus(True, 'job-1', 'RUNNING', stage='BUILDING_TREES', progress=50),
         JobStatus(True, 'job-1', 'DONE')], {
         'ok': True, 'trees': ['(a:1,b:2)root:0;'], 'manifest_version': 1,
-        'artifacts': [{'object_key': 'runs/test/tree.nwk', 'filename': 'tree.nwk', 'size_bytes': 18, 'kind': 'newick'}],
+        'artifacts': [{'object_key': 'runs/test/tree.nwk', 'filename': 'tree.nwk', 'size_bytes': 18, 'kind': 'newick'},
+                      {'object_key': 'runs/test/bundle.zip', 'filename': 'bundle.zip', 'size_bytes': 3,
+                       'kind': 'zip', 'role': 'clone_bundle_zip'}],
     })
     await worker.process_run(queued, 'test-worker')
     run = await fresh(session, queued)
@@ -64,8 +67,7 @@ async def test_worker_recovers_transient_poll_failure_persists_trees_and_artifac
     assert len(trees) == 1
     assert trees[0].newick == '(a:1,b:2)root:0;'
     artifacts = (await session.execute(select(RunArtifact).where(RunArtifact.run_id == queued))).scalars().all()
-    assert len(artifacts) == 1
-    assert artifacts[0].object_key == 'runs/test/tree.nwk'
+    assert sorted(a.object_key for a in artifacts) == ['runs/test/bundle.zip', 'runs/test/tree.nwk']
     assert 'newick' not in run.result['trees'][0]
 
 

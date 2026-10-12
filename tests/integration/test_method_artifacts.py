@@ -38,6 +38,11 @@ def test_method_artifact_upload_metadata_matches_stored_bytes(modules, tmp_path,
     ]}, run_id=run_id, job_id=job_id)
     assert result['manifest_version'] == 1
     assert len(result['artifacts']) == 1
+    # A declared file that is not on disk is reported, not silently left out;
+    # malformed entries (no path at all) are ignored as before.
+    assert result['artifact_upload_failures'] == [
+        {'filename': 'missing-file', 'error': 'the file the method declared does not exist'}]
+    assert 'missing-file' in manifest.storage_failure(result)
     artifact = result['artifacts'][0]
     assert artifact['tree_index'] == 0
     assert artifact['size_bytes'] == len(source.read_bytes())

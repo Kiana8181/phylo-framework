@@ -38,8 +38,20 @@ RESULT = {
          "size_bytes": len(NEWICK), "kind": "newick"},
         {"object_key": "artifacts/r/j/job.log", "filename": "job.log",
          "size_bytes": 4, "kind": "log", "role": "log"},
+        {"object_key": "artifacts/r/j/bundle.zip", "filename": "bundle.zip",
+         "size_bytes": 3, "kind": "zip", "role": "clone_bundle_zip"},
     ],
 }
+
+
+async def store_result_files(store, *, tree=True, log=True, bundle=True):
+    """Put the files RESULT declares into the artifact bucket."""
+    if tree:
+        await store.upload(NEWICK, "artifacts/r/j/tree.nwk")
+    if log:
+        await store.upload(b"log\n", "artifacts/r/j/job.log")
+    if bundle:
+        await store.upload(b"zip", "artifacts/r/j/bundle.zip")
 
 
 # --------------------------------------------------------------------------- #
@@ -273,13 +285,12 @@ async def rows(session, model, run_id):
 @pytest_integration
 async def test_run_is_done_only_when_every_declared_artifact_is_in_the_store(worker_db, store, monkeypatch):
     run_id = await running(worker_db)
-    await store.upload(NEWICK, "artifacts/r/j/tree.nwk")
-    await store.upload(b"log\n", "artifacts/r/j/job.log")
+    await store_result_files(store)
     mock_jobs(monkeypatch, [JobStatus(True, "job-1", "DONE")], RESULT)
     await worker.process_run(run_id, "w")
     run = await fresh(worker_db, run_id)
     assert run.status == RunStatus.DONE
-    assert len(await rows(worker_db, RunArtifact, run_id)) == 2
+    assert len(await rows(worker_db, RunArtifact, run_id)) == 3
     assert len(await rows(worker_db, RunTree, run_id)) == 1
 
 
@@ -287,7 +298,7 @@ async def test_run_is_done_only_when_every_declared_artifact_is_in_the_store(wor
 async def test_missing_artifacts_fail_the_run_instead_of_reporting_done(worker_db, store, monkeypatch):
     """The Phase 3 defect: uploads lost, run still DONE with nothing to download."""
     run_id = await running(worker_db)
-    await store.upload(b"log\n", "artifacts/r/j/job.log")          # only the log made it
+    await store_result_files(store, tree=False)                     # the tree file did not make it
     mock_jobs(monkeypatch, [JobStatus(True, "job-1", "DONE")], RESULT)
     await worker.process_run(run_id, "w")
     run = await fresh(worker_db, run_id)
@@ -303,8 +314,8 @@ async def test_missing_artifacts_fail_the_run_instead_of_reporting_done(worker_d
 @pytest_integration
 async def test_an_artifact_of_the_wrong_size_is_not_accepted(worker_db, store, monkeypatch):
     run_id = await running(worker_db)
+    await store_result_files(store, tree=False)
     await store.upload(b"(a", "artifacts/r/j/tree.nwk")              # truncated upload
-    await store.upload(b"log\n", "artifacts/r/j/job.log")
     mock_jobs(monkeypatch, [JobStatus(True, "job-1", "DONE")], RESULT)
     await worker.process_run(run_id, "w")
     run = await fresh(worker_db, run_id)
@@ -346,8 +357,7 @@ async def test_a_store_outage_at_completion_fails_the_run_after_bounded_retries(
 async def test_done_trees_and_artifacts_become_visible_together(worker_db, store, monkeypatch):
     """A reader must never see DONE without the rows that belong to it."""
     run_id = await running(worker_db)
-    await store.upload(NEWICK, "artifacts/r/j/tree.nwk")
-    await store.upload(b"log\n", "artifacts/r/j/job.log")
+    await store_result_files(store)
     mock_jobs(monkeypatch, [JobStatus(True, "job-1", "DONE")], RESULT)
 
     seen = {}
@@ -373,8 +383,7 @@ async def test_done_trees_and_artifacts_become_visible_together(worker_db, store
 @pytest_integration
 async def test_a_failure_while_saving_the_result_leaves_no_half_finished_run(worker_db, store, monkeypatch):
     run_id = await running(worker_db)
-    await store.upload(NEWICK, "artifacts/r/j/tree.nwk")
-    await store.upload(b"log\n", "artifacts/r/j/job.log")
+    await store_result_files(store)
     mock_jobs(monkeypatch, [JobStatus(True, "job-1", "DONE")], RESULT)
     monkeypatch.setattr(RunTreeRepository, "replace_for_run", AsyncMock(side_effect=RuntimeError("disk full")))
     await worker.process_run(run_id, "w")
@@ -382,6 +391,131 @@ async def test_a_failure_while_saving_the_result_leaves_no_half_finished_run(wor
     assert run.status == RunStatus.ERROR                             # never DONE without its trees
     assert "disk full" not in (run.message or "")
     assert not await rows(worker_db, RunArtifact, run_id)
+
+
+# ---- success criteria ------------------------------------------------------- #
+BUNDLE = RESULT["artifacts"][2]
+LOG = RESULT["artifacts"][1]
+TREE_FILE = RESULT["artifacts"][0]
+IMAGE = {"object_key": "artifacts/r/j/tree.png", "filename": "tree.png", "size_bytes": 3,
+         "kind": "image", "role": "phylogeny", "tree_index": 0}
+
+
+def test_every_method_has_explicit_success_criteria():
+    from apps.api.contracts.loader import METHODS_DIR
+    from apps.api.services.completion import completion_rule
+
+    methods = sorted(d.name for d in METHODS_DIR.iterdir() if (d / "service.routes.json").exists())
+    assert methods == ["brepphylo", "clonaltree", "dowser", "gctree"]
+    for method in methods:
+        assert (METHODS_DIR / method / "completion.json").exists(), method
+        rule = completion_rule(method)
+        assert rule.min_trees >= 1 and "clone_bundle_zip" in rule.required_roles, (method, rule)
+    # A method added later without criteria of its own still cannot finish empty-handed.
+    default = completion_rule("a-future-method")
+    assert default.min_trees == 1 and default.require_any_output
+
+
+@pytest.mark.parametrize("content,match", [
+    ('[]', "JSON object"), ('{"minTrees": -1}', "minTrees"), ('{"minTrees": true}', "minTrees"),
+    ('{"requiredArtifactRoles": "zip"}', "requiredArtifactRoles"), ('{"requiredArtifactRoles": [""]}', "requiredArtifactRoles"),
+])
+def test_a_malformed_completion_contract_is_an_error_not_a_free_pass(tmp_path, monkeypatch, content, match):
+    from apps.api.services import completion
+
+    (tmp_path / "m").mkdir()
+    (tmp_path / "m" / "completion.json").write_text(content)
+    monkeypatch.setattr(completion, "METHODS_DIR", tmp_path)
+    with pytest.raises(ValueError, match=match):
+        completion.completion_rule("m")
+
+
+def test_missing_requirements_names_each_gap():
+    from apps.api.database.models import ArtifactKind
+    from apps.api.services.completion import CompletionRule, missing_requirements
+
+    tree = [{"newick": "(a,b);"}]
+    bundle = [{"artifact_role": "clone_bundle_zip", "artifact_kind": ArtifactKind.ZIP}]
+    log = [{"artifact_role": "log", "artifact_kind": ArtifactKind.LOG}]
+    assert missing_requirements("gctree", {"ok": True}, tree, bundle + log) == []
+    assert missing_requirements("gctree", {"ok": True}, tree, bundle) == []          # log is not a requirement
+    assert missing_requirements("gctree", {"ok": True}, [], bundle) == ["it produced no tree"]
+    assert missing_requirements("gctree", {"ok": True}, [{"newick": "  "}], bundle) == ["it produced no tree"]
+    gaps = missing_requirements("gctree", {"ok": False}, [], log)
+    assert gaps[0] == "the method reported that it did not succeed" and len(gaps) == 3
+    assert "result bundle" in gaps[2]
+    # Default rule (method without a contract): some file besides the log must exist.
+    default = CompletionRule()
+    assert missing_requirements("x", {"ok": True}, tree, log, default) == ["it delivered no output file"]
+    assert missing_requirements("x", {"ok": True}, tree, log + [{"artifact_role": None, "artifact_kind": ArtifactKind.IMAGE}], default) == []
+    two = CompletionRule(min_trees=2)
+    assert "at least 2" in missing_requirements("x", {"ok": True}, tree, bundle, two)[0]
+
+
+async def finish_with(worker_db, store, monkeypatch, result, *, method="gctree", files=()):
+    run_id = await running(worker_db, method=method)
+    for entry in files:
+        await store.upload(b"x" * entry["size_bytes"], entry["object_key"])
+    mock_jobs(monkeypatch, [JobStatus(True, "job-1", "DONE")], result)
+    await worker.process_run(run_id, "w")
+    return await fresh(worker_db, run_id)
+
+
+@pytest_integration
+@pytest.mark.parametrize("method", ["gctree", "clonaltree", "dowser", "brepphylo"])
+async def test_success_with_no_declared_artifacts_is_not_done(worker_db, store, monkeypatch, method):
+    """Nothing declared means nothing to verify: that must not count as success."""
+    result = {"ok": True, "trees": ["(a:1,b:2)root:0;"], "manifest_version": 1, "artifacts": []}
+    run = await finish_with(worker_db, store, monkeypatch, result, method=method)
+    assert run.status == RunStatus.ERROR and error_code(run) == "INCOMPLETE_RESULT"
+    assert "result bundle" in run.message and "is missing" in run.message
+    assert not await rows(worker_db, RunTree, run.id)
+    assert not await rows(worker_db, RunArtifact, run.id)
+
+
+@pytest_integration
+@pytest.mark.parametrize("trees", [[], [""], None])
+async def test_success_without_a_tree_is_not_done(worker_db, store, monkeypatch, trees):
+    result = {"ok": True, "trees": trees, "manifest_version": 1, "artifacts": [BUNDLE, LOG]}
+    run = await finish_with(worker_db, store, monkeypatch, result, method="clonaltree", files=[BUNDLE, LOG])
+    assert run.status == RunStatus.ERROR and error_code(run) == "INCOMPLETE_RESULT"
+    assert "produced no tree" in run.message
+
+
+@pytest_integration
+async def test_images_and_a_log_do_not_replace_the_result_bundle(worker_db, store, monkeypatch):
+    result = {"ok": True, "trees": ["(a,b);"], "manifest_version": 1, "artifacts": [IMAGE, LOG]}
+    run = await finish_with(worker_db, store, monkeypatch, result, method="dowser", files=[IMAGE, LOG])
+    assert run.status == RunStatus.ERROR and error_code(run) == "INCOMPLETE_RESULT"
+    assert json.loads(run.error)["error"]["details"]["missing"] == [
+        "the result bundle (the downloadable archive of its output files) is missing"]
+
+
+@pytest_integration
+async def test_a_done_status_with_a_failed_result_is_not_done(worker_db, store, monkeypatch):
+    result = {"ok": False, "trees": ["(a,b);"], "manifest_version": 1, "artifacts": [BUNDLE, LOG]}
+    run = await finish_with(worker_db, store, monkeypatch, result, files=[BUNDLE, LOG])
+    assert run.status == RunStatus.ERROR and error_code(run) == "INCOMPLETE_RESULT"
+    assert "did not succeed" in run.message
+
+
+@pytest_integration
+async def test_a_tree_without_a_rendered_image_is_still_a_legitimate_result(worker_db, store, monkeypatch):
+    """Methods may fail to draw a tree they built; that is theirs to report, not a failed run."""
+    result = {"ok": True, "trees": ["(a,b);"], "manifest_version": 1, "artifacts": [BUNDLE, LOG],
+              "warnings": ["Figure rendering failed; tree returned without an image."]}
+    run = await finish_with(worker_db, store, monkeypatch, result, method="brepphylo", files=[BUNDLE, LOG])
+    assert run.status == RunStatus.DONE
+    assert run.result["warnings"] == ["Figure rendering failed; tree returned without an image."]
+
+
+@pytest_integration
+async def test_a_complete_result_without_its_log_is_kept_and_says_so(worker_db, store, monkeypatch):
+    result = {"ok": True, "trees": ["(a,b);"], "manifest_version": 1, "artifacts": [BUNDLE]}
+    run = await finish_with(worker_db, store, monkeypatch, result, files=[BUNDLE])
+    assert run.status == RunStatus.DONE
+    assert {"code": "EXECUTION_LOG_MISSING",
+            "message": "The run completed, but its execution log could not be saved."} in run.result["warnings"]
 
 
 # ---- time limit ------------------------------------------------------------ #
@@ -456,8 +590,7 @@ async def test_a_job_that_cannot_be_stopped_still_ends_the_run_as_timeout(worker
 async def test_a_job_that_finished_just_before_the_stop_keeps_its_result(worker_db, store, monkeypatch):
     monkeypatch.setenv("RUN_TIMEOUT_SECONDS", "60")
     run_id = await running(worker_db, started_seconds_ago=120)
-    await store.upload(NEWICK, "artifacts/r/j/tree.nwk")
-    await store.upload(b"log\n", "artifacts/r/j/job.log")
+    await store_result_files(store)
     mock_jobs(monkeypatch, [JobStatus(True, "job-1", "DONE")], RESULT)
     await worker.process_run(run_id, "w")
     assert (await fresh(worker_db, run_id)).status == RunStatus.DONE
@@ -667,8 +800,7 @@ async def test_the_lease_is_kept_while_a_slow_completion_is_in_hand(worker_db, s
 
     monkeypatch.setattr(worker, "LEASE_SECONDS", 3)          # renewed every second
     run_id = await running(worker_db)
-    await store.upload(NEWICK, "artifacts/r/j/tree.nwk")
-    await store.upload(b"log\n", "artifacts/r/j/job.log")
+    await store_result_files(store)
     mock_jobs(monkeypatch, [JobStatus(True, "job-1", "DONE")])
     leases = []
 

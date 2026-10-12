@@ -20,7 +20,8 @@ import { FilesApi } from "@/features/files/api";
 import { FILES_LIST_QUERY_KEY } from "@/features/files/hooks";
 import { useContractSpec, useMethods } from "@/features/methods/hooks";
 import { RunsApi } from "@/features/runs/api";
-import { useCancelQueuedRun, useDashboardRuns, useRunResult, useRunStatus } from "@/features/runs/hooks";
+import { useCancelQueuedRun, useDashboardRuns, useRunQuota, useRunResult, useRunStatus } from "@/features/runs/hooks";
+import RunQuotaNotice from "@/components/phylo/RunQuotaNotice";
 import { useUploadSession } from "@/features/uploads/hooks";
 import { notify } from "@/lib/notify";
 import { formatRunDuration } from "@/lib/runDuration";
@@ -422,6 +423,11 @@ function LiveDashboard({ onViewResults }: { onViewResults: (runId: string) => vo
   const active = data?.active ?? null;
   const queue = data?.queue ?? [];
   const canAdd = data?.limits?.can_add ?? true;
+  const quotaQuery = useRunQuota();
+  const quota = quotaQuery.data;
+  // The queue size is one limit; the hourly quota is another. Either can stop
+  // a new run.
+  const quotaBlocked = quota ? !quota.can_submit : false;
   const queuedCount = data?.limits?.queued_count ?? queue.length;
   const maxQueued = data?.limits?.max_queued ?? 5;
   const hasAnything = !!active || queue.length > 0;
@@ -556,16 +562,31 @@ function LiveDashboard({ onViewResults }: { onViewResults: (runId: string) => vo
         {preparingSample ? (
           preparingSampleCard
         ) : !showAddRun ? (
-          <Button
-            variant="outline"
-            className="gap-1.5"
-            onClick={() => setShowAddRun(true)}
-            disabled={!canAdd}
-            title={canAdd ? undefined : `You can queue at most ${maxQueued} runs.`}
-          >
-            <Plus className="h-4 w-4" />
-            Add run
-          </Button>
+          <div className="space-y-3">
+            {quotaBlocked && (
+              <RunQuotaNotice
+                quota={quota}
+                fetchedAt={quotaQuery.dataUpdatedAt}
+                onReset={() => void quotaQuery.refetch()}
+              />
+            )}
+            <Button
+              variant="outline"
+              className="gap-1.5"
+              onClick={() => setShowAddRun(true)}
+              disabled={!canAdd || quotaBlocked}
+              title={
+                !canAdd
+                  ? `You can queue at most ${maxQueued} runs.`
+                  : quotaBlocked
+                    ? (quota?.message ?? "You cannot start another run right now.")
+                    : undefined
+              }
+            >
+              <Plus className="h-4 w-4" />
+              Add run
+            </Button>
+          </div>
         ) : (
           <Card className="p-4 space-y-4">
             <div className="flex items-center justify-between">
