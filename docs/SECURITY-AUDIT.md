@@ -1,6 +1,6 @@
 # Dependency and image security audit
 
-Last full audit: **2026-10-12**. This file records what was scanned, what was
+Last full audit: **2026-10-12**; re-scanned on **2026-10-13** during system validation (see the end of "Image scan results"). This file records what was scanned, what was
 fixed, and every finding that remains open with the reason it is still open.
 It is not a claim that the project is free of vulnerabilities: scanners only
 know published advisories, some components are outside what any scanner here

@@ -1,4 +1,4 @@
-import { test, expect, signup } from './fixtures';
+import { test, expect, signup, runStatus } from './fixtures';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -29,7 +29,7 @@ test('a finished run shows until when its results are kept, and explains itself 
   const created = await request.post(`${api}/runs?method=gctree`, {headers, data: {file_id: file.file_id, params: params.gctree}});
   expect(created.ok()).toBe(true);
   const {run_id: runId} = await created.json();
-  const status = async () => (await request.get(`${api}/runs/${runId}/status`, {headers})).json();
+  const status = () => runStatus(request, runId, token);
   await expect.poll(async () => (await status()).status, {timeout: 150_000, intervals: [500, 1000]}).toBe('DONE');
   const until = (await status()).expires_at.slice(0, 10);
 

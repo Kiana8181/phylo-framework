@@ -1,58 +1,55 @@
-# Deployment & Storage Operations
+# Deployment guide
 
-This project stores **uploaded datasets** and **generated run artifacts** in a
-self-hosted, S3-compatible object store (**MinIO**) — not in the repository or
-on the API's local disk, and never as base64 inside the database. PostgreSQL
-holds relational metadata together with run parameters, result summaries,
-normalized trees, mappings and annotations. No AWS or paid cloud storage is
-required.
+How to run Phylo-Framework on a server, and what it does there. To try it on
+your own machine the [README](../README.md) is enough; every setting is listed
+in [CONFIGURATION.md](./CONFIGURATION.md).
 
-The storage layer is S3-compatible, so a real S3 endpoint can be used later by
-changing environment variables only — but the default and documented path is
-self-hosted MinIO via Docker Compose.
+**Contents**
+
+- [Architecture summary](#architecture-summary)
+- [Required production secrets](#required-production-secrets)
+- [Resource budget and container limits](#resource-budget-and-container-limits)
+- [Job execution inside the budget](#job-execution-inside-the-budget)
+- [Limits on creating runs](#limits-on-creating-runs)
+- [When a run cannot finish](#when-a-run-cannot-finish)
+- [Storage lifecycle and retention](#storage-lifecycle-and-retention)
+- [Sign-in protection](#sign-in-protection)
+- [Email and run notifications](#email-and-run-notifications)
+- [Restarts and logs](#restarts-and-logs)
+- [Network layout and secret isolation](#network-layout-and-secret-isolation)
+- [Server / production deployment](#server--production-deployment): starting,
+  checking, updating, version information, ports, the object store image
+- [Backup & restore](#backup--restore)
+- [Post-deploy checks](#post-deploy-checks)
+- [Troubleshooting a deployment](#troubleshooting-a-deployment)
 
 ---
 
 ## Architecture summary
 
-- **Datasets** → MinIO bucket `S3_BUCKET_DATASETS` (key: `datasets/{user_id}/{upload_id}.{ext}`)
-- **Artifacts** → MinIO bucket `S3_BUCKET_ARTIFACTS` (key: `artifacts/{run_id}/{artifact_id}/{filename}`)
-- **Postgres** → users, file/run/artifact metadata,
-  parameters, result JSON, normalized trees, mappings and annotations
-- **Shared staging volume** (`/runtime/storage`) → where the worker stages a
-  dataset for a method service to read, and where method services write outputs.
-  The worker uploads those outputs to MinIO; this volume is scratch space, not
-  the system of record.
-- **Downloads/previews** are streamed **through the API** (`/artifacts/{id}/download`,
-  `/artifacts/{id}/preview`, `/datasets/{id}/download`). MinIO is **not** exposed
-  to browsers; the API enforces per-request authorization and streams bytes.
+| Part | Role |
+|---|---|
+| Web (`web-prod`) | The pages. Holds no secret; reachable only through the reverse proxy |
+| API (`api-prod`) | Accounts, uploads, runs, results. The only service a browser talks to; also reached through the reverse proxy |
+| Worker (`api-worker-prod`) | Takes runs from the queue, prepares their input, follows their jobs, verifies and records results, sends notification emails, removes expired results |
+| Method services (`dowser`, `gctree`, `brepphylo`, `clonaltree`) | Run the analyses, one job process per run. They parse uploaded files, so they have no internet access, no database access and no credentials beyond a write-only storage user |
+| PostgreSQL (`postgres`) | Accounts, runs, trees, result summaries, the queue, the notification outbox |
+| Object store (`minio`) | Uploaded datasets and result files, in two buckets. S3-compatible; the image is the Silo fork of MinIO |
 
----
-
-## Required environment variables
-
-Copy `.env.example` to `.env` and set real secrets. Storage-related variables:
-
-| Variable | Purpose | Example |
-|---|---|---|
-| `STORAGE_BACKEND` | `minio` (default), `s3`, or `local` (tests only) | `minio` |
-| `MINIO_ROOT_USER` | MinIO root user (also used as S3 access key) | `phylo_minio` |
-| `MINIO_ROOT_PASSWORD` | MinIO root password (also used as S3 secret) | `change-me-strong` |
-| `S3_ENDPOINT_URL` | S3 endpoint for **host-run** scripts | `http://localhost:9000` |
-| `S3_ENDPOINT_URL_DOCKER` | S3 endpoint **inside** containers | `http://minio:9000` |
-| `S3_REGION` | Region label (any value for MinIO) | `us-east-1` |
-| `S3_ACCESS_KEY_ID` | S3 access key | `phylo_minio` |
-| `S3_SECRET_ACCESS_KEY` | S3 secret key | `change-me-strong` |
-| `S3_BUCKET_DATASETS` | Dataset bucket name | `phylo-datasets` |
-| `S3_BUCKET_ARTIFACTS` | Artifact bucket name | `phylo-artifacts` |
-| `S3_FORCE_PATH_STYLE` | Path-style addressing (required for MinIO) | `true` |
-| `PUBLIC_API_BASE_URL` | Public base URL of the API | `https://phylo.example.org` |
-
-> The compose file injects `S3_ENDPOINT_URL` inside containers from
-> `S3_ENDPOINT_URL_DOCKER` so a host-oriented `.env` value (localhost) never
-> leaks into the cluster. Keep `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` in
-> sync with `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` (or create a dedicated
-> MinIO user/policy for least privilege).
+- **Datasets** are stored as `datasets/{user}/{upload}.{ext}` in
+  `S3_BUCKET_DATASETS`; **result files** as `artifacts/{run}/{job}/{file}` in
+  `S3_BUCKET_ARTIFACTS`. Nothing binary is stored in the database.
+- The worker **stages** a run's input in a scratch directory
+  (`STORAGE_LOCAL_PATH`, mounted read-only into the method services). The
+  method service uploads its result files to the object store itself and
+  reports what it uploaded; the worker checks that every file is really there
+  before the run becomes `DONE`.
+- **Downloads and previews** are streamed through the API, which checks on
+  every request that the file belongs to the user. The object store is never
+  exposed to browsers.
+- A real S3 service can replace the bundled store by changing the `S3_*`
+  settings and `STORAGE_BACKEND`; the bundled store is the default and the
+  tested path.
 
 ---
 
@@ -924,23 +921,15 @@ are just not unique.
 
 ## Local development
 
-```bash
-cp .env.example .env            # the example values are fine for local development
-docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile dev up -d --build
-# The `api` service runs `alembic upgrade head` on start.
-# The `minio-init` service creates both buckets automatically.
-npm run storage:check:docker    # verifies connectivity + buckets
-```
+Running the application on a development machine is described in the
+[README](../README.md#quick-start-on-your-own-machine) and in
+[DEVELOPMENT.md](./DEVELOPMENT.md). Two things matter for a server:
 
-`docker-compose.yml` publishes no host ports for Postgres or MinIO.
-`docker-compose.dev.yml` adds them for local development (the `./run.sh` dev
-modes pass both files for you). Never load the dev file on the server.
-
-A full clean-slate reset (wipes DB + MinIO + staging, recreates buckets):
-
-```bash
-bash ./scripts/reset-local.sh
-```
+- `docker-compose.dev.yml` publishes the database and the object store on the
+  host for development. **Never load it on a server.**
+- `scripts/reset-local.sh` and `docker compose down -v` delete the volumes
+  `phylo_postgres_data` and `phylo_minio_data`, which are the ones a deployment
+  on the same machine uses. **Never run them on a server.**
 
 ---
 
@@ -1098,18 +1087,17 @@ This has **not** been done: no group registry was available when the images
 were adopted. Until it is, the deployment depends on Docker Hub for these two
 images.
 
-Hardening notes:
+Notes:
 
-- **Do not publish the MinIO API port publicly.** Only the API/worker need it on
-  the internal Docker network. Remove/restrict the `minio` `ports:` mapping in
-  production (or bind to `127.0.0.1`), and front the web/API with your reverse
-  proxy + TLS. Downloads/previews flow through the API, so MinIO never needs to
-  be browser-reachable.
-- The MinIO **console** (`:9001`) is for ops only — restrict or keep it internal.
-- Use a dedicated MinIO access key with a policy scoped to the two buckets
-  instead of the root credentials, if you need least privilege.
-- Persist `phylo_minio_data` on reliable storage (named volume by default; a host bind
-  mount under your data directory is fine).
+- The object store publishes no port in production: neither its API nor its
+  console is reachable from outside the project's internal network, and
+  downloads go through the API. Keep it that way; put TLS on the reverse proxy.
+- The API and the worker use the store's administrator credentials by default.
+  For least privilege, create a user limited to the two buckets and put its
+  credentials in `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY`. The method
+  services already use a separate write-only user.
+- `phylo_minio_data` holds every dataset and result file. Keep it on reliable
+  storage.
 
 ### Persistent volumes
 
@@ -1126,40 +1114,81 @@ no volume.
 
 ## Backup & restore
 
-Back up the database and object storage **together** for a consistent snapshot
-(runs reference artifact objects by key).
+Backups are a manual step: **nothing in this project takes or schedules them.**
+What needs backing up is the database and the object store, **together**: runs
+in the database refer to files in the store by name. Take both in the same
+maintenance window, ideally with no run in progress.
 
-Create a restricted backup directory first. Database and object snapshots must
-come from the same maintenance window.
+The commands below were executed on a throwaway copy of the production profile
+on 2026-10-13: a deployment with an account, a dataset and a finished run was
+backed up, destroyed, started empty and restored; afterwards the user could
+sign in, the run's result and files were there byte for byte, and
+`./run.sh status` reported a complete deployment.
 
-**Database:**
-```bash
-mkdir -p backups/minio
-docker compose exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' > backups/backup_db.sql
-# restore:
-docker compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" "$POSTGRES_DB"' < backups/backup_db.sql
-```
-
-**Object storage:** mirror both buckets with the `mc` client. The object store
-publishes no host port, so the client container joins the store's internal
-network:
+Run them from the repository root, with the stack running. The object store
+publishes no port, so its client joins the store's network; the store's
+address and credentials are read from the API container, not from `.env`
+(a `.env` with spaces in a value cannot be read by a shell).
 
 ```bash
-set -a; . ./.env; set +a
+mkdir -p backups/minio && chmod 700 backups
+val() { docker compose --profile prod exec -T api-prod printenv "$1" | tr -d '\r'; }
+STORE="$(val S3_ENDPOINT_URL | sed "s#://#://$(val S3_ACCESS_KEY_ID):$(val S3_SECRET_ACCESS_KEY)@#")"
+BUCKETS="$(val S3_BUCKET_DATASETS) $(val S3_BUCKET_ARTIFACTS)"
 NET=$(docker inspect phylo-minio --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}')
 MC=pgsty/mc@sha256:cfc83108c3abb371f8fb84d99c1fdc88f8c237e022409b0081fb7c0a3be634dd
-for bucket in "$S3_BUCKET_DATASETS" "$S3_BUCKET_ARTIFACTS"; do
-  docker run --rm --network "$NET" -v "$PWD/backups/minio:/backup" \
-    -e MC_HOST_store="http://$MINIO_ROOT_USER:$MINIO_ROOT_PASSWORD@phylo-minio:${PHYLO_PORT_MINIO:-9000}" \
-    "$MC" mirror --overwrite "store/$bucket" "/backup/$bucket"
-done
-# restore = mirror the backup directory back into the bucket.
 ```
 
-Alternatively snapshot the `phylo_minio_data` volume while the stack is stopped.
-These commands do not capture copies already downloaded by users or versions
-retained by an externally configured versioned object store. Backups are a
-manual step; nothing in this project schedules them.
+### Back up
+
+```bash
+docker compose --profile prod exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' > backups/backup_db.sql
+for bucket in $BUCKETS; do
+  docker run --rm --network "$NET" -v "$PWD/backups/minio:/backup" -e MC_HOST_store="$STORE" \
+    "$MC" mirror --overwrite "store/$bucket" "/backup/$bucket"
+done
+```
+
+Check that `backups/backup_db.sql` is not empty and that `backups/minio`
+holds one directory per bucket. Keep `.env` with the backup: without the
+same `JWT_SECRET_KEY` every session ends, which is harmless, but without the
+same storage credentials the restored store cannot be opened.
+
+### Restore
+
+Into a deployment that is running (start an empty one with `./run.sh prod`
+first, and set the variables above). **This replaces the database and
+overwrites files of the same name in the store.**
+
+```bash
+# 1. Stop everything that uses the database.
+docker compose --profile prod stop api-prod api-worker-prod web-prod
+
+# 2. Replace the database with the dump. A deployment that has started already
+#    created its tables: loading a dump on top of them fails halfway and leaves
+#    a partial database, so the database is recreated first, and the load stops
+#    at the first error instead of carrying on.
+docker compose --profile prod exec -T postgres sh -c \
+  'dropdb -U "$POSTGRES_USER" --if-exists --force "$POSTGRES_DB" && createdb -U "$POSTGRES_USER" "$POSTGRES_DB"'
+docker compose --profile prod exec -T postgres sh -c \
+  'psql -q -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" "$POSTGRES_DB"' < backups/backup_db.sql
+
+# 3. Put the files back.
+for bucket in $BUCKETS; do
+  docker run --rm --network "$NET" -v "$PWD/backups/minio:/backup:ro" -e MC_HOST_store="$STORE" \
+    "$MC" mirror --overwrite "/backup/$bucket" "store/$bucket"
+done
+
+# 4. Start again. The API brings an older database to the current schema.
+./run.sh prod --no-build
+./run.sh status
+```
+
+Alternatively, with the stack stopped, snapshot the two volumes
+`phylo_postgres_data` and `phylo_minio_data` with the tools of the host.
+
+Not captured by any of this: files users have already downloaded, and results
+that had expired before the backup was taken.
 
 ---
 
@@ -1177,6 +1206,27 @@ Then run one method end-to-end and confirm:
 - `GET /runs/{id}/result` contains **no** base64 / `data:` URLs,
 - image previews load via `/artifacts/{id}/preview`,
 - the ZIP downloads via `/artifacts/{id}/download`.
+
+---
+
+## Troubleshooting a deployment
+
+Start with `./run.sh status`: it names what is wrong and usually how to fix it.
+
+| Symptom | Where to look, what to do |
+|---|---|
+| `./run.sh check` fails | It prints the reason and the fix for each item; nothing was started |
+| A container shows `Restarting` | `docker compose --profile prod logs <service>`. For `api-prod` and `api-worker-prod` the usual cause is a secret that still has its example value ("Refusing to start", with the variable names) |
+| `minio-init` ended with an error | `docker compose --profile prod logs minio-init`. The object store was not reachable, or the administrator credentials changed after the volume was first created |
+| The site is unreachable but `./run.sh status` is complete | The reverse proxy: it must be on the `proxy_net` network and address `phylo-web-prod` and `phylo-api-prod` on `PHYLO_PORT_WEB` and `PHYLO_PORT_API` |
+| Uploads fail at a certain size | The reverse proxy's body-size limit is below `MAX_UPLOAD_MB` |
+| Every visitor shares one sign-in allowance, or limits trigger for everybody | `FORWARDED_ALLOW_IPS` is not set to the proxy's address. `curl <api>/auth/client-ip` must show your own address |
+| No email arrives | `./run.sh status` shows whether mail is configured; the worker log shows each delivery attempt and its error. Runs are never affected |
+| Runs wait for a long time | `docker compose --profile prod logs api-worker-prod`, and the run's own status message: it names the method that has no free slot or not enough memory |
+| A run failed | Its status carries a code and a message written for the user ([When a run cannot finish](#when-a-run-cannot-finish)); failed runs keep a downloadable log. Internal errors carry a reference id that is also in the API or worker log |
+| Results disappeared | They expire `RESULT_RETENTION_DAYS` after a run ends ([Storage lifecycle and retention](#storage-lifecycle-and-retention)). The worker logs each removal |
+| The disk fills up | Images and build cache (`docker system df`), the two data volumes, and `STORAGE_LOCAL_PATH`, which should be nearly empty between runs |
+| A vulnerability scan reports fixable findings | Rebuild with fresh base images: `docker compose --profile prod build --pull`, then `./run.sh prod --no-build` |
 
 ---
 

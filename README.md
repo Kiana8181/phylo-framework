@@ -1,753 +1,224 @@
-# phylo-framework
+# Phylo-Framework
 
-A one-page UI to run phylogeny/lineage tree methods behind a simple orchestrator API.
-
-- **Web**: Next.js (apps/web)
-- **API**: FastAPI (apps/api)
-- **Methods**: pluggable microservices (Dowser, GCtree, BrepPhylo, ClonalTree included)
-- **Contracts**: JSON schemas (packages/contracts) used by both UI & API to drive parameters, validation, and results
-- **Object storage**: self-hosted **MinIO** (S3-compatible) holds uploaded datasets and generated artifacts; PostgreSQL holds ownership metadata and scientific result/tree JSON, but no base64 binaries
-
-> **Heads-up**: Running with Docker for the first time is **time-consuming** because large R images and packages need to be downloaded and built.
-
-> **File management (important):** Uploaded datasets and generated run artifacts
-> (images, PDFs, Newick, TSV/CSV, logs, ZIP bundles) live in **MinIO**, never in the
-> repository and never as base64 in the database. Downloads/previews are streamed
-> through the API. See [File Management & Object Storage](#file-management--object-storage)
-> and [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md). The `.env` file is **gitignored** —
-> copy `.env.example` to `.env` before running.
-
----
-
-## Table of Contents
-
-- [Quick Start](#quick-start)
-- [What You Get](#what-you-get)
-- [Architecture](#architecture)
-- [File Management & Object Storage](#file-management--object-storage)
-- [Ports](#ports)
-- [Prerequisites](#prerequisites)
-  - [macOS](#macos) · [Linux](#linux) · [Windows](#windows)
-- [Run It](#run-it)
-  - [Dev — Full Docker Compose (simplest)](#dev--full-docker-compose-simplest)
-  - [Dev (Docker methods)](#dev-docker-methods)
-  - [Dev (Local R methods)](#dev-local-r-methods)
-  - [Prod (Docker Compose)](#prod-docker-compose)
-- [Manual Run (Developers)](#manual-run-developers)
-- [Clean Reset (wipe local DB + storage)](#clean-reset-wipe-local-db--storage)
-- [Environment Variables](#environment-variables)
-- [Testing and Coverage](#testing-and-coverage)
-- [Troubleshooting](#troubleshooting)
-- [Extend: Add a New Method](#extend-add-a-new-method)
-- [Repository Layout](#repository-layout)
-- [License](#license)
-
----
-
-## Quick Start
-
-The recommended first run requires Docker Desktop (or Docker Engine with the
-Compose plugin) and Git. Node, Python, R and LaTeX are needed only for the
-optional host-development paths below.
-
-1. **Clone with submodules** (required for ClonalTree base code):
-
-```bash
-git clone --recurse-submodules https://github.com/Kiana8181/phylo-framework.git
-cd phylo-framework
-```
-
-Anonymous HTTPS access to the ClonalTree submodule was not available during the
-latest local verification. Until the owner makes both repositories public, a
-GitHub account authorized for `smhamidi/clonotype` is required. The submodule's
-identity and pinned commit have deliberately not been changed.
-
-If you already cloned without submodules:
-
-```bash
-git submodule update --init --recursive
-```
-
-2. **Create your `.env`** (it is gitignored — never committed):
-
-```bash
-cp .env.example .env
-# replace the JWT and MinIO secrets
-# OAuth and email settings may stay empty for local use
-```
-
-3. **Build and start the full container stack**:
-
-```bash
-docker compose --profile prod up -d --build
-docker compose --profile prod exec -T api-prod python -m apps.api.scripts.storage_check
-```
-
-Migrations run when the API starts, MinIO initialization creates both buckets,
-and the worker starts with the production profile. Open `http://localhost:3000`
-after the services become healthy.
-
----
-
-## What You Get
-
-- **UI**: dynamic schema-driven form; upload data (CSV/TSV/RDS/RDA/FASTA for Dowser); display trees/results; lazy artifact downloads + image previews (no base64 in the browser).
-- **Sequence Trace**: identifier search and root-to-match context in lineage-tree views; retain mapping artifacts when an adapter changes identifiers.
-- **API** (FastAPI):
-  - `GET /methods` — list methods
-  - `GET /methods/{id}/spec` — method spec + UI hints
-  - `POST /uploads/init` + `PUT /uploads/{id}/content` — upload a dataset to object storage
-  - `POST /runs?method={id}` — create a run referencing an uploaded `file_id`
-  - `GET /runs/{id}/result` — **lightweight** scientific summary only (no base64, no embedded binaries) + `dataset` descriptor + `artifact_count`
-  - `GET /runs/{id}/artifacts` — list downloadable artifact descriptors
-  - `GET /artifacts/{id}/download` · `GET /artifacts/{id}/preview` — stream a file / inline preview
-  - `GET /datasets/{id}/download` — download the original uploaded dataset
-  - `DELETE /datasets/{id}` — hard-delete the stored object, soft-delete the metadata row (idempotent; preserves run history)
-- **Method services**: R/plumber (Dowser, BrepPhylo) and FastAPI (GCtree, ClonalTree) exposing `/spec` plus the asynchronous `/jobs` lifecycle. They upload output files to MinIO and return a manifest; the worker validates it and records authorized artifact references. No base64 crosses the service→API boundary.
-
----
-
-## Architecture
+A web application for reconstructing B-cell lineage trees with four established
+methods — **Dowser**, **GCtree**, **BrepPhylo** and **ClonalTree** — through one
+workflow. Upload a dataset once, run any of the methods on it, and compare the
+resulting trees side by side. Every run is recorded with its parameters, its
+random seed and the version of the software that produced it.
 
 ![Architecture](./architecture.png)
 
-- **Contracts** (packages/contracts/methods/<id>/…)
-  - `spec.json`: name, version, accepted MIME types
-  - `param.schema.json`: JSON-Schema parameters (drives UI)
-  - `result.schema.json`: JSON-Schema results (validated by API)
-  - `ui.json`: UI hints (required files, control order, etc.)
-  - `service.routes.json`: maps `/spec` and asynchronous `/jobs` lifecycle endpoints
+| Component | What it is | Where |
+|---|---|---|
+| Web app | Next.js. Forms are generated from each method's contract | `apps/web` |
+| API | FastAPI. Accounts, uploads, runs, results; the only part a browser talks to | `apps/api` |
+| Worker | Follows each run from the queue to its stored result | `apps/api/workers` |
+| Method services | One container per method (R for Dowser and BrepPhylo, Python for GCtree and ClonalTree) | `services/` |
+| Contracts | JSON schemas that define each method's parameters and results for both the web app and the API | `packages/contracts` |
+| PostgreSQL | Accounts, runs, trees and metadata | container |
+| Object store | Uploaded datasets and result files (S3-compatible, self-hosted) | container |
 
----
+## Choose your path
 
-## File Management & Object Storage
-
-The system of record for files is **MinIO** (self-hosted, S3-compatible, free). No
-AWS or paid cloud storage is required. The abstraction stays S3-compatible, so a
-real S3 endpoint can be used later by changing env vars only.
-
-| What | Where | Notes |
-| --- | --- | --- |
-| Uploaded datasets | MinIO bucket `S3_BUCKET_DATASETS` | key `datasets/{user}/{upload}.{ext}` |
-| Generated artifacts | MinIO bucket `S3_BUCKET_ARTIFACTS` | key `artifacts/{run}/{job}/{file}` |
-| Run/file/artifact records | PostgreSQL | metadata plus scientific result/tree JSON; **no base64 binaries** |
-| Staging scratch (`/runtime/storage`) | host bind / volume | where a dataset is staged for a method to read |
-| Method job outputs (`/runtime/method-jobs`) | host dir / volume | method writes files; the **worker** uploads them to MinIO |
-
-Flow: upload → object in `phylo-datasets`; the worker stages it for the method
-service, the method uploads output files to `phylo-artifacts` and returns a
-manifest, and the worker records `run_artifacts` rows. The browser fetches
-images/downloads by streaming through the API (`/artifacts/{id}/preview|download`) —
-MinIO is never exposed to the browser.
-
-- Verify storage connectivity + buckets at any time: `npm run storage:check` (host)
-  or `npm run storage:check:docker` (inside the API container).
-- Full clean reset (wipe DB + MinIO + staging): `bash ./scripts/reset-local.sh`.
-- Production/server guidance (volumes, backup/restore, hardening): [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md).
-- Dependency and image security audit (what was scanned, what is still open, how to re-run it): [docs/SECURITY-AUDIT.md](./docs/SECURITY-AUDIT.md).
-- Resource budget, container limits, network layout and secret isolation on a shared server: [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md#resource-budget-and-container-limits).
-- How many jobs run at once, how threads are limited inside each method, and why a run may show "waiting for capacity": [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md#job-execution-inside-the-budget).
-- How many runs a user may start per hour, what counts, and what the wizard shows when the limit is reached: [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md#limits-on-creating-runs).
-- Sign-in protection: the self-hosted CAPTCHA, rate limits, the reverse-proxy setting they depend on, and email verification: [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md#sign-in-protection).
-- Email: SMTP settings, which runs send a notification, retries and what a mail outage does (nothing to runs): [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md#email-and-run-notifications).
-- How long results are kept (60 days by default), what expires and what does not, the upload size limit and clean-up: [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md#storage-lifecycle-and-retention).
-- Starting, checking and updating a deployment, internal ports, and how results record the deployed version: [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md#starting-and-checking-a-deployment).
-- Credentials that were committed in the past, what to rotate, and how the history is cleaned: [docs/HISTORY-CLEANUP.md](./docs/HISTORY-CLEANUP.md). Run `python3 scripts/scan_secrets.py` to check that no credential or env file is tracked.
-- How the whole system is validated, including the tests that put the real stack under pressure (`npm run test:system`), and what the last validation found: [docs/VALIDATION.md](./docs/VALIDATION.md).
-- Run time limits, what happens to a run when a method container restarts, the object store is down or a job runs out of memory, and what each error code means: [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md#when-a-run-cannot-finish).
-- Replacing the unmaintained MinIO image (investigation and recommendation, not yet applied): [docs/OBJECT-STORAGE-OPTIONS.md](./docs/OBJECT-STORAGE-OPTIONS.md).
-
----
-
-## Ports
-
-|    Service | URL                   | Port |
-| ---------: | --------------------- | ---: |
-|        Web | http://localhost:3000 | 3000 |
-|        API | http://localhost:8000 | 8000 |
-|     Dowser | http://localhost:8001 | 8001 |
-|     GCtree | http://localhost:8002 | 8002 |
-|  BrepPhylo | http://localhost:8003 | 8003 |
-| ClonalTree | http://localhost:8004 | 8004 |
-|  MinIO API | http://localhost:9000 | 9000 |
-| MinIO Console | http://localhost:9001 | 9001 |
-
-> Ensure these ports are **free** before running. The helper scripts will check and exit with a clear error if not. MinIO ports are configurable via `MINIO_API_PORT` / `MINIO_CONSOLE_PORT`.
-
----
+| You want to | Go to |
+|---|---|
+| **Try it on your own machine** | [Quick start](#quick-start-on-your-own-machine) below |
+| **Deploy it on a server** | [Deploying on a server](#deploying-on-a-server), then [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md) |
+| **Change the code** | [docs/DEVELOPMENT.md](./docs/DEVELOPMENT.md) |
 
 ## Prerequisites
 
-You do **not** need everything for every mode; the helper will tell you what’s missing.
+- **Docker** with the Compose plugin, version **2.17 or newer**
+  (`docker compose version`). Docker Desktop on macOS and Windows includes it.
+- **Git**.
+- About **30 GB** of free disk space for the images (the two R method images
+  are about 13 GB each) and **8 GB** of memory for Docker.
+- Access to the ClonalTree source, a private git submodule
+  (`smhamidi/clonotype`): your GitHub account must be allowed to read it.
 
-### macOS host-development extras
+Nothing else. Node, Python and R are needed only to develop or to run the
+tests.
 
-- **Node.js 22** (matches CI; the earlier local report used Node 24)
-- **Python 3.10+** (3.12 OK)
-- **Docker Desktop** (for Docker modes)
-- **R 4.3+** (only for Local-R dev)
-  - Helpful libs: `brew install pkg-config cairo pango harfbuzz fribidi libgit2 v8`
-
-### Linux host-development extras
-
-- **Node.js 22**, **Python 3.10+**
-- **Docker Engine + compose plugin** (for Docker modes)
-- **R 4.3+** (only for Local-R dev) + system libs:
-  ```bash
-  sudo apt-get update && sudo apt-get install -y     libcurl4-openssl-dev libssl-dev libxml2-dev libgit2-dev     libfontconfig1-dev libfreetype6-dev libharfbuzz-dev libfribidi-dev     libpng-dev libtiff5-dev libjpeg-dev libcairo2-dev libxt-dev     zlib1g-dev libbz2-dev liblzma-dev libsodium-dev pkg-config libicu-dev     libv8-dev make g++
-  ```
-
-### Windows
-
-- **Docker path**: use Docker Desktop from PowerShell or a WSL2 shell; the Compose commands above work in either environment.
-- **Shell helper/development scripts**: use WSL2. They are Bash scripts, not PowerShell scripts.
-- **Dev (Local R)**: Recommended to use **WSL2 (Ubuntu)** and follow Linux steps. Native Windows R is possible but requires proper Rtools/toolchain setup.
-
----
-
-## Run It
-
-> Every mode below starts MinIO and auto-creates the `phylo-datasets` and
-> `phylo-artifacts` buckets. After startup you can sanity-check storage with
-> `npm run storage:check` (host) / `npm run storage:check:docker` (containers).
-
-### Dev — Full Docker Compose (simplest)
-
-Everything runs in containers, including the run worker. Method services upload
-generated artifacts directly to MinIO and the worker records their manifest.
-This is the closest local path to the production profile.
+## Quick start on your own machine
 
 ```bash
-cp .env.example .env          # first time only
-docker compose --profile dev up -d --build
-# - postgres migrations run automatically (api runs `alembic upgrade head` on start)
-# - minio-init creates both buckets
-docker compose --profile dev exec -T api python -m apps.api.scripts.storage_check
-```
-
-- Web → http://localhost:3000 · API → http://localhost:8000 · MinIO console → http://localhost:9001
-
-Tail logs / stop:
-
-```bash
-docker compose --profile dev logs -f api api-worker
-docker compose --profile dev down        # add -v to also wipe volumes (DB + MinIO)
-```
-
-> Use this when you don't need hot-reload of the API/worker. For fast Python
-> iteration on the API/worker, use the `./run.sh` hybrid modes below (host
-> API/worker + Docker or local methods).
-
----
-
-### Dev (Docker methods)
-
-Host **API + worker** with hot-reload; method services run in **Docker**.
-MinIO + Postgres start via Compose automatically; method containers and the host
-worker share `runtime/method-jobs` so artifacts can be ingested.
-
-```bash
-./run.sh
-# choose: Dev → Docker
-```
-
-> First time can be **slow** due to large R images and compiled dependencies.
-
-Open http://localhost:3000
-
----
-
-### Dev (Local R methods)
-
-Requires **R 4.3+** with packages:
-
-- CRAN: `plumber`, `dowser`, `alakazam`, `shazam`, `ggtree`, `ape`, `jsonlite`, `jsonvalidate`, `sodium`
-- Bioc: `S4Vectors`, `IRanges`, `XVector`, `Biostrings`, `GenomeInfoDb`, `GenomicRanges`, `Rhtslib`, `Rsamtools`, `GenomicAlignments`, `treeio`, `ggtree`
-
-Run:
-
-```bash
-./run.sh
-# choose: Dev → Local R
-```
-
-The script starts **plumber** on **:8001**, **API** on **:8000**, and **Web** on **:3000**.
-
----
-
-### Prod (Docker Compose)
-
-Everything in containers with internal networking (includes Postgres, MinIO,
-API, worker, web, and all method services).
-
-```bash
-./run.sh prod      # pre-start check, then the command below
-# or directly:
-docker compose --profile prod up -d --build
-./run.sh status    # containers, migrations, buckets, method services
-```
-
-Production needs Docker with Compose 2.17+ on the host and nothing else (no
-Node, no Python). `./run.sh` without arguments still offers the interactive
-menu.
-
-- Web → http://localhost:3000
-- API → http://localhost:8000
-
-> First run can take a **long time** for images to download/build. For server
-> deployment (persistent volumes, **not** exposing MinIO publicly, backup/restore,
-> credential hardening, post-deploy checks) follow **[docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md)**.
-
----
-
-## Central control for method services
-
-Ports and service endpoints come from one config file and sync into one root env file.
-
-- **Config source:** `config/method-services.json`
-- **Runtime env source:** `.env` (repo root)
-
-| Command                                   | Description                                                                       |
-| ----------------------------------------- | --------------------------------------------------------------------------------- |
-| `npm run services:sync-env`               | Generate/update `METHOD_*` vars in root `.env` from `config/method-services.json` |
-| `npm run services:list`                   | List service IDs, host/container ports, and local/docker URLs                     |
-| `npm run services:start`                  | Build + start all method services in Docker                                       |
-| `npm run services:start -- gctree dowser` | Build + start only selected method services                                       |
-| `npm run services:stop`                   | Stop all managed method containers                                                |
-| `npm run services:stop -- gctree`         | Stop one managed method container                                                 |
-
-Generated keys include both local and compose-network URLs:
-
-- `METHOD_<ID>_URL` (example: `http://localhost:8002`)
-- `METHOD_<ID>_URL_DOCKER` (example: `http://gctree:8002`)
-- `METHOD_<ID>_HOST_PORT`
-- `METHOD_<ID>_CONTAINER_PORT`
-
----
-
-## Manual Run (Developers)
-
-If you want to run without `./run.sh`, use this flow.
-
-### 1) Create + sync the single env file
-
-From repo root:
-
-```bash
-cp .env.example .env          # .env is gitignored; never commit it
-npm run services:sync-env     # generates METHOD_* vars into .env
-```
-
-Then edit only root `.env` for project configuration (API, web, DB, **object
-storage / MinIO**, method URLs, auth/email keys, etc.). The storage defaults
-(`STORAGE_BACKEND=minio`, `S3_*`, `MINIO_ROOT_*`, bucket names) already work for
-local development — change the credentials/buckets for anything shared.
-
-### 2) Install dependencies
-
-```bash
-# Node deps (monorepo/workspaces)
-npm ci
-
-# Python venv for API + migrations
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -U pip
-pip install -r apps/api/requirements.txt
-
-# Optional contracts build
-npm -w @phylo/contracts run build
-```
-
-### 3) Start PostgreSQL + MinIO, run migrations, verify storage
-
-```bash
-set -a; source .env; set +a
-source .venv/bin/activate
-
-# Database + object storage (minio-init creates both buckets, then exits)
-docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile dev up -d postgres minio minio-init
-docker wait phylo-minio-init 2>/dev/null || true   # block until buckets are ready (no-op if already done)
-
-npm run db:migrate             # applies migrations incl. 008 (run_artifacts, dataset soft-delete)
-npm run storage:check          # round-trips both buckets via the host (localhost:9000) — the real readiness gate
-```
-
-> If `set -a; source .env` errors on values containing `<` or spaces (e.g.
-> `SMTP_FROM`), run the storage check via the Node wrapper instead, which parses
-> `.env` safely: `node --env-file=.env ./scripts/storage-check.mjs`.
-
-> **Method services upload artifacts directly to MinIO** using a scoped
-> PutObject-only user (`MINIO_METHODS_USER`/`MINIO_METHODS_PASSWORD`, created
-> by the `minio-init` container with a policy restricted to
-> `s3:PutObject` on the artifact bucket). The worker never reads files from
-> disk and there is no shared volume between methods and the worker —
-> `METHOD_JOBS_DIR` is purely internal to each method container (for
-> `status.json` / `request.json` / `job.log`). `job.log` is auto-uploaded to
-> MinIO at the end of every job alongside the scientific artifacts.
-
-### 4) Start method services (pick one approach)
-
-Before starting services, ensure submodules are initialized:
-
-```bash
-git submodule update --init --recursive
-```
-
-#### A) Docker methods (uses `method-services.mjs` + config)
-
-```bash
-npm run services:start
-```
-
-#### B) Local methods
-
-Use ports from root `.env` (`METHOD_*_HOST_PORT`).
-In each terminal where you run a local method, run this bootstrap first:
-
-```bash
-# from repo root
-set -a; source .env; set +a
-export CONTRACTS_DIR="$(python3 -c 'import os; p=os.environ.get("CONTRACTS_DIR","packages/contracts"); print(p if os.path.isabs(p) else os.path.realpath(p))')"
-export STORAGE_ABS="$(python3 -c 'import os; p=os.environ.get("STORAGE_LOCAL_PATH","runtime/storage"); print(p if os.path.isabs(p) else os.path.realpath(p))')"
-mkdir -p "$STORAGE_ABS"
-export STRICT_CONTRACT_ROUTES="${STRICT_CONTRACT_ROUTES:-true}"
-export METHOD_SERVICE_FILE_PREFIX="$STORAGE_ABS"
-export HOST_RUNTIME_SHARED_ROOT="$STORAGE_ABS"
-# Method services upload artifact files directly to MinIO using a scoped user
-# created by minio-init. No shared METHOD_JOBS_DIR with the worker is needed —
-# methods only use it for internal state (status.json/request.json/job.log).
-export METHOD_JOBS_DIR="$PWD/runtime/method-jobs"
-mkdir -p "$METHOD_JOBS_DIR"
-export IGPHYML_BIN="${IGPHYML_BIN:-/usr/local/share/igphyml/src/igphyml}"
-export IGPHYML_MOTIFS="${IGPHYML_MOTIFS:-/usr/local/share/igphyml/src/motifs}"
-export IGPHYML_PATH="${IGPHYML_PATH:-$IGPHYML_MOTIFS}"
-```
-
-Run each local service in its own terminal (you can run only one if you want):
-
-**Dowser (local R)**
-
-```bash
-set -a; source .env; set +a
-export CONTRACTS_DIR="$(python3 -c 'import os; p=os.environ.get("CONTRACTS_DIR","packages/contracts"); print(p if os.path.isabs(p) else os.path.realpath(p))')"
-export STRICT_CONTRACT_ROUTES="${STRICT_CONTRACT_ROUTES:-true}"
-export DNAPARS_PATH="${DNAPARS_PATH:-$(command -v dnapars || echo /usr/local/bin/dnapars)}"
-export DNAML_PATH="${DNAML_PATH:-$(command -v dnaml || echo /usr/local/bin/dnaml)}"
-export RAXML_BIN="${RAXML_BIN:-$(command -v raxml-ng || echo /usr/local/bin/raxml-ng)}"
-export IGPHYML_BIN="${IGPHYML_BIN:-/usr/local/share/igphyml/src/igphyml}"
-export IGPHYML_MOTIFS="${IGPHYML_MOTIFS:-/usr/local/share/igphyml/src/motifs}"
-export IGPHYML_PATH="${IGPHYML_PATH:-$IGPHYML_MOTIFS}"
-Rscript --vanilla -e "setwd('services/dowser'); Sys.setenv(CONTRACTS_DIR='${CONTRACTS_DIR}', STRICT_CONTRACT_ROUTES='${STRICT_CONTRACT_ROUTES}', DNAPARS_PATH='${DNAPARS_PATH}', DNAML_PATH='${DNAML_PATH}', RAXML_BIN='${RAXML_BIN}', IGPHYML_BIN='${IGPHYML_BIN}', IGPHYML_MOTIFS='${IGPHYML_MOTIFS}', IGPHYML_PATH='${IGPHYML_PATH}'); pr <- plumber::plumb('plumber.R'); pr\$run(host='0.0.0.0', port=${METHOD_DOWSER_HOST_PORT})"
-```
-
-Dowser requires aligned AIRR/Change-O input (not raw FASTA). Supported build methods: `pratchet`, `pml`, `dnapars`, `dnaml`, `igphyml`, `raxml`. For `dnapars`/`dnaml` install PHYLIP; for `raxml` install [RAxML-NG](https://github.com/amkozlov/raxml-ng); for `igphyml` set `IGPHYML_BIN` and motif paths. Run validator tests: `Rscript services/dowser/tests/run_validators.R`.
-
-**GCtree (local Python)**
-
-CSV/TSV is a framework adapter, not a native GCtree input. The adapter writes
-the selected `sequence_id` and `sequence_alignment` fields, requires unique IDs
-and equal aligned lengths, and emits exactly one FASTA record per valid row.
-`duplicate_count` and other table metadata are not sent as record weights. If
-three records are intended, supply three identical aligned sequences with
-distinct IDs such as `cellA_copy1` through `cellA_copy3` and retain the mapping.
-The designated reference row is not itself counted as an observation; other
-records matching its sequence can contribute to the collapsed root genotype.
-
-```bash
-set -a; source .env; set +a
-export CONTRACTS_DIR="$(python3 -c 'import os; p=os.environ.get("CONTRACTS_DIR","packages/contracts"); print(p if os.path.isabs(p) else os.path.realpath(p))')"
-export STRICT_CONTRACT_ROUTES="${STRICT_CONTRACT_ROUTES:-true}"
-source .venv/bin/activate
-pip install -r services/gctree/requirements.txt
-(
-  cd services/gctree
-  export QT_QPA_PLATFORM="offscreen"
-  export MPLBACKEND="agg"
-  export PYTHONPATH="$(pwd)${PYTHONPATH:+:$PYTHONPATH}"
-  uvicorn app:app --host 0.0.0.0 --port "${METHOD_GCTREE_HOST_PORT}"
-)
-```
-
-Notice: `gctree`, `deduplicate`, and `mkconfig` CLIs must be on `PATH` (installed by `pip install -r services/gctree/requirements.txt`).
-
-**BrepPhylo (local R)**
-
-```bash
-set -a; source .env; set +a
-export CONTRACTS_DIR="$(python3 -c 'import os; p=os.environ.get("CONTRACTS_DIR","packages/contracts"); print(p if os.path.isabs(p) else os.path.realpath(p))')"
-export STRICT_CONTRACT_ROUTES="${STRICT_CONTRACT_ROUTES:-true}"
-export IGPHYML_BIN="${IGPHYML_BIN:-/usr/local/share/igphyml/src/igphyml}"
-export IGPHYML_MOTIFS="${IGPHYML_MOTIFS:-/usr/local/share/igphyml/src/motifs}"
-export IGPHYML_PATH="${IGPHYML_PATH:-$IGPHYML_MOTIFS}"
-Rscript --vanilla -e "setwd('services/brepphylo'); Sys.setenv(CONTRACTS_DIR='${CONTRACTS_DIR}', STRICT_CONTRACT_ROUTES='${STRICT_CONTRACT_ROUTES}', IGPHYML_BIN='${IGPHYML_BIN}', IGPHYML_MOTIFS='${IGPHYML_MOTIFS}', IGPHYML_PATH='${IGPHYML_PATH}'); pr <- plumber::plumb('plumber.R'); pr\$run(host='0.0.0.0', port=${METHOD_BREPPHYLO_HOST_PORT})"
-```
-
-Notice: default `tree_type=dnapars` expects `dnapars` on `PATH` (or `DNAPARS_PATH`). If using `tree_type=igphyml`, set `IGPHYML_BIN` and motifs (`IGPHYML_MOTIFS` or `IGPHYML_PATH`).
-
-**BrepPhylo parameters (contract/UI)**
-
-- `tree_type` is labeled **Tree inference method** (`simple`, `dnapars`, `igphyml`).
-- `input_sequence_mode`: `raw_sequence` (MSA via `algorithm`) or `aligned_imgt_gapped` (sequences must contain IMGT gap `.` characters; no alignment algorithm).
-- `species` enum includes built-in references plus `custom` (paste IMGT germline V-gene FASTA into `germline_set_text`).
-- `enable_csr_analysis` + `isotype_column` gate CSR / arborescence post-processing.
-- Removed from UI/backend: `class_column`, color controls, `use_temp_dir`, sequence preprocessing (`apply_filters`, `uppercase`, `gap_policy`, `noniupac_policy`), resume, and server-side `germline_set` paths.
-
-**Alignment PDF / LaTeX (`make_alignment_pdf=true`)**
-
-- The supported path is the `brepphylo` Docker image, which contains the needed
-  TeX packages. The full-Docker setup requires no LaTeX installation on the host.
-- If LaTeX is missing, tree inference still runs; the service reports `diagnostics.latex_available=false` and a warning (alignment PDF may fail without blocking trees).
-
-**BrepPhylo validator tests (local)**
-
-```bash
-Rscript services/brepphylo/tests/run_validators.R
-npm run test:all  # includes real BrepPhylo scientific execution
-```
-
-
-```bash
-set -a; source .env; set +a
-export CONTRACTS_DIR="$(python3 -c 'import os; p=os.environ.get("CONTRACTS_DIR","packages/contracts"); print(p if os.path.isabs(p) else os.path.realpath(p))')"
-export STRICT_CONTRACT_ROUTES="${STRICT_CONTRACT_ROUTES:-true}"
-source .venv/bin/activate
-pip install -r services/clonaltree/requirements.txt
-(
-  cd services/clonaltree
-  export QT_QPA_PLATFORM="offscreen"
-  export MPLBACKEND="agg"
-  uvicorn app:app --host 0.0.0.0 --port "${METHOD_CLONALTREE_HOST_PORT}"
-)
-```
-
-Notice: ClonalTree requires **MUSCLE v5.x**.  
-If you start via `./run.sh` -> `Dev -> Local R` (or `scripts/dev-with-local-r.sh`), MUSCLE v5 is auto-installed/checked.  
-If you start ClonalTree manually, ensure `muscle -version` reports major version `>= 5`; otherwise `/run` fails with a version error.
-
-### 5) Start API
-
-```bash
-set -a; source .env; set +a
-source .venv/bin/activate
-
-# Local methods: API must send host paths
-export STORAGE_ABS="$(python3 -c 'import os; p=os.environ.get("STORAGE_LOCAL_PATH","runtime/storage"); print(p if os.path.isabs(p) else os.path.realpath(p))')"
-mkdir -p "$STORAGE_ABS"
-export METHOD_SERVICE_FILE_PREFIX="$STORAGE_ABS"
-export HOST_RUNTIME_SHARED_ROOT="$STORAGE_ABS"
-
-# Docker methods: API sends container path but still stages files on host
-# export METHOD_SERVICE_FILE_PREFIX="/runtime/storage"
-# export HOST_RUNTIME_SHARED_ROOT="$STORAGE_ABS"
-
-npm run dev:api
-```
-
-### 5b) Start run worker
-
-Processes `QUEUED` runs and **ingests method outputs into MinIO** (uploads
-artifacts, records `run_artifacts` rows). Run in a **separate terminal** from API
-and web. Requires postgres, MinIO, and method services to be up. Uses the same
-root `.env` as `dev:api` (DB URL, `S3_*`, `METHOD_*_URL`, storage paths).
-
-```bash
-npm run dev:worker
-```
-
-> The worker no longer reads files from disk — method services upload artifact
-> files (PNGs, ZIPs, `job.log`, etc.) directly to MinIO using their scoped
-> `MINIO_METHODS_*` credentials. The worker only registers DB rows from the
-> manifest each method emits in `result.json`. If artifacts never appear after
-> a run completes, check that the `minio-init` container created the
-> `phylo-methods` user, and that the method service env carries
-> `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` pointing at it.
-
-### 6) Start web UI
-
-```bash
-set -a; source .env; set +a
-npm run dev:web
-```
-
-Open `http://localhost:3000`.
-
----
-
-## Clean Reset (wipe local DB + storage)
-
-Project-scoped and safe — it only removes **this** project's containers + named
-volumes (`postgres_data`, `method_jobs`, `minio_data`) and the local
-`./runtime` staging folders. It never runs `docker volume prune` and never
-touches unrelated files.
-
-```bash
-bash ./scripts/reset-local.sh
-```
-
-It stops the stack, drops the project volumes, deletes `./runtime/storage` and
-`./runtime/method-jobs`, rebuilds + starts the clean dev stack (buckets are
-recreated automatically), and runs the storage check.
-
-Manual equivalent:
-
-```bash
-docker compose down -v --remove-orphans
-rm -rf ./runtime/storage ./runtime/method-jobs
+git clone --recurse-submodules git@github.com:Kiana8181/phylo-framework.git
+cd phylo-framework
+cp .env.example .env
 docker compose --profile dev up -d --build
 ```
 
----
+Then open **http://localhost:3000**.
 
-## Environment Variables
+- **The first build takes a long time** (tens of minutes): the R images are
+  downloaded and several packages are compiled. Later starts take seconds.
+- The example values in `.env` are enough for a local start. They are public,
+  so they are refused in production.
+- Already cloned without `--recurse-submodules`? Run
+  `git submodule update --init --recursive`.
 
-All runtime configuration should live in root `.env` (copied from
-`.env.example`). `.env` is **gitignored** — keep secrets out of version control.
+**What happens at the first start**, without any further command: the database
+is created and brought to the newest schema, both storage buckets and the
+method services' write-only storage user are created, and the web app, the
+API, the worker and the four method services start.
 
-- `CONTRACTS_DIR` — contracts path used by API/methods
-- `CORS_ORIGINS` — allowed web origins for API CORS
-- `NEXT_PUBLIC_API_BASE_URL` — web -> API base URL
-- `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` / `POSTGRES_HOST` / `POSTGRES_PORT` — DB connection pieces
-- `DATABASE_URL` — optional explicit DB URL override
-**Object storage (MinIO / S3-compatible):**
-
-- `STORAGE_BACKEND` — `minio` (default), `s3`, or `local` (tests only)
-- `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` — MinIO root creds (also used as the S3 key/secret by default)
-- `S3_ENDPOINT_URL` — S3 endpoint for **host-run** processes/scripts (e.g. `http://localhost:9000`)
-- `S3_ENDPOINT_URL_DOCKER` — S3 endpoint **inside** containers (e.g. `http://minio:9000`); Compose injects this as the in-container `S3_ENDPOINT_URL`
-- `S3_REGION` — region label (any value for MinIO)
-- `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` — S3 credentials (keep in sync with the MinIO root creds, or use a scoped MinIO user)
-- `S3_BUCKET_DATASETS` / `S3_BUCKET_ARTIFACTS` — bucket names
-- `S3_FORCE_PATH_STYLE` — `true` for MinIO (path-style addressing)
-- `MINIO_API_PORT` / `MINIO_CONSOLE_PORT` — host ports for the MinIO container
-
-**Staging / method I/O:**
-
-- `STORAGE_LOCAL_PATH` — host-side **staging** directory (scratch; not the dataset/artifact store)
-- `STORAGE_LOCAL_URL` — URL prefix for the local test backend
-- `HOST_RUNTIME_SHARED_ROOT` — host absolute staging root the API uses to stage/map method inputs
-- `METHOD_SERVICE_FILE_PREFIX` — prefix API rewrites file paths to when calling method services (`/runtime/storage` for Docker methods, host absolute path for local methods)
-- `METHOD_JOBS_DIR` — internal per-method-container directory for `status.json` / `request.json` / `job.log`. **Do not set in `.env`** — this is purely internal to each method container. Defaults to `/runtime/method-jobs` inside the container. The worker does NOT read it; artifact files are uploaded directly to MinIO by each method.
-- `MINIO_METHODS_USER` / `MINIO_METHODS_PASSWORD` — scoped MinIO credentials (created by `minio-init`) used by method services to upload artifact files directly to the artifact bucket. Restricted to `s3:PutObject` only.
-- `METHOD_<ID>_URL` — host URL for each method service
-- `METHOD_<ID>_URL_DOCKER` — compose-network URL for each method service
-- `METHOD_<ID>_HOST_PORT` / `METHOD_<ID>_CONTAINER_PORT` — generated service ports
-- `IGPHYML_BIN` / `IGPHYML_MOTIFS` / `IGPHYML_PATH` / `DNAPARS_PATH` — optional method runtime overrides
-
-`apps/api/.env` and `apps/web/.env` are now legacy compatibility files and should stay empty.
-
----
-
-## Testing and Coverage
-
-The test suite covers the shared contracts, frontend unit/component behavior,
-FastAPI routes, real PostgreSQL migrations and queue concurrency, local/S3/MinIO
-storage, worker transitions, and all four Python/R scientific services. Chromium
-also exercises signup/login, file deletion and each method's documented example
-through form submission to rendered tree results.
+**First use:** choose *Sign up* and create an account (locally no email is
+sent and the account works at once), open *Documentation → Try it yourself*,
+pick a method and press *Run*. The sample dataset is included.
 
 ```bash
-# Once, after npm ci and creating .venv:
-.venv/bin/python -m pip install -r requirements-test.txt
-npx playwright install chromium
-
-npm test                         # Unit + DB/storage integration + coverage
-npm run test:all -- --build       # First complete run, builds scientific images
-npm run test:all                  # Complete run reusing existing image dependencies
+docker compose --profile dev ps                       # what is running
+docker compose --profile dev logs -f api api-worker   # follow the logs
+docker compose --profile dev down                     # stop; your data is kept
 ```
 
-Docker Desktop must be running. Tests use the independent `phylo-tests` Compose
-project, disposable databases/buckets and loopback ports 55432, 59000, 58000–58004
-and 53000. They do not use the application's `.env`, database or MinIO volumes.
-The runner cleans up its test containers/volumes on completion or failure.
-No local R installation is needed.
+The API is at http://localhost:8000, with interactive documentation at
+http://localhost:8000/docs.
 
-Reports are generated under `coverage/`: contracts and frontend HTML/LCOV;
-Python HTML/XML with branch coverage from unit tests and real subprocesses;
-separate R covr reports; scientific result/checksum evidence; Playwright reports
-and failure traces. Missing infrastructure and coverage regressions fail the
-run. Executable shared contracts have a 100% coverage gate; other layers enforce
-measured baselines and report uncovered code explicitly.
+## Deploying on a server
 
-The verified complete run passed **287 Python tests**, **121 contract tests**,
-**156 frontend tests**, **8 scientific E2E scenarios**, **6 browser scenarios**,
-and both R suites. Measured line coverage from that run:
+A deployment runs the `prod` profile behind a reverse proxy. It publishes no
+port on the host, enforces resource limits on every container and refuses to
+start with the example secrets. The server needs Docker with Compose 2.17+ and
+nothing else.
 
-| Layer | Line coverage |
-|---|---:|
-| Executable shared contracts | 100% |
-| API (unit/integration + real E2E processes) | 75.75% |
-| GCtree service wrapper | 62.99% |
-| ClonalTree service wrapper | 79.02% |
-| Frontend (unit + Chromium) | 42.98% |
-| Dowser R modules | 44.24% |
-| BrepPhylo R modules | 61.67% |
+```bash
+git clone --recurse-submodules git@github.com:Kiana8181/phylo-framework.git
+cd phylo-framework
+cp .env.example .env     # then set the values listed below
+./run.sh check           # can it start? changes nothing
+./run.sh prod            # start, or update after `git pull`
+./run.sh status          # is it complete?
+```
 
-R percentages exclude executable entrypoints; Python service percentages exclude
-upstream scientific packages/submodule code. Full scope and exclusions are in
-[TESTING.md](docs/TESTING.md). These are recorded results, not a claim of complete
-branch coverage; regenerated reports are authoritative after changes.
+Before the first start, set in `.env`:
 
-[GitHub Actions](.github/workflows/tests.yml) runs both test stages on pushes,
-pull requests, manual dispatch and a weekly schedule, retaining reports for
-30 days. [Testing documentation](docs/TESTING.md) details every layer, commands,
-coverage exclusions, corrected defects and remaining scientific/browser scope.
-Coverage is not a claim that every biological configuration or upstream algorithm
-has been validated.
+1. **The secrets**: `POSTGRES_PASSWORD`, `MINIO_ROOT_PASSWORD` (and
+   `S3_SECRET_ACCESS_KEY` to the same value), `MINIO_METHODS_PASSWORD`,
+   `JWT_SECRET_KEY`. Generate each with `openssl rand -hex 32`.
+2. **The public addresses**: `FRONTEND_URL`, `PUBLIC_API_BASE_URL`,
+   `NEXT_PUBLIC_API_BASE_URL`, `CORS_ORIGINS`.
+3. **The resource budget** the server grants this application:
+   `PHYLO_CPU_BUDGET`, `PHYLO_MEMORY_BUDGET_MB`, `PHYLO_PIDS_BUDGET`.
+4. **The reverse proxy's address**: `FORWARDED_ALLOW_IPS`.
+5. **The mail server**, if email is wanted: `SMTP_HOST`, `SMTP_FROM` and, where
+   needed, `SMTP_USERNAME` and `SMTP_PASSWORD`.
 
----
+The reverse proxy must share the Docker network `proxy_net` with the
+application and send requests to `phylo-web-prod:3000` and
+`phylo-api-prod:8000`. Everything else — limits, quotas, retention, backups,
+updates — is in [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md).
+
+## `./run.sh`
+
+| Command | What it does |
+|---|---|
+| `./run.sh check` | Checks everything a production start depends on. Read-only |
+| `./run.sh prod` | The check, then `docker compose --profile prod up -d --build`. Extra arguments are passed on; `--no-build` starts what is already built |
+| `./run.sh status` | Checks a running deployment: containers, database schema, buckets, method services, recorded version, email |
+| `./run.sh ports` | Shows and checks the internal ports; `./run.sh ports randomize` stores random ones |
+| `./run.sh down` | Stops the production stack. Data volumes are kept |
+| `./run.sh` | Interactive menu, including the development modes (see [docs/DEVELOPMENT.md](./docs/DEVELOPMENT.md)) |
+
+`./run.sh prod` is a convenience: you may run the Compose command yourself.
+
+## Docker Compose commands
+
+Both profiles are in `docker-compose.yml`. Use one of them, not both on one
+machine: they share the database and storage volumes.
+
+| | Local (`dev`) | Server (`prod`) |
+|---|---|---|
+| Start or update | `docker compose --profile dev up -d --build` | `docker compose --profile prod up -d --build` |
+| State | `docker compose --profile dev ps` | `docker compose --profile prod ps` |
+| Logs | `docker compose --profile dev logs -f api api-worker` | `docker compose --profile prod logs -f api-prod api-worker-prod` |
+| Stop, keep data | `docker compose --profile dev down` | `docker compose --profile prod down` |
+| Published ports | web 3000, API 8000 | none (reverse proxy) |
+| Secrets | example values accepted | example values refused |
+
+`down -v` also **deletes the database and all stored files**. Never use it on a
+server.
+
+## Configuration
+
+One file, `.env`, copied from [`.env.example`](./.env.example), which describes
+every setting. The complete list with defaults and constraints is
+[docs/CONFIGURATION.md](./docs/CONFIGURATION.md). The settings an
+administrator most often decides on:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `RESULT_RETENTION_DAYS` | `60` | Days a run's results are kept. **They are deleted afterwards**; datasets and the run's history are not |
+| `MAX_RUNS_PER_USER_PER_HOUR` | `5` | Runs a user may start in any 60 minutes |
+| `MAX_UPLOAD_MB` | `500` | Largest file a user may upload |
+| `RUN_TIMEOUT_SECONDS` | `86400` | Longest a run may execute |
+| `PHYLO_CPU_BUDGET`, `PHYLO_MEMORY_BUDGET_MB` | `4`, `8192` | What all containers together may use |
+| `SMTP_HOST` | empty | Mail server. Empty: no email is sent, and new accounts need no confirmation |
+| `CAPTCHA_ENABLED` | `true` | Proof-of-work check on the sign-in forms. Self-hosted |
 
 ## Troubleshooting
 
-- **Ports busy** → stop other processes, or change ports in `.env` and compose files (MinIO: `MINIO_API_PORT` / `MINIO_CONSOLE_PORT`).
-- **Dowser schema errors in Local R** → ensure you started R in `services/dowser` (or set `CONTRACTS_DIR` correctly); Docker option mounts contracts automatically.
-- **`@phylo/contracts` not found** → run `npm ci` at repo root; ensure `apps/web/package.json` depends on `"@phylo/contracts"`.
-- **Docker is slow** → first run downloads large R images; subsequent runs are faster.
-- **CORS** → make sure `CORS_ORIGINS` in API includes your web origin.
-- **API/worker fails at startup with a MinIO connection error** → MinIO isn't up or the endpoint is wrong. Start it (`docker compose --profile dev up -d minio minio-init`) and confirm `S3_ENDPOINT_URL` is `http://localhost:9000` for host processes. Verify with `npm run storage:check`.
-- **Run completes but no artifacts / downloads appear** → method service couldn't upload to MinIO. Check that the `minio-init` container completed cleanly (`docker compose logs minio-init` — expect `methods user ready`), and that the method service env carries the scoped `MINIO_METHODS_*` creds plus a working `S3_ENDPOINT_URL`. In host-run dev mode the method container reaches MinIO via `host.docker.internal:9000` (the `--add-host=host.docker.internal:host-gateway` flag in `method-services.mjs` makes this work on Linux).
-- **Buckets missing** → re-run `docker compose --profile dev up -d minio minio-init` and check `docker compose logs minio-init`.
-- **`source .env` parse error** (values with `<` / spaces) → use the Node wrappers (`node --env-file=.env ...`) which the npm scripts already do.
+| Symptom | Cause and fix |
+|---|---|
+| `required variable … is missing a value` | `.env` is missing or incomplete. `cp .env.example .env`, or set the variable named in the message |
+| The clone or the ClonalTree build fails | The private submodule was not fetched. `git submodule update --init --recursive`, with an account that may read it |
+| A production container keeps restarting; its log says "Refusing to start" | A secret still has its example value, or `JWT_SECRET_KEY` is shorter than 32 characters. The log names the variables |
+| `network proxy_net declared as external, but could not be found` | The reverse proxy's network does not exist. On a server ask whoever runs the proxy; on a test machine `docker network create proxy_net` |
+| `port is already allocated` at a local start | Something else uses 3000 or 8000. Set `WEB_PORT` / `API_PORT` in `.env`, and `NEXT_PUBLIC_API_BASE_URL`, `PUBLIC_API_BASE_URL`, `CORS_ORIGINS` and `FRONTEND_URL` to match, then start again with `--build` |
+| The page loads but every request fails (CORS) | `CORS_ORIGINS` does not contain the address in the browser's address bar, or `NEXT_PUBLIC_API_BASE_URL` was changed without rebuilding the web image |
+| A run stays "waiting for capacity" | Its method service is busy; each runs one job at a time by default. It starts when the slot is free |
+| A run ends with `OUT_OF_MEMORY` | The job needed more than its container may use. Try a smaller dataset or raise the memory budget |
+| Sign-up says "check your email" and nothing arrives | A mail server is configured but not delivering. `./run.sh status` and the worker log show why |
+| "Results expired" on an old run | Results are removed after `RESULT_RETENTION_DAYS`. The run's settings are kept: run it again |
+| Something else | `./run.sh status` on a server; `docker compose --profile <dev or prod> logs <service>` |
 
----
+More, including what every run error code means:
+[docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md#when-a-run-cannot-finish).
 
-## Extend: Add a New Method
+## Documentation
 
-1. Create `packages/contracts/methods/<id>/` with:
-   - `spec.json`, `param.schema.json`, `result.schema.json`, `ui.json`, `service.routes.json`
-2. Provide a service exposing `/spec` and the asynchronous `/jobs` lifecycle (containerized or remote).
-3. Point the API to it via env: `METHOD_<METHODID_UPPER>_URL=http://host:port`.
-4. The UI auto-renders the new parameters and accepts formats from `spec.json`.
+| Document | Contents |
+|---|---|
+| [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md) | Running it on a server: secrets, resource budget, limits and quotas, time limits, retention, sign-in protection, email, networks, ports, updates, backup and restore |
+| [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) | Every setting, with default and constraints |
+| [docs/DEVELOPMENT.md](./docs/DEVELOPMENT.md) | Development modes, running parts by hand, adding a method |
+| [docs/TESTING.md](./docs/TESTING.md) | The test suites and what each covers |
+| [docs/VALIDATION.md](./docs/VALIDATION.md) | Tests of the whole system under pressure, and the result of the last validation |
+| [docs/SECURITY-AUDIT.md](./docs/SECURITY-AUDIT.md) | Dependency and image scans, open findings |
+| [docs/HISTORY-CLEANUP.md](./docs/HISTORY-CLEANUP.md) | Credentials committed in the past: what to rotate, how the history was cleaned |
+| [docs/OBJECT-STORAGE-OPTIONS.md](./docs/OBJECT-STORAGE-OPTIONS.md) | Why the object store is the Silo fork of MinIO |
 
----
+The running application has its own user documentation under *Documentation*:
+data requirements, each method's parameters, and the example.
 
-## Repository Layout
+## Tests
 
-```
-apps/
-  api/        # FastAPI orchestrator + DB-backed run worker + storage abstraction
-  web/        # Next.js app
-packages/
-  contracts/  # Shared contracts (schemas, UI hints, TS types/routes)
-services/
-  dowser/     # R/plumber service (Dowser)      + artifact_manifest.R
-  brepphylo/  # R/plumber service (BrepPhylo)    + artifact_manifest.R
-  gctree/     # FastAPI service (GCtree)         + artifact_manifest.py
-  clonaltree/ # FastAPI service (ClonalTree)     + artifact_manifest.py
-docs/
-  DEPLOYMENT.md          # MinIO/server deployment, volumes, backup/restore
-  SECURITY-AUDIT.md      # Dependency/image audit results, open findings, re-run commands
-  OBJECT-STORAGE-OPTIONS.md  # MinIO replacement: tested options and recommendation
-# helper scripts:
-#   run.sh
-#   scripts/dev-with-docker.sh
-#   scripts/dev-with-local-r.sh
-#   scripts/select-mode.mjs
-#   scripts/reset-local.sh     # clean-slate reset (DB + MinIO + staging)
-#   scripts/storage-check.mjs  # storage connectivity / bucket check
+```bash
+npm ci && python3 -m venv .venv && .venv/bin/python -m pip install -r requirements-test.txt
+npx playwright install chromium
+
+npm test                       # contracts, web, type check, Python (real PostgreSQL and object storage)
+npm run test:all -- --build    # plus all four methods end to end, browser and R tests
+npm run test:system            # the real stack under pressure
 ```
 
----
+They run in their own Compose project with throwaway data and never touch a
+running application. Details: [docs/TESTING.md](./docs/TESTING.md).
+
+## Repository layout
+
+```
+apps/api/            API and worker (FastAPI, SQLAlchemy, Alembic migrations)
+apps/web/            web application (Next.js)
+packages/contracts/  method contracts: parameters, results, routes
+services/            the four method services
+scripts/             deployment checks, resource plan, ports, scans, development helpers
+tests/               integration, deployment, end-to-end, browser and system tests
+docs/                documentation
+docker-compose.yml   the application: `dev` and `prod` profiles
+run.sh               entry point for deployment and development
+.env.example         every setting, described
+```
 
 ## License
 

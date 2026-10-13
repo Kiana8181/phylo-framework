@@ -568,5 +568,6 @@ def test_the_guide_describes_the_one_command_start_and_its_consequences():
     # Steps that no longer exist are not described as required.
     production = guide[guide.index("## Server / production deployment"):]
     assert "npm run" not in production and "version:capture" not in guide
-    # The manual backup commands follow the configured port.
-    assert "@phylo-minio:${PHYLO_PORT_MINIO:-9000}" in guide
+    # The manual backup commands follow the configured port: they take the
+    # store's address from the running API container instead of assuming one.
+    assert "val S3_ENDPOINT_URL" in guide and "phylo-minio:9000\"" not in guide

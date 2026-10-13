@@ -279,9 +279,19 @@ services:
     ports:
       - "${WEB_PORT:-3000}:${PHYLO_PORT_WEB:-3000}"
     volumes:
+      # The source tree, for hot reload...
       - type: bind
         source: .
         target: /srv
+      # ...but the image's own dependencies and build output, not the host's:
+      # a fresh clone has neither, and a host's node_modules are built for
+      # another operating system. Without these three the container cannot
+      # start (`next: not found`) unless `npm ci` happened to be run on a Linux
+      # host first. After changing dependencies, rebuild the image and remove
+      # these volumes: docker compose --profile dev up -d --build --renew-anon-volumes web
+      - /srv/node_modules
+      - /srv/packages/contracts/dist
+      - /srv/apps/web/.next
       - type: bind
         source: ./packages/contracts
         target: /contracts

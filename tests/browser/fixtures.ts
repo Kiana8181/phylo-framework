@@ -1,4 +1,4 @@
-import {test as base, expect, type Page} from '@playwright/test';
+import {test as base, expect, type APIRequestContext, type Page} from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -27,6 +27,25 @@ export {expect};
 export type {Page};
 
 const MAIL = 'http://127.0.0.1:58025';
+const API = 'http://127.0.0.1:58000';
+
+/**
+ * A run's status as the API reports it, for use inside `expect.poll`.
+ *
+ * A request that fails on the way (a connection dropped between the test
+ * runner and the container, seen once as "socket hang up" while a method was
+ * starting under load) answers `{status: 'unreachable'}` instead of throwing,
+ * so the poll asks again. It hides nothing: an API that stays away, or a run
+ * that never finishes, still fails the poll when its time is up.
+ */
+export async function runStatus(request: APIRequestContext, runId: string, token: string | null): Promise<Record<string, any>> {
+  try {
+    const response = await request.get(`${API}/runs/${runId}/status`, {headers: {Authorization: `Bearer ${token}`}});
+    return await response.json();
+  } catch (error) {
+    return {status: 'unreachable', error: String(error)};
+  }
+}
 
 /** The newest confirmation link emailed to `address`, read from the test mail server. */
 export async function confirmationLink(page: Page, address: string): Promise<string> {

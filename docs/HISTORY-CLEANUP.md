@@ -15,10 +15,11 @@ Status on 2026-10-13:
 
 | Step | State |
 |---|---|
-| Env files and `.DS_Store` no longer tracked, ignore rules fixed, scanner in CI | Done on `feat/computimm-hardening` (an ordinary commit) |
-| History rewrite | **Prepared and rehearsed on a private copy. Not applied to GitHub** |
-| Credentials replaced at their providers | **Not done. Only the account owners can do it** (section 2) |
-| Old history removed from GitHub, the server and every clone | Follows the rewrite (sections 4 and 5) |
+| Env files and `.DS_Store` no longer tracked, ignore rules fixed, scanner in CI | Done |
+| History rewrite | **Published by the repository owner.** Checked afterwards on a fresh mirror clone: all 29 branches and 16 tags are free of the removed files and of any recognisable credential (248 commits) |
+| Old history still on GitHub | **Yes, in the 19 pull-request refs** (`refs/pull/*`), which still contain the env files and both provider credentials. Only GitHub Support can remove them (section 4, "After publishing") |
+| Credentials replaced at their providers | **Not confirmed.** Only the account owners can do it (section 2). Until then they must be treated as known to everyone with access to the repository |
+| Other clones and the server | To be replaced as in section 5 |
 
 Removing a credential from a repository **does not make it secret again**.
 Anyone who had access to the repository, or to a clone of it, may have a copy.
@@ -126,9 +127,9 @@ One ordinary commit on `feat/computimm-hardening`, no history rewritten:
 ## 4. Removing the files from the history
 
 Rewriting history changes the id of every commit after the first affected one:
-here, **all 45 branch and tag ids change**. Every clone becomes incompatible
-and has to be replaced (section 5). It is prepared and rehearsed, and it is not
-applied until the repository owner decides so.
+here, **all 45 branch and tag ids changed**. Every clone made before it is
+incompatible and has to be replaced (section 5). The procedure below is the one
+that was used; it is kept so that it can be repeated or checked.
 
 ### Before
 

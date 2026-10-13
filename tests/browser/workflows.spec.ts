@@ -1,4 +1,4 @@
-import { test, expect, signup } from './fixtures';
+import { test, expect, signup, runStatus } from './fixtures';
 const api = 'http://127.0.0.1:58000';
 
 test('protected dashboard redirects; real signup and login persist across reload', async ({page}) => {
@@ -50,10 +50,8 @@ test(`documented ${method} example completes and renders its tree`, async ({page
   expect(response.ok()).toBe(true);
   const {run_id} = await response.json();
   const token = await page.evaluate(() => localStorage.getItem('phylo_access_token'));
-  await expect.poll(async () => {
-    const status = await page.request.get(`${api}/runs/${run_id}/status`, {headers: {Authorization: `Bearer ${token}`}});
-    return (await status.json()).status;
-  }, {timeout: 150_000, intervals: [500, 1000]}).toBe('DONE');
+  await expect.poll(async () => (await runStatus(page.request, run_id, token)).status,
+    {timeout: 150_000, intervals: [500, 1000]}).toBe('DONE');
   await page.goto(`/dashboard?runId=${run_id}`);
   await expect(page.getByRole('heading', {name: 'Results', exact: true})).toBeVisible();
   await expect(page.getByText('Downloads', {exact: true})).toBeVisible();
