@@ -25,7 +25,10 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# `apt-get upgrade` applies the security updates the distribution has published
+# since the base image was built: the base image is only as fresh as its last
+# pull, and a scan of this image fails on fixable critical findings.
+RUN apt-get update && apt-get -y upgrade && apt-get install -y --no-install-recommends \
     ca-certificates curl tini && \
     rm -rf /var/lib/apt/lists/*
 

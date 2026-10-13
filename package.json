@@ -32,7 +32,8 @@
     "test:js": "npm -w @phylo/contracts run test && npm -w web run test",
     "test:coverage": "node scripts/test.mjs --full",
     "test:e2e": "playwright test",
-    "test:r": "node scripts/test-r.mjs"
+    "test:r": "node scripts/test-r.mjs",
+    "test:system": "node scripts/test-system.mjs"
   },
   "devDependencies": {
     "@playwright/test": "1.55.1",

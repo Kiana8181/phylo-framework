@@ -139,6 +139,11 @@ x-method-common-env: &method_common_env
   # Share of the container's memory limit a method service keeps free when it
   # decides whether another job may start (see docs/DEPLOYMENT.md).
   METHOD_MEMORY_HEADROOM_PERCENT: ${PHYLO_MEMORY_HEADROOM_PERCENT:-10}
+  # When a container runs out of memory the kernel stops one of its processes.
+  # Jobs volunteer (0 = never ... 1000 = always first), so that the job that
+  # needed too much is stopped and reported, not the service with every job
+  # in it. See docs/DEPLOYMENT.md, "What happens at the limits".
+  METHOD_JOB_OOM_SCORE_ADJ: ${PHYLO_JOB_OOM_SCORE_ADJ:-800}
 
 services:
   postgres:

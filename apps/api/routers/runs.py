@@ -398,23 +398,29 @@ async def create_run(
         dataset_name=existing_file.original_filename if existing_file else None,
     )
 
+    # The run exists from here on. Its id is taken now: the promotion below may
+    # lose a race with another promotion (a second request of the same user, or
+    # the worker's sweep) and roll this session back, after which `run` itself
+    # can no longer be read. The client must still be told about its run.
+    run_id = run.id
+
     # Promote so a user with a free turn dispatches immediately.
     await run_repo.promote_next_for_user(user_id)
 
     # Report whether this run became the active turn or is waiting in the personal
     # queue (and, if waiting, its 1-based position).
-    fresh = await run_repo.get_by_id(run.id)
+    fresh = await run_repo.get_by_id(run_id)
     is_active_turn = fresh is not None and fresh.dispatch_seq is not None
     queue_position: Optional[int] = None
     if not is_active_turn:
         personal_queue = await run_repo.get_personal_queue_for_user(user_id)
         for idx, queued_run in enumerate(personal_queue):
-            if queued_run.id == run.id:
+            if queued_run.id == run_id:
                 queue_position = idx + 1
                 break
 
     return {
-        "run_id": str(run.id),
+        "run_id": str(run_id),
         "queued": not is_active_turn,
         "queue_position": queue_position,
     }

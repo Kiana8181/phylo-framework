@@ -359,3 +359,45 @@ def test_oom_kill_count_reads_cgroup_v2_and_v1_and_reports_unknown_as_none(tmp_p
     empty = tmp_path / "none"
     empty.mkdir()
     assert rl.oom_kill_count({"PHYLO_CGROUP_ROOT": str(empty)}) is None
+
+
+# --------------------------------------------------------------------------- #
+# Which process gives way when the container runs out of memory
+# --------------------------------------------------------------------------- #
+def test_a_job_volunteers_to_be_stopped_before_its_service(tmp_path):
+    """Found on the real stack: without this the kernel stopped the service
+    (the largest process while a job is still growing) and every job with it."""
+    target = tmp_path / "oom_score_adj"
+    target.write_text("0\n")
+    assert rl.prefer_as_oom_victim({}, str(target)) is True
+    assert target.read_text() == "800"                                       # the default
+    assert rl.prefer_as_oom_victim({"METHOD_JOB_OOM_SCORE_ADJ": "1000"}, str(target)) is True
+    assert target.read_text() == "1000"
+
+
+def test_the_preference_can_be_switched_off_and_never_breaks_a_job(tmp_path):
+    target = tmp_path / "oom_score_adj"
+    target.write_text("0\n")
+    assert rl.prefer_as_oom_victim({"METHOD_JOB_OOM_SCORE_ADJ": "0"}, str(target)) is False
+    assert target.read_text() == "0\n"                                       # untouched
+    # Not Linux, or /proc not writable: the job simply goes on.
+    assert rl.prefer_as_oom_victim({}, str(tmp_path / "no-such-dir" / "oom_score_adj")) is False
+
+
+@pytest.mark.parametrize("raw,expected", [
+    (None, 800), ("", 800), ("  500 ", 500), ("0", 0), ("1000", 1000),
+    ("1001", 800), ("-5", 800), ("high", 800), ("12.5", 800),
+])
+def test_oom_preference_setting(raw, expected):
+    env = {} if raw is None else {"METHOD_JOB_OOM_SCORE_ADJ": raw}
+    assert rl.job_oom_score_adj(env) == expected
+
+
+def test_the_job_entry_point_sets_the_preference_before_loading_the_method(service_copy):
+    """Only for a job (PHYLO_JOB_CHILD), and before the heavy imports."""
+    source = (SERVICES / service_copy / "job_runner.py").read_text()
+    guard = source.index('if os.environ.get("PHYLO_JOB_CHILD") == "1":\n    resource_limits.prefer_as_oom_victim()')
+    assert guard < source.index("from app import run_job_sync")
+    # The service process itself never raises its own score.
+    assert "prefer_as_oom_victim" not in (SERVICES / service_copy / "app.py").read_text()
+    assert "prefer_as_oom_victim" not in (SERVICES / service_copy / "job_manager.py").read_text()

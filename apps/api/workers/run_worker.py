@@ -77,6 +77,7 @@ from apps.api.services.run_staging import (
 from apps.api.services.stage_map import progress_for_stage
 from apps.api.services.tree_contract import assemble_unified_tree_result
 from apps.api.services.version_info import attach_version_info
+from apps.api.database.errors import database_unavailable
 from apps.api.storage import get_artifact_storage, get_storage
 from apps.api.utils.datetime_util import utc_now
 from apps.api.workers import limits
@@ -87,6 +88,8 @@ from apps.api.workers.retention import retention_loop
 POLL_INTERVAL = float(os.getenv("WORKER_POLL_INTERVAL", "3"))
 METHOD_POLL_INTERVAL = float(os.getenv("WORKER_METHOD_POLL_INTERVAL", "10"))
 LEASE_SECONDS = int(os.getenv("WORKER_LEASE_SECONDS", "180"))
+# Pause between attempts while the database is away.
+DATABASE_RETRY_SECONDS = 2.0
 CAPACITY_REFRESH_SECONDS = float(os.getenv("WORKER_CAPACITY_REFRESH_SECONDS", "5"))
 # How often a finished job's result is asked for again when the fetch fails.
 RESULT_FETCH_ATTEMPTS = max(1, int(os.getenv("WORKER_RESULT_FETCH_ATTEMPTS", "3")))
@@ -527,7 +530,9 @@ async def process_run(
     """Drive a single claimed run from staging -> method job -> result."""
     workspace = None
     method_id = ""
+    method_job_id: Optional[str] = None
     reserved = False
+    parked = False
     lease_keeper = asyncio.create_task(_keep_lease(run_id, worker_id))
     try:
         async with AsyncSessionLocal() as db:
@@ -548,8 +553,12 @@ async def process_run(
             cancel_requested = run.cancel_requested_at is not None
             input_storage_path = await _resolve_input_storage_path(run, file_repo)
 
-        # Resume path: a reclaimed run already submitted a method job.
-        if not method_job_id:
+        # Resume path: a reclaimed run already submitted a method job. Its
+        # work directory was made by the worker that had the run before; it is
+        # found by the run's id and removed when the job is over.
+        if method_job_id:
+            workspace = run_work_root(run_id)
+        else:
             if cancel_requested:
                 # Cancelled before we submitted anything to the method service:
                 # the analysis never started, so the run is free for the quota.
@@ -667,6 +676,9 @@ async def process_run(
             _log("submitted method job", run_id=run_id, method_id=method_id, method_job_id=method_job_id)
 
         await _poll_method_job(run_id, method_id, method_job_id, worker_id)
+        # The job is over: every work directory this run ever had can go,
+        # including one made by an earlier attempt that was interrupted.
+        workspace = run_work_root(run_id)
         await _after_job(run_id, method_id, method_job_id)
 
     except jobs.MethodServiceUnavailable as exc:
@@ -685,14 +697,40 @@ async def process_run(
             },
         )
     except Exception as exc:  # noqa: BLE001
-        # An orchestration fault (database, storage, network), not a scientific
-        # error. The run owner sees this message, so it carries a reference id
-        # instead of the exception text; the traceback goes to the worker log.
-        error_id = log_internal_error("Run failed in worker", exc, context=f"run_id={run_id}")
-        public_message = (
-            f"Run failed because of an internal error (reference {error_id}). "
-            "Please try again; if it keeps failing, contact support with this reference."
-        )
+        if database_unavailable(exc):
+            # Nothing is wrong with the run: the database is away and stayed
+            # away longer than this worker waits. The run cannot be updated
+            # now, and must not be failed for it. It is left exactly as it is,
+            # job and input included; when its lease runs out it is picked up
+            # again and followed to its end (the job is not submitted twice).
+            parked = True
+            _log("database unavailable: run left for recovery", run_id=run_id,
+                 method_job_id=method_job_id, error=type(exc).__name__)
+        else:
+            parked = await _fail_internal(run_id, method_id, method_job_id, exc)
+    finally:
+        lease_keeper.cancel()
+        if tracker is not None and reserved:
+            tracker.release(method_id, run_id)
+        # A parked run's job may still be reading its input: leave it. (Before
+        # a job exists nothing uses the directory, and the run starts over.)
+        if workspace is not None and not (parked and method_job_id):
+            await asyncio.to_thread(cleanup_workspace, workspace, run_id)
+
+
+async def _fail_internal(run_id: UUID, method_id: str, method_job_id: Optional[str], exc: Exception) -> bool:
+    """End a run after an orchestration fault that is not a scientific error.
+    Returns True when the failure could not be stored because the database is
+    away, in which case the run is left for recovery instead.
+
+    The run owner sees the message, so it carries a reference id instead of the
+    exception text; the traceback goes to the worker log."""
+    error_id = log_internal_error("Run failed in worker", exc, context=f"run_id={run_id}")
+    public_message = (
+        f"Run failed because of an internal error (reference {error_id}). "
+        "Please try again; if it keeps failing, contact support with this reference."
+    )
+    try:
         await _persist_error(
             run_id,
             error_message=public_message,
@@ -702,12 +740,19 @@ async def process_run(
                 "logs": [{"step": "api.worker.unhandled", "ok": False, "out": public_message}],
             },
         )
-    finally:
-        lease_keeper.cancel()
-        if tracker is not None and reserved:
-            tracker.release(method_id, run_id)
-        if workspace is not None:
-            await asyncio.to_thread(cleanup_workspace, workspace, run_id)
+    except Exception as store_exc:  # noqa: BLE001
+        if database_unavailable(store_exc):
+            _log("database unavailable: run left for recovery", run_id=run_id, method_job_id=method_job_id)
+            return True
+        raise
+    # The run is over as far as its owner is concerned; a job that is still
+    # computing for it would only hold a slot until its time limit.
+    if method_job_id:
+        try:
+            await jobs.cancel_job(method_id, method_job_id)
+        except Exception:  # noqa: BLE001 - best effort; the service's own limits still apply
+            pass
+    return False
 
 
 async def _keep_job_log(run_id: UUID, method_id: str, method_job_id: str) -> bool:
@@ -871,13 +916,21 @@ async def _poll_method_job(
     timed_out_limit = 0.0
     unreachable_since: Optional[float] = None
 
-    while True:
+    async def step() -> bool:
+        """One look at the run and at its job. True when the run has reached
+        its end. Safe to repeat: everything it stores is either idempotent or
+        guarded by the run's own state."""
+        nonlocal cancel_sent_at, timed_out_at, timed_out_limit, unreachable_since
         async with AsyncSessionLocal() as db:
             run_repo = RunRepository(db)
             await run_repo.renew_lease(run_id, worker_id, LEASE_SECONDS)
             run = await run_repo.get_by_id(run_id)
         if run is None:
-            return
+            return True
+        if run.status in (RunStatus.DONE, RunStatus.ERROR, RunStatus.CANCELLED):
+            # Already settled (a previous step stored the outcome and lost the
+            # connection before it could say so): nothing more to do.
+            return True
 
         now = time.monotonic()
         cancel_requested = run.cancel_requested_at is not None
@@ -935,7 +988,7 @@ async def _poll_method_job(
                     step="api.worker.method_job",
                     details={"method_id": method_id, "method_job_id": method_job_id},
                 )
-            return
+            return True
         except Exception as exc:  # noqa: BLE001
             # The service did not answer. Keep the lease and retry, but only for
             # so long: a service that stays away must not hold the run for ever.
@@ -960,9 +1013,8 @@ async def _poll_method_job(
                         details={"method_id": method_id, "method_job_id": method_job_id,
                                  "waited_seconds": int(waited)},
                     )
-                return
-            await asyncio.sleep(METHOD_POLL_INTERVAL)
-            continue
+                return True
+            return False
 
         method_status = status.status
 
@@ -986,14 +1038,14 @@ async def _poll_method_job(
                     step="api.worker.method_job",
                     details={"method_id": method_id, "method_job_id": method_job_id},
                 )
-                return
+                return True
             await _persist_done(run_id, method_id, method_job_id, result)
-            return
+            return True
 
         if method_status == "ERROR":
             if timed_out_at is not None:
                 await _fail_timeout(run_id, method_id, timed_out_limit, stop_confirmed=True, status=status)
-                return
+                return True
             payload, err_msg = normalize_failed_result_payload(
                 status.raw or {},
                 fallback_message=status.message
@@ -1014,25 +1066,25 @@ async def _poll_method_job(
                 code=code,
                 details={"method_id": method_id, "reported_by": "method service"} if code else None,
             )
-            return
+            return True
 
         if method_status == "CANCELLED":
             if timed_out_at is not None and not cancel_requested:
                 await _fail_timeout(run_id, method_id, timed_out_limit, stop_confirmed=True, status=status)
             else:
                 await _mark_cancelled(run_id, "Run cancelled")
-            return
+            return True
 
         # Still in progress. A stop that was asked for must be confirmed within
         # a bounded time; after that the run is closed regardless.
         confirm = limits.cancel_confirm_seconds()
         if timed_out_at is not None and now - timed_out_at >= confirm:
             await _fail_timeout(run_id, method_id, timed_out_limit, stop_confirmed=False)
-            return
+            return True
         if cancel_sent_at is not None and now - cancel_sent_at >= confirm:
             _log("cancel not confirmed by the method service", run_id=run_id, method_job_id=method_job_id)
             await _mark_cancelled(run_id, "Run cancelled")
-            return
+            return True
 
         if timed_out_at is not None or cancel_sent_at is not None:
             # Still running after a stop request: ask again (the call is
@@ -1058,6 +1110,34 @@ async def _poll_method_job(
                     progress=poll_progress,
                 )
 
+        return False
+
+    # The job does not need the database, only this worker does. While the
+    # database is away (a restart, a network blip) the job is left alone and
+    # the worker waits, for a bounded time and for less than the run's lease,
+    # so that no second worker takes the run in the meantime.
+    database_away_since: Optional[float] = None
+    patience = min(limits.database_unavailable_seconds(), LEASE_SECONDS / 2)
+    while True:
+        try:
+            if await step():
+                return
+            if database_away_since is not None:
+                _log("database is back", run_id=run_id, method_job_id=method_job_id)
+                database_away_since = None
+        except Exception as exc:  # noqa: BLE001
+            if not database_unavailable(exc):
+                raise
+            now = time.monotonic()
+            if database_away_since is None:
+                database_away_since = now
+            waited = now - database_away_since
+            _log("database unavailable while following a job", run_id=run_id, method_job_id=method_job_id,
+                 error=type(exc).__name__, waited=int(waited), patience=int(patience))
+            if waited >= patience:
+                raise
+            await asyncio.sleep(DATABASE_RETRY_SECONDS)
+            continue
         await asyncio.sleep(METHOD_POLL_INTERVAL)
 
 
@@ -1140,6 +1220,21 @@ async def dispatch_once(
     return claimed
 
 
+def start_processing(
+    run_id: UUID, worker_id: str, tracker: CapacityTracker, active: set[UUID]
+) -> Optional["asyncio.Task[None]"]:
+    """Start working on a claimed run, unless this worker already is: a run
+    whose lease lapsed while its task was waiting (for the database, say) can
+    be claimed again by the very worker that still has it in hand."""
+    if run_id in active:
+        _log("claimed a run this worker is already following; not started twice", run_id=run_id)
+        return None
+    active.add(run_id)
+    task = asyncio.create_task(process_run(run_id, worker_id, tracker))
+    task.add_done_callback(lambda _task, rid=run_id: active.discard(rid))
+    return task
+
+
 async def main() -> None:
     # Same start-up gate as the API: never process runs on weak production secrets.
     enforce_production_config()
@@ -1165,9 +1260,7 @@ async def main() -> None:
         try:
             claimed = await dispatch_once(worker_id, active, tracker)
             for run_id in claimed:
-                active.add(run_id)
-                task = asyncio.create_task(process_run(run_id, worker_id, tracker))
-                task.add_done_callback(lambda t, rid=run_id: active.discard(rid))
+                start_processing(run_id, worker_id, tracker, active)
 
             if not claimed:
                 await asyncio.sleep(POLL_INTERVAL)

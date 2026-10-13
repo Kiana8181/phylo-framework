@@ -12,7 +12,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     CONTRACTS_DIR=/contracts
 
 # System deps: PHYLIP provides dnapars; plus fonts for matplotlib SVG.
+# `apt-get upgrade` applies the security updates the distribution has published
+# since the base image was built (operating-system packages only; every
+# scientific package below stays pinned).
 RUN apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 \
+    && apt-get -y upgrade -o Acquire::Retries=5 \
     && apt-get install -y --no-install-recommends -o Acquire::Retries=5 \
     phylip ca-certificates curl tini fonts-dejavu-core \
     python3-pyqt5 python3-pyqt5.qtsvg python3-pyqt5.qtopengl libqt5svg5 libqt5opengl5 libgl1 libxcb-xinerama0 \

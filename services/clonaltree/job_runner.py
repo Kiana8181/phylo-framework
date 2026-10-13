@@ -17,6 +17,11 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import resource_limits  # noqa: E402
+
+# Before the method's libraries are loaded and its memory use starts to grow.
+if os.environ.get("PHYLO_JOB_CHILD") == "1":
+    resource_limits.prefer_as_oom_victim()
+
 from job_manager import CODE_OUT_OF_MEMORY, atomic_write_json, bounded_log, now_iso, read_json  # noqa: E402
 from app import run_job_sync  # noqa: E402
 from artifact_manifest import (  # noqa: E402

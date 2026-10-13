@@ -653,12 +653,14 @@ def test_a_finished_job_can_be_collected_and_then_nothing_of_it_remains(tmp_path
     _wait_for_status(mgr, running, {"RUNNING"})
     assert mgr.delete(running) == 409 and _job_dir(mgr, running).is_dir()   # never while it runs
 
+    mgr.cancel(running)
+    # Stopped, not yet collected: its log is still served, in bounded form.
+    # (Written only now: while the job runs, its own output goes to this file.)
     (_job_dir(mgr, running) / "job.log").write_bytes(b"y" * 5000)
     content, was_cut = mgr.log(running)
-    assert was_cut and len(content) < 1500                            # served in bounded form
+    assert was_cut and len(content) < 1500
     assert mgr.log("0" * 32) is None
 
-    mgr.cancel(running)
     assert mgr.delete(running) == 200
     assert not _job_dir(mgr, running).exists()
     assert mgr.status(running) is None and mgr.delete(running) == 404

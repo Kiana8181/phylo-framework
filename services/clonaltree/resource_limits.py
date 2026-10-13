@@ -176,6 +176,46 @@ def oom_kill_count(env: Mapping[str, str] = os.environ) -> Optional[int]:
 
 
 # --------------------------------------------------------------------------- #
+# Which process gives way when the container runs out of memory
+# --------------------------------------------------------------------------- #
+DEFAULT_JOB_OOM_SCORE_ADJ = 800
+
+
+def job_oom_score_adj(env: Mapping[str, str] = os.environ) -> int:
+    """How strongly a job process offers itself to the kernel as the one to
+    stop when the container hits its memory limit: 0 (not at all) to 1000
+    (always first). METHOD_JOB_OOM_SCORE_ADJ; anything else means the default."""
+    raw = (env.get("METHOD_JOB_OOM_SCORE_ADJ") or "").strip()
+    try:
+        value = int(raw) if raw else DEFAULT_JOB_OOM_SCORE_ADJ
+    except ValueError:
+        return DEFAULT_JOB_OOM_SCORE_ADJ
+    return value if 0 <= value <= 1000 else DEFAULT_JOB_OOM_SCORE_ADJ
+
+
+def prefer_as_oom_victim(env: Mapping[str, str] = os.environ, path: str = "/proc/self/oom_score_adj") -> bool:
+    """Make the calling process (a job) the kernel's preferred choice when the
+    container runs out of memory, ahead of the service that started it.
+
+    Without this the kernel stops the largest process, and while a job is
+    still growing that is often the service itself: the container then
+    restarts, every job in it is lost, and the user is told about a restart
+    instead of about memory. With it, the job that needed too much is stopped,
+    reported as OUT_OF_MEMORY, and the service keeps running. Programs the job
+    starts inherit the setting. Raising the value needs no privilege; a failure
+    (not Linux, read-only /proc) leaves things as they were."""
+    value = job_oom_score_adj(env)
+    if value <= 0:
+        return False
+    try:
+        with open(path, "w", encoding="ascii") as handle:
+            handle.write(str(value))
+        return True
+    except OSError:
+        return False
+
+
+# --------------------------------------------------------------------------- #
 # Capacity plan
 # --------------------------------------------------------------------------- #
 @dataclass(frozen=True)

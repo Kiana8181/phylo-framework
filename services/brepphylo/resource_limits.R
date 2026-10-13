@@ -173,6 +173,42 @@ rl_oom_kill_count <- function() {
 }
 
 # ---------------------------------------------------------------------------
+# Which process gives way when the container runs out of memory
+# ---------------------------------------------------------------------------
+# How strongly a job process offers itself to the kernel as the one to stop
+# when the container hits its memory limit: 0 (not at all) to 1000 (always
+# first). METHOD_JOB_OOM_SCORE_ADJ; anything else means the default.
+RL_DEFAULT_JOB_OOM_SCORE_ADJ <- 800L
+rl_job_oom_score_adj <- function() {
+  raw <- trimws(Sys.getenv("METHOD_JOB_OOM_SCORE_ADJ", ""))
+  if (!nzchar(raw)) return(RL_DEFAULT_JOB_OOM_SCORE_ADJ)
+  value <- suppressWarnings(as.numeric(raw))
+  if (is.na(value) || value != floor(value) || value < 0 || value > 1000) return(RL_DEFAULT_JOB_OOM_SCORE_ADJ)
+  as.integer(value)
+}
+
+# Make the calling process (a job) the kernel's preferred choice when the
+# container runs out of memory, ahead of the service that started it.
+#
+# Without this the kernel stops the largest process, and while a job is still
+# growing that is often the service itself: the container then restarts, every
+# job in it is lost, and the user is told about a restart instead of about
+# memory. With it, the job that needed too much is stopped, reported as
+# OUT_OF_MEMORY, and the service keeps running. Programs the job starts
+# inherit the setting. Raising the value needs no privilege; a failure (not
+# Linux, read-only /proc) leaves things as they were.
+rl_prefer_as_oom_victim <- function(path = "/proc/self/oom_score_adj") {
+  value <- rl_job_oom_score_adj()
+  if (value <= 0L) return(FALSE)
+  isTRUE(tryCatch({
+    con <- file(path, open = "w")
+    on.exit(close(con), add = TRUE)
+    writeLines(as.character(value), con)
+    TRUE
+  }, error = function(e) FALSE, warning = function(w) FALSE))
+}
+
+# ---------------------------------------------------------------------------
 # Capacity plan
 # ---------------------------------------------------------------------------
 # * At most one job per whole CPU, so jobs do not fight over cores.

@@ -17,6 +17,11 @@ worker see the current values.
   WORKER_CANCEL_CONFIRM_SECONDS    how long to wait for a method service to
                                    confirm that a job it was told to stop has
                                    stopped (default 60)
+  WORKER_DATABASE_UNAVAILABLE_SECONDS  how long the worker waits for the
+                                   database to come back while it follows a
+                                   job (default 90, never more than half the
+                                   run lease); after that the run is left as
+                                   it is and picked up again later
   RUN_STAGING_TIMEOUT_SECONDS      longest the worker may take to fetch and
                                    prepare a run's input before the method is
                                    started (default 1800 = 30 min; 0 disables)
@@ -38,6 +43,7 @@ DEFAULT_METHOD_UNREACHABLE_SECONDS = 300
 DEFAULT_CANCEL_CONFIRM_SECONDS = 60
 METHOD_DEADLINE_GRACE_SECONDS = 120
 DEFAULT_STAGING_TIMEOUT_SECONDS = 1800
+DEFAULT_DATABASE_UNAVAILABLE_SECONDS = 90
 
 
 def _seconds(name: str) -> Optional[float]:
@@ -80,6 +86,14 @@ def method_unreachable_seconds() -> float:
 def cancel_confirm_seconds() -> float:
     value = _seconds("WORKER_CANCEL_CONFIRM_SECONDS")
     return float(DEFAULT_CANCEL_CONFIRM_SECONDS) if value is None or value < 0 else value
+
+
+def database_unavailable_seconds() -> float:
+    """How long the worker waits for the database to come back while it is
+    following a job, before it lets go of the run (which is then picked up
+    again once the database is back)."""
+    value = _seconds("WORKER_DATABASE_UNAVAILABLE_SECONDS")
+    return float(DEFAULT_DATABASE_UNAVAILABLE_SECONDS) if value is None or value < 0 else value
 
 
 def staging_timeout_seconds() -> Optional[float]:

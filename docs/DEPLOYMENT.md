@@ -184,13 +184,21 @@ Docker was verified. Without it, use `strict`.
 - **CPU:** a container that wants more than its cap is slowed down, never
   killed. Jobs take longer; nothing fails.
 - **Memory:** a limit is a hard ceiling and swap is disabled per container, so
-  the limit is real. A process that exceeds it is killed by the kernel. If that
-  was a job's own process, only that job is lost and its run ends as
-  `ERROR [OUT_OF_MEMORY]`; if it was the service's main process, the container
-  restarts automatically and the run ends as `ERROR [METHOD_RESTARTED]`. Memory
-  does **not** degrade gracefully: nothing slows down, something is killed. The
-  protection is not starting a job that will not fit (next section); what
-  happens when one is killed anyway is described under
+  the limit is real. When a container reaches it, the kernel stops one of its
+  processes. Memory does **not** degrade gracefully: nothing slows down,
+  something is stopped. The protection is not starting a job that will not fit
+  (next section).
+
+  Which process is stopped matters. Left to itself the kernel takes the largest
+  one, and while a job is still growing that is the method service itself: in a
+  test with real jobs it stopped the service every time, the container
+  restarted, and the run ended as `ERROR [METHOD_RESTARTED]` with every other
+  job in that container. Each job therefore marks itself as the process to
+  stop first (`PHYLO_JOB_OOM_SCORE_ADJ`, default `800`; `0` switches this off).
+  With that, the job that needed too much is stopped, its run ends as
+  `ERROR [OUT_OF_MEMORY]` with a message that says so and keeps a log, the
+  service keeps running, and the next job is accepted. The same tests then gave
+  this outcome every time, in both R services. See also
   [When a run cannot finish](#when-a-run-cannot-finish).
 - **Processes:** new processes are refused at the limit; the service keeps
   running and recovers when the extra processes end.
@@ -387,6 +395,7 @@ it again. After a failure the user's next queued run moves up as usual.
 | `RUN_STAGING_TIMEOUT_SECONDS` | `1800` (30 min) | Longest the worker may take to fetch and prepare a run's input before the method starts. `0` = no limit |
 | `WORKER_METHOD_UNREACHABLE_SECONDS` | `300` | How long a method service may be unreachable while one of its jobs is followed |
 | `WORKER_CANCEL_CONFIRM_SECONDS` | `60` | How long the worker waits for a stop (cancel or timeout) to be confirmed |
+| `WORKER_DATABASE_UNAVAILABLE_SECONDS` | `90` | How long the worker waits for the database while it follows a job (see below) |
 
 These are read by the worker from `.env`. Choose `RUN_TIMEOUT_SECONDS` for your
 largest legitimate analysis: a limit that is too low stops real work. The
@@ -397,6 +406,15 @@ Independently, each method service stops the job itself shortly after the same
 moment (the worker hands it the remaining time when it submits the job), so the
 limit holds even while the worker is down. The start time is stored with the
 run, so a worker restart does not reset the clock.
+
+**A database that is briefly away does not cost a run.** A job needs no
+database; only the worker does, to record progress and the result. If
+PostgreSQL restarts or is unreachable while a job runs, the worker leaves the
+job alone, waits (`WORKER_DATABASE_UNAVAILABLE_SECONDS`, at most half the run
+lease) and carries on when the database answers again. If it stays away longer,
+the run is neither failed nor cleaned up: it is left exactly as it is, and
+picked up again once the database is back, like a run after a worker restart.
+The API answers with errors while the database is away and recovers by itself.
 
 A worker restart does not lose runs either: the new worker takes over the runs
 in progress and keeps following their jobs. It does not submit them a second
@@ -950,6 +968,15 @@ runs exactly this command, which you may also run yourself:
 
 ```bash
 docker compose --profile prod up -d --build
+```
+
+To pick up security updates of the base images and their operating-system
+packages, rebuild with fresh base images from time to time (and whenever the
+weekly CI scan asks for it), then start as usual:
+
+```bash
+docker compose --profile prod build --pull
+./run.sh prod --no-build
 ```
 
 The first start creates the project's networks and volumes, builds the images,

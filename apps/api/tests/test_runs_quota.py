@@ -496,3 +496,36 @@ async def test_create_reports_queue_position(client):
     assert first["queued"] is False and first["queue_position"] is None
     second = data(await create(client))
     assert second["queued"] is True and second["queue_position"] == 1
+
+
+# --------------------------------------------------------------------------- #
+# Creating a run survives losing the promotion race
+# --------------------------------------------------------------------------- #
+@pytest.mark.integration
+async def test_a_run_is_reported_to_its_owner_even_when_its_promotion_loses_a_race(client, session, monkeypatch):
+    """Found on the real stack: two submissions of one user at the same moment
+    (or one submission and the worker's sweep) can both try to promote. The
+    loser rolls its session back; the route then read the new run from that
+    session and answered 500, although the run had been created."""
+    from sqlalchemy.exc import IntegrityError
+
+    original = RunRepository._promote_next_locked
+    lost = {"n": 0}
+
+    async def lose_the_race_once(self, user_id):
+        if lost["n"] == 0:
+            lost["n"] += 1
+            raise IntegrityError("UPDATE runs SET dispatch_seq", {}, Exception("duplicate key value violates unique constraint"))
+        return await original(self, user_id)
+
+    monkeypatch.setattr(RunRepository, "_promote_next_locked", lose_the_race_once)
+    response = await create(client)
+    assert response.status_code == 200, response.text
+    created = data(response)
+    assert lost["n"] == 1 and created["run_id"]
+    # The run exists exactly once and is the one the client was told about.
+    listed = data(await client.get("/runs"))
+    assert [r["id"] for r in listed] == [created["run_id"]]
+    # Nothing is stuck: the next sweep (here: the next submission) promotes as usual.
+    second = await create(client)
+    assert second.status_code == 200 and data(second)["run_id"] != created["run_id"]

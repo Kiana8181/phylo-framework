@@ -322,3 +322,26 @@ Changes from the earlier scan (2026-10-09):
 Everything in the "Critical/High" columns that is not "fixable" has no patched
 package in the distribution yet. Counts move from day to day as the scanner's
 database is updated.
+
+**Re-scan of 2026-10-13 (system validation).** Run on images built from base
+images that had been cached locally for some days, the scan failed its gate:
+6 fixable critical findings in the API image and 7 in the GCtree image, all in
+operating-system packages (OpenSSL, GnuTLS, `perl-base`) for which Debian had
+published updates in the meantime. Neither Dockerfile applied pending updates,
+so an image was only as current as the last pull of its base image. Both now
+run `apt-get upgrade` in the build, as the web and ClonalTree images already
+did. After a rebuild with `--pull` the two images are back at the figures in
+the table (0 fixable critical, 4 fixable high inside `pip`). The R package
+audit found the same three accepted advisories and nothing new; `npm audit`
+(production) and `pip-audit` found nothing; the nine development-only npm
+advisories of finding 5 are unchanged.
+
+What this means for a deployment: security updates of the operating-system
+packages reach the images only when they are rebuilt. Rebuild with fresh base
+images regularly, and whenever the weekly CI scan reports a fixable critical
+finding:
+
+```bash
+docker compose --profile prod build --pull
+docker compose --profile prod up -d
+```

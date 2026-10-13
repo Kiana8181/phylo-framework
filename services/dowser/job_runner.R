@@ -15,6 +15,19 @@ job_id <- get_arg("--job-id")
 state_dir <- get_arg("--state-dir")
 if (is.na(job_id) || is.na(state_dir)) quit(status = 2)
 
+# Before the method's packages are loaded and memory use starts to grow: if the
+# container runs out of memory, this job is what the kernel should stop, not
+# the service that started it (see rl_prefer_as_oom_victim).
+if (identical(Sys.getenv("PHYLO_JOB_CHILD", ""), "1")) {
+  for (base in c("/srv", getwd())) {
+    limits <- file.path(base, "resource_limits.R")
+    if (file.exists(limits)) {
+      tryCatch({ source(limits, local = FALSE); rl_prefer_as_oom_victim() }, error = function(e) NULL)
+      break
+    }
+  }
+}
+
 status_path <- file.path(state_dir, "status.json")
 result_path <- file.path(state_dir, "result.json")
 request_path <- file.path(state_dir, "request.json")

@@ -248,6 +248,17 @@ def test_recorded_base_images_are_resolved(tmp_path):
     assert bases["gctree"].startswith("python:3.11")
 
 
+@pytest.mark.parametrize("dockerfile", ["apps/api/Dockerfile", "apps/web/Dockerfile", "services/gctree/Dockerfile",
+                                        "services/clonaltree/Dockerfile"])
+def test_images_this_project_builds_apply_pending_os_security_updates(dockerfile):
+    """A base image is only as current as its last pull. Found in system
+    validation: the API and GCtree images failed the vulnerability gate on
+    OpenSSL and GnuTLS updates Debian had already published."""
+    text = (ROOT / dockerfile).read_text()
+    runtime_stage = text[text.rindex("\nFROM "):]
+    assert re.search(r"apt-get (-y upgrade|upgrade -y)", runtime_stage), dockerfile
+
+
 def test_object_store_images_are_pinned_by_digest_and_mirrorable():
     """Upstream MinIO images are gone; the stack runs the Silo fork, pinned by
     digest, with an override so a deployment can pull the same digest from its
@@ -378,6 +389,43 @@ def test_documented_run_limits_match_the_built_in_defaults():
     for name in ("RUN_TIMEOUT_SECONDS_DOWSER", "ARTIFACT_VERIFY_ATTEMPTS", "ARTIFACT_VERIFY_RETRY_SECONDS",
                  "ARTIFACT_VERIFY_TIMEOUT_SECONDS", "PHYLO_METHOD_JOB_TIMEOUT_SECONDS"):
         documented(name)
+
+
+@pytest.mark.parametrize("name", METHODS)
+def test_jobs_are_told_to_give_way_before_their_service_when_memory_runs_out(name):
+    """Found in system validation: without it the kernel stopped the service."""
+    assert SERVICES[name]["environment"]["METHOD_JOB_OOM_SCORE_ADJ"] == "${PHYLO_JOB_OOM_SCORE_ADJ:-800}"
+    python_default = re.search(r"^DEFAULT_JOB_OOM_SCORE_ADJ = (\d+)", (ROOT / "services/gctree/resource_limits.py").read_text(), re.M)
+    r_default = re.search(r"^RL_DEFAULT_JOB_OOM_SCORE_ADJ <- (\d+)L", (ROOT / "services/dowser/resource_limits.R").read_text(), re.M)
+    assert python_default.group(1) == r_default.group(1) == "800"
+    assert "# PHYLO_JOB_OOM_SCORE_ADJ=800" in (ROOT / ".env.example").read_text()
+
+
+def test_the_database_patience_is_documented_with_its_default():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("worker_limits_db", ROOT / "apps/api/workers/limits.py")
+    limits = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(limits)
+    assert f"# WORKER_DATABASE_UNAVAILABLE_SECONDS={limits.DEFAULT_DATABASE_UNAVAILABLE_SECONDS}" in (ROOT / ".env.example").read_text()
+    guide = (ROOT / "docs/DEPLOYMENT.md").read_text()
+    assert "| `WORKER_DATABASE_UNAVAILABLE_SECONDS` | `90` |" in guide and "does not cost a run" in guide
+
+
+def test_the_system_tests_have_their_own_command_and_never_run_by_default():
+    import json
+
+    package = json.loads((ROOT / "package.json").read_text())["scripts"]
+    assert package["test:system"] == "node scripts/test-system.mjs"
+    ini = (ROOT / "pytest.ini").read_text()
+    assert "tests/system" not in ini.split("testpaths")[1].splitlines()[0]   # they stop and kill containers
+    assert "system:" in ini
+    override = yaml.safe_load((ROOT / "tests/system/docker-compose.system.yml").read_text().replace("!reset []", "[]"))
+    for name in METHODS:
+        service = override["services"][name]
+        assert service["restart"] == "unless-stopped" and service["memswap_limit"] == service["mem_limit"]
+        # Memory as in production's default plan, so the tests meet the limits a server has.
+        assert service["mem_limit"] == re.search(r":-(\d+m)\}", str(SERVICES[name]["mem_limit"])).group(1)
 
 
 def test_run_limits_reach_the_worker_through_dotenv_not_through_fixed_values():

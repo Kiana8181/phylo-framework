@@ -746,3 +746,37 @@ testthat::test_that('records nobody collected are removed after the retention ti
     finish_recovery_test(mgr)
   })
 })
+
+# ---------------------------------------------------------------------------
+# Which process gives way when the container runs out of memory: the job, not
+# the service (found on the real stack; see tests/system).
+# ---------------------------------------------------------------------------
+testthat::test_that('a job volunteers to be stopped before its service, unless told not to', {
+  target <- tempfile()
+  writeLines("0", target)
+  Sys.unsetenv("METHOD_JOB_OOM_SCORE_ADJ")
+  testthat::expect_equal(rl_job_oom_score_adj(), 800L)
+  testthat::expect_true(rl_prefer_as_oom_victim(target))
+  testthat::expect_equal(readLines(target), "800")
+
+  Sys.setenv(METHOD_JOB_OOM_SCORE_ADJ = "1000")
+  testthat::expect_true(rl_prefer_as_oom_victim(target)); testthat::expect_equal(readLines(target), "1000")
+  Sys.setenv(METHOD_JOB_OOM_SCORE_ADJ = "0")                               # switched off: nothing is written
+  testthat::expect_false(rl_prefer_as_oom_victim(target)); testthat::expect_equal(readLines(target), "1000")
+  for (bad in c("1001", "-5", "high", "12.5", " ")) {
+    Sys.setenv(METHOD_JOB_OOM_SCORE_ADJ = bad); testthat::expect_equal(rl_job_oom_score_adj(), 800L)
+  }
+  Sys.setenv(METHOD_JOB_OOM_SCORE_ADJ = " 500 "); testthat::expect_equal(rl_job_oom_score_adj(), 500L)
+  Sys.unsetenv("METHOD_JOB_OOM_SCORE_ADJ")
+  # Not Linux, or /proc not writable: the job simply goes on.
+  testthat::expect_false(rl_prefer_as_oom_victim(file.path(tempdir(), "no-such-dir", "oom_score_adj")))
+  unlink(target)
+
+  # Only a job does this, and before it loads the method's packages.
+  runner <- readLines('/srv/job_runner.R')
+  guard <- grep('rl_prefer_as_oom_victim()', runner, fixed = TRUE)
+  testthat::expect_length(guard, 1)
+  testthat::expect_lt(guard, grep('source(plumber_path', runner, fixed = TRUE)[1])
+  testthat::expect_true(any(grepl('PHYLO_JOB_CHILD', runner[(guard - 4):guard], fixed = TRUE)))
+  testthat::expect_false(any(grepl('rl_prefer_as_oom_victim', readLines('/srv/job_manager.R'), fixed = TRUE)))
+})
