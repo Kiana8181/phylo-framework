@@ -13,4 +13,6 @@
 coverage
 test-results
 playwright-report
-runtime/storage
+# Host-side run data and a host-generated version-info.json: never part of an
+# image (the image build writes its own version information).
+runtime

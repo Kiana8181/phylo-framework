@@ -128,8 +128,11 @@ def test_methods_use_the_write_only_object_store_user(name):
 
 
 def test_database_and_object_store_get_only_their_own_credentials():
-    assert set(SERVICES["postgres"]["environment"]) == {"POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB"}
-    assert set(SERVICES["minio"]["environment"]) == {"MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD"}
+    # PGPORT is the port the server listens on (PHYLO_PORT_POSTGRES), not a credential.
+    assert set(SERVICES["postgres"]["environment"]) == {"POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB", "PGPORT"}
+    # The two addresses are the ports the store listens on, not credentials.
+    assert set(SERVICES["minio"]["environment"]) == {"MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD", "MINIO_ADDRESS",
+                                                     "MINIO_CONSOLE_ADDRESS"}
 
 
 def test_no_credential_has_a_fallback_value():
@@ -169,13 +172,16 @@ def test_internal_services_have_unique_dns_names():
 
 def test_internal_urls_use_the_unique_names():
     env = COMPOSE["x-api-common-env"]
-    assert "@phylo-postgres:5432/" in env["DATABASE_URL"]
+    # Host names are fixed and unique; ports come from one variable each (see
+    # test_deploy_tooling.py for the ports themselves).
+    assert "@phylo-postgres:${PHYLO_PORT_POSTGRES:-5432}/" in env["DATABASE_URL"]
     assert env["POSTGRES_HOST"] == "phylo-postgres"
-    assert env["S3_ENDPOINT_URL"].endswith(":-http://phylo-minio:9000}")
+    store = ":-http://phylo-minio:${PHYLO_PORT_MINIO:-9000}}"
+    assert env["S3_ENDPOINT_URL"].endswith(store)
     for method in METHODS:
         assert f":-http://phylo-{method}:" in env[f"METHOD_{method.upper()}_URL"]
-    assert COMPOSE["x-method-common-env"]["S3_ENDPOINT_URL"].endswith(":-http://phylo-minio:9000}")
-    assert "http://phylo-minio:9000" in SERVICES["minio-init"]["entrypoint"]
+    assert COMPOSE["x-method-common-env"]["S3_ENDPOINT_URL"].endswith(store)
+    assert "http://phylo-minio:${PHYLO_PORT_MINIO:-9000}" in SERVICES["minio-init"]["entrypoint"]
 
 
 def test_production_publishes_no_host_ports():
@@ -184,7 +190,7 @@ def test_production_publishes_no_host_ports():
 
 
 def test_dev_override_keeps_the_database_on_loopback():
-    assert DEV["services"]["postgres"]["ports"] == ["127.0.0.1:${POSTGRES_PORT:-5440}:5432"]
+    assert DEV["services"]["postgres"]["ports"] == ["127.0.0.1:${POSTGRES_PORT:-5440}:${PHYLO_PORT_POSTGRES:-5432}"]
     # Publishing needs a non-internal network in addition to the internal one.
     assert DEV["services"]["postgres"]["networks"] == ["phylo_egress"]
     assert DEV["services"]["minio"]["networks"] == ["phylo_egress"]
@@ -229,13 +235,11 @@ def test_clonaltree_runtime_stage_has_no_build_toolchain():
 def test_recorded_base_images_are_resolved(tmp_path):
     """Provenance must name the real runtime base image, not a build-arg placeholder."""
     import json
-    import shutil
     import subprocess
+    import sys
 
-    if shutil.which("node") is None:
-        pytest.skip("node is not installed")
     out = tmp_path / "version-info.json"
-    subprocess.run(["node", str(ROOT / "scripts/generate-version-info.mjs"), "--out", str(out)],
+    subprocess.run([sys.executable, str(ROOT / "scripts/generate_version_info.py"), "--no-commands", "--out", str(out)],
                    check=True, capture_output=True, cwd=ROOT)
     services = json.loads(out.read_text())["services"]
     bases = {name: record["base_image"] for name, record in services.items()}

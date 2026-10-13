@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import json
 import os
+import subprocess
 import time
 from pathlib import Path
 from uuid import uuid4
@@ -77,6 +78,18 @@ async def test_scientific_pipeline(method, tmp_path):
             assert all(e['source'] in ids and e['target'] in ids for e in edges)
             assert any(node['isLeaf'] for node in nodes)
             assert 'data:image' not in json.dumps(result)
+            # Every result says which version produced it: the API image recorded
+            # the commit it was built from, with no step on the host.
+            version = result['version_info']
+            assert version['method_id'] == method
+            assert version['service']['image_name'] == f'phylo-{method}:latest' and version['service']['base_image']
+            commit = version['framework']['git_commit']
+            assert commit and len(commit) == 40, version['framework']
+            # A commit of this repository, at or before the checkout under test
+            # (equal after a fresh build).
+            known = subprocess.run(['git', 'merge-base', '--is-ancestor', commit, 'HEAD'], cwd=ROOT, capture_output=True)
+            assert known.returncode == 0, f'{commit} is not a commit of this checkout'
+            assert version['framework']['version'] and version['captured_at']
             artifacts = unwrap(await api.get(f'/runs/{run_id}/artifacts'))
             if isinstance(artifacts, dict):
                 artifacts = artifacts['artifacts']

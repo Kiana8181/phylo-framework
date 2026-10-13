@@ -115,9 +115,10 @@ docker compose --profile prod up -d    # recreate containers with the new limits
 sh scripts/resource-plan.sh --check    # verify .env still matches the budget
 ```
 
-`./run.sh` (production mode) runs `--write` for you. If you start the stack with
+`./run.sh prod` runs `--write` for you. If you start the stack with
 `docker compose` directly and never run the script, the compose file applies the
-plan for the default budget.
+plan for the default budget; `./run.sh check` tells you when a budget is set in
+`.env` but its limits are not stored.
 
 ### How the budget is split
 
@@ -882,8 +883,9 @@ Container logs are rotated: `PHYLO_LOG_MAX_SIZE` (default `10m`) per file,
   container on the shared proxy network.
 
 The container names on `proxy_net` (`phylo-web-prod`, `phylo-api-prod`) and their
-ports (3000, 8000) are unchanged, so the reverse-proxy configuration does not
-need to change.
+ports (3000, 8000) are unchanged by default, so the reverse-proxy configuration
+does not need to change. The ports are configurable; see
+[Internal ports](#internal-ports) before changing them.
 
 **Upgrading an existing server:** set these in the server's `.env`, because old
 values still point at the short names:
@@ -896,8 +898,9 @@ METHOD_BREPPHYLO_URL_DOCKER=http://phylo-brepphylo:8003
 METHOD_CLONALTREE_URL_DOCKER=http://phylo-clonaltree:8004
 ```
 
-(`./run.sh` rewrites the four `METHOD_*` lines for you.) The old names keep
-working, so nothing breaks if you forget; they are just not unique.
+Or remove these lines: without them the compose file uses exactly these
+addresses. The old names keep working, so nothing breaks if you forget; they
+are just not unique.
 
 ---
 
@@ -928,14 +931,104 @@ bash ./scripts/reset-local.sh
 The `prod` compose profile includes `postgres`, `minio`, `minio-init`,
 `api-prod`, `api-worker-prod`, `web-prod`, and the four method services.
 
+### Starting and checking a deployment
+
+The server needs Docker with Compose 2.17 or newer, and nothing else: no Node
+and no Python on the host.
+
 ```bash
-# On your server:
-cp .env.example .env            # then replace every secret listed under "Required production secrets"
-docker compose --profile prod build --pull          # --pull picks up patched base images
-docker compose --profile prod up -d
-docker compose exec api-prod alembic upgrade head   # (also runs automatically on start)
-npm run storage:check:docker
+git clone --recurse-submodules <repository> && cd phylo-framework   # the ClonalTree code is a submodule
+cp .env.example .env     # then replace every secret listed under "Required production secrets"
+./run.sh check           # can it start? changes nothing
+./run.sh prod            # start, or update after `git pull`
+./run.sh status          # is it complete?
 ```
+
+`./run.sh prod` is a convenience, not a requirement. It stores the container
+limits for the resource budget in `.env`, runs the pre-start check, and then
+runs exactly this command, which you may also run yourself:
+
+```bash
+docker compose --profile prod up -d --build
+```
+
+The first start creates the project's networks and volumes, builds the images,
+creates both buckets and the methods' storage user (`minio-init`), and brings
+the database to the newest revision (`alembic upgrade head` runs each time the
+API container starts). No further step is needed.
+
+| Command | What it does |
+|---|---|
+| `./run.sh check` | Pre-start check, read-only: Docker and Compose version, `.env` present and complete, internal ports consistent, container limits match the resource budget, the reverse-proxy network exists, git information available for the image build, the ClonalTree submodule checked out, and whether the data volumes exist already (their data is used as it is) or will be created empty |
+| `./run.sh prod [args]` | The above check, then `docker compose --profile prod up -d --build [args]`. `--no-build` starts what is already built; `--pull always` also refreshes base images |
+| `./run.sh status` | Post-start check, read-only: every container running and healthy, `minio-init` finished, and, asked from inside the API container, database reachable, migrations at the newest revision, both buckets usable, every method service answering, version information present, email configured |
+| `./run.sh ports` | Internal ports in effect, and whether they are consistent |
+| `./run.sh down` | Stops the stack. Data volumes are kept |
+
+Both checks print one line per item, name what is wrong and how to fix it, never
+print a secret, and exit non-zero when something must be fixed. A warning is a
+state you may have chosen (email switched off, no git information).
+
+### Version information
+
+Every stored result carries a `version_info` block: the commit the deployment
+was built from, the image and base image of the method that ran, and its pinned
+tool versions. The API image writes this itself when it is built
+(`scripts/generate_version_info.py`); there is no step to run on the host and
+no file to keep next to the compose file. Rebuilding after `git pull` updates
+it.
+
+- The build reads the commit from the repository's `.git` directory, which
+  Compose hands to it as a separate, named build context (`.git` is not part of
+  the normal build context). Only `HEAD` and the refs are copied; nothing of it
+  ends up in the image. This is what needs Compose 2.17.
+- `framework.version` is the tag when the deployed commit is exactly a tagged
+  one, otherwise the abbreviated commit. `framework.git_commit` is always the
+  full commit.
+- An image build cannot see the working tree or ask the Docker daemon. Whether
+  the checkout had local modifications (`git_dirty`) and image digests are
+  therefore recorded as unknown, with the reason, under `unavailable`. Deploy
+  from a clean checkout.
+- **Deploying from an archive without `.git`:** set `PHYLO_GIT_DIR=config/no-git`
+  in `.env`. The stack builds and runs; results then record that the commit is
+  unknown, and `./run.sh status` shows a warning.
+
+### Internal ports
+
+No port is published on the host in production. Inside the project's networks
+each service listens on its usual port, set by one variable from which every
+URL, command and health check is built:
+
+| Variable | Default | Service |
+|---|---|---|
+| `PHYLO_PORT_POSTGRES` | `5432` | PostgreSQL |
+| `PHYLO_PORT_MINIO` | `9000` | Object store (S3 API) |
+| `PHYLO_PORT_MINIO_CONSOLE` | `9001` | Object store console |
+| `PHYLO_PORT_API` | `8000` | API (`phylo-api-prod`) |
+| `PHYLO_PORT_WEB` | `3000` | Web (`phylo-web-prod`) |
+| `METHOD_<NAME>_CONTAINER_PORT` | `8001`–`8004` | Dowser, GCtree, BrepPhylo, ClonalTree |
+
+```bash
+./run.sh ports                   # ports in effect + consistency check
+./run.sh ports randomize         # random ports for database, object store and methods
+./run.sh ports randomize --all   # ...and for the API and the web server
+```
+
+- Changing a port means recreating the containers
+  (`docker compose --profile prod up -d`).
+- **The reverse proxy addresses `phylo-api-prod` and `phylo-web-prod` by port.**
+  If `PHYLO_PORT_API` or `PHYLO_PORT_WEB` changes, its configuration must change
+  with it, or the site is unreachable. That is why `randomize` leaves these two
+  alone unless `--all` is given.
+- Random ports are optional and are written once: a later `randomize` keeps
+  them (`--force` generates new ones). They add no real protection, because the
+  networks are private to this project; use them when the server's rules ask
+  for non-default ports.
+- `S3_ENDPOINT_URL_DOCKER` and `METHOD_<NAME>_URL_DOCKER`, when present in
+  `.env`, take precedence over the port variables. `./run.sh ports` and
+  `./run.sh check` refuse a configuration in which they disagree; `randomize`
+  rewrites them together with the ports.
+- Valid ports are 1024–65535.
 
 ### Object store image
 
@@ -997,7 +1090,10 @@ Hardening notes:
 |---|---|
 | `phylo_postgres_data` | PostgreSQL data |
 | `phylo_minio_data` | All datasets + artifacts |
-| `method_jobs` | Per-job scratch/state (ephemeral; safe to lose) |
+
+Per-job state of the method services lives inside their containers and is
+removed when a job ends (see [Method containers](#method-containers)); it needs
+no volume.
 
 ---
 
@@ -1027,7 +1123,7 @@ NET=$(docker inspect phylo-minio --format '{{range $k, $v := .NetworkSettings.Ne
 MC=pgsty/mc@sha256:cfc83108c3abb371f8fb84d99c1fdc88f8c237e022409b0081fb7c0a3be634dd
 for bucket in "$S3_BUCKET_DATASETS" "$S3_BUCKET_ARTIFACTS"; do
   docker run --rm --network "$NET" -v "$PWD/backups/minio:/backup" \
-    -e MC_HOST_store="http://$MINIO_ROOT_USER:$MINIO_ROOT_PASSWORD@phylo-minio:9000" \
+    -e MC_HOST_store="http://$MINIO_ROOT_USER:$MINIO_ROOT_PASSWORD@phylo-minio:${PHYLO_PORT_MINIO:-9000}" \
     "$MC" mirror --overwrite "store/$bucket" "/backup/$bucket"
 done
 # restore = mirror the backup directory back into the bucket.
@@ -1043,9 +1139,9 @@ manual step; nothing in this project schedules them.
 ## Post-deploy checks
 
 ```bash
-docker compose ps                        # all services up; minio-init exited 0
-npm run storage:check:docker             # upload/exists/download/stream/delete round-trip on both buckets
-curl -fsS "$PUBLIC_API_BASE_URL/health"  # API health
+./run.sh status                          # containers, migrations, buckets, method services, version information, email
+docker compose exec -T api-prod python -m apps.api.scripts.storage_check   # write/read/delete round-trip on both buckets
+curl -fsS "$PUBLIC_API_BASE_URL/health"  # API health, through the reverse proxy
 ```
 
 Then run one method end-to-end and confirm:

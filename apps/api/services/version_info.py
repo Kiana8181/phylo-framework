@@ -1,8 +1,12 @@
 """Runtime access to the deployment's version-information file.
 
-`scripts/generate-version-info.mjs` writes `runtime/version-info.json` at build
-or deploy time; this module reads it once and hands the contents to the worker,
-which stores a copy in each run's result under `version_info`. Recording it per
+`scripts/generate_version_info.py` writes the file. In a container it is part of
+the image: the API image build runs the script and stores the result at
+`/version-info.json` (`PHYLO_VERSION_INFO_PATH`), so no deploy step has to
+remember it. For an API run directly on the host, `npm run version:capture`
+writes `runtime/version-info.json`. This module reads the file once and hands
+the contents to the worker, which stores a copy in each run's result under
+`version_info`. Recording it per
 run means a stored result stays interpretable even after the deployment behind
 it has been rebuilt.
 

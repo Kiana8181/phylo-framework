@@ -372,7 +372,7 @@ export type VersionInfoService = {
 /**
  * Environment identity recorded with a run.
  *
- * Written by `scripts/generate-version-info.mjs` at build/deploy time and
+ * Written by `scripts/generate_version_info.py` when the API image is built and
  * copied into the result when the run is persisted. Optional throughout: runs
  * recorded before this feature carry no `version_info`, and any field the
  * deployment could not determine is `null` with a reason in `unavailable`.

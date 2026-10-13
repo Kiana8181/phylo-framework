@@ -43,10 +43,8 @@ async function main() {
   } else if (mode === "dev-r") {
     await run(path.join(ROOT, "scripts/dev-with-local-r.sh"), []);
   } else {
-    await run("node", [path.join(ROOT, "scripts/method-services.mjs"), "sync-env"]);
-    // Per-container limits for the budget in .env (see .env.example).
-    await run("sh", [path.join(ROOT, "scripts/resource-plan.sh"), "--write"]);
-    await run("docker", ["compose", "--profile", "prod", "up", "-d", "--build"]);
+    // One implementation of the production path: run.sh (which needs no Node).
+    await run(path.join(ROOT, "run.sh"), ["prod"]);
   }
 }
 

@@ -28,6 +28,9 @@ services:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
+      # As in docker-compose.yml: lets the image record the commit it was built from.
+      additional_contexts:
+        gitmeta: ${PHYLO_GIT_DIR:-./.git}
     profiles: [full]
     working_dir: /repo
     environment: &test-api-env

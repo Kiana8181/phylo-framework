@@ -151,6 +151,7 @@ MinIO is never exposed to the browser.
 - Sign-in protection: the self-hosted CAPTCHA, rate limits, the reverse-proxy setting they depend on, and email verification: [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md#sign-in-protection).
 - Email: SMTP settings, which runs send a notification, retries and what a mail outage does (nothing to runs): [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md#email-and-run-notifications).
 - How long results are kept (60 days by default), what expires and what does not, the upload size limit and clean-up: [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md#storage-lifecycle-and-retention).
+- Starting, checking and updating a deployment, internal ports, and how results record the deployed version: [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md#starting-and-checking-a-deployment).
 - Run time limits, what happens to a run when a method container restarts, the object store is down or a job runs out of memory, and what each error code means: [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md#when-a-run-cannot-finish).
 - Replacing the unmaintained MinIO image (investigation and recommendation, not yet applied): [docs/OBJECT-STORAGE-OPTIONS.md](./docs/OBJECT-STORAGE-OPTIONS.md).
 
@@ -278,11 +279,15 @@ Everything in containers with internal networking (includes Postgres, MinIO,
 API, worker, web, and all method services).
 
 ```bash
-./run.sh
-# choose: Prod → docker compose
+./run.sh prod      # pre-start check, then the command below
 # or directly:
 docker compose --profile prod up -d --build
+./run.sh status    # containers, migrations, buckets, method services
 ```
+
+Production needs Docker with Compose 2.17+ on the host and nothing else (no
+Node, no Python). `./run.sh` without arguments still offers the interactive
+menu.
 
 - Web → http://localhost:3000
 - API → http://localhost:8000

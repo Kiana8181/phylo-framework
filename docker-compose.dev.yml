@@ -17,7 +17,7 @@ services:
     networks:
       - phylo_egress
     ports:
-      - "127.0.0.1:${POSTGRES_PORT:-5440}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5440}:${PHYLO_PORT_POSTGRES:-5432}"
 
   minio:
     networks:
@@ -27,5 +27,5 @@ services:
       # `docker run` (scripts/method-services.mjs) through host.docker.internal,
       # which on Linux is the bridge gateway, not loopback. Narrow it with
       # DEV_MINIO_BIND=127.0.0.1 if you are on Docker Desktop.
-      - "${DEV_MINIO_BIND:-0.0.0.0}:${MINIO_API_PORT:-9000}:9000"
-      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
+      - "${DEV_MINIO_BIND:-0.0.0.0}:${MINIO_API_PORT:-9000}:${PHYLO_PORT_MINIO:-9000}"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:${PHYLO_PORT_MINIO_CONSOLE:-9001}"
