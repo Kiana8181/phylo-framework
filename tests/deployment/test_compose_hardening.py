@@ -522,14 +522,18 @@ def test_every_method_ships_its_success_criteria(name):
 # --------------------------------------------------------------------------- #
 def test_no_trace_of_the_removed_mail_provider_remains():
     """All email goes through SMTP. The former provider must be gone from code,
-    configuration, tests and documentation, not merely unused. The tracked
-    `.env` is the one known exception: it is removed from the repository, and
-    from its history, in the credential-hygiene phase."""
+    configuration, tests and documentation, not merely unused. It is still
+    named in exactly one context: one of its API keys was committed in the
+    past, so the credential clean-up (its guide, the scanner that recognises
+    such a key, and their tests) has to say whose key that was."""
     import re
     import subprocess
 
     tracked = subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True).stdout.split()
-    exempt = {".env", "package-lock.json", "tests/deployment/test_compose_hardening.py"}
+    assert ".env" not in tracked                       # the former exception is no longer in the repository
+    exempt = {"package-lock.json", "tests/deployment/test_compose_hardening.py",
+              "docs/HISTORY-CLEANUP.md", "scripts/scan_secrets.py",
+              "tests/deployment/test_secret_hygiene.py", "tests/deployment/test_history_cleanup.py"}
     hits = []
     for name in tracked:
         path = ROOT / name
