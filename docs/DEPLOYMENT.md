@@ -944,7 +944,7 @@ The server needs Docker with Compose 2.17 or newer, and nothing else: no Node
 and no Python on the host.
 
 ```bash
-git clone --recurse-submodules <repository> && cd phylo-framework   # the ClonalTree code is a submodule
+git clone <repository> && cd phylo-framework
 cp .env.example .env     # then replace every secret listed under "Required production secrets"
 ./run.sh check           # can it start? changes nothing
 ./run.sh prod            # start, or update after `git pull`
@@ -975,7 +975,7 @@ API container starts). No further step is needed.
 
 | Command | What it does |
 |---|---|
-| `./run.sh check` | Pre-start check, read-only: Docker and Compose version, `.env` present and complete, internal ports consistent, container limits match the resource budget, the reverse-proxy network exists, git information available for the image build, the ClonalTree submodule checked out, and whether the data volumes exist already (their data is used as it is) or will be created empty |
+| `./run.sh check` | Pre-start check, read-only: Docker and Compose version, `.env` present and complete, internal ports consistent, container limits match the resource budget, the reverse-proxy network exists, git information available for the image build, and whether the data volumes exist already (their data is used as it is) or will be created empty |
 | `./run.sh prod [args]` | The above check, then `docker compose --profile prod up -d --build [args]`. `--no-build` starts what is already built; `--pull always` also refreshes base images |
 | `./run.sh status` | Post-start check, read-only: every container running and healthy, `minio-init` finished, and, asked from inside the API container, database reachable, migrations at the newest revision, both buckets usable, every method service answering, version information present, email configured |
 | `./run.sh ports` | Internal ports in effect, and whether they are consistent |

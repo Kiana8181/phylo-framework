@@ -27,7 +27,14 @@ load_dotenv()
 # ---------- constants ----------
 METHOD_ID = "clonaltree"
 ROOT_DIR = Path(__file__).resolve().parent
+# The ClonalTree pipeline itself. A copy of smhamidi/clonotype kept in this
+# repository, taken unchanged at the upstream version below.
 BASE_CODES_DIR = ROOT_DIR / "base-codes"
+CLONOTYPE_UPSTREAM = {
+    "tag": None,
+    "commit": "11225378d106a437137dd4f042a0eb8b412bcae8",
+    "ref": "1.0.0-3-g1122537",
+}
 
 CONTRACTS_DIR = Path(os.environ.get("CONTRACTS_DIR", "/contracts"))
 METHOD_DIR = CONTRACTS_DIR / "methods" / METHOD_ID
@@ -300,7 +307,7 @@ def clamp_choice_str(val: Any, default: str, allowed: set[str]) -> str:
     return default
 
 
-def ensure_clonotype_submodule(logs: List[dict]) -> Tuple[bool, str]:
+def ensure_clonaltree_sources(logs: List[dict]) -> Tuple[bool, str]:
     required_paths = [
         BASE_CODES_DIR / "main_pipeline.py",
         BASE_CODES_DIR / "src/format/format_labeling_imgt_airr.py",
@@ -314,13 +321,13 @@ def ensure_clonotype_submodule(logs: List[dict]) -> Tuple[bool, str]:
     missing = [str(p.relative_to(ROOT_DIR)) for p in required_paths if not p.exists()]
     if missing:
         msg = (
-            "ClonalTree base-codes submodule is missing/uninitialized. "
-            "Run: git submodule update --init --recursive"
+            "ClonalTree pipeline files are missing from services/clonaltree/base-codes. "
+            "Restore them from the repository."
         )
         logs.append(
             {
-                "step": "submodule_check",
-                "cmd": "git submodule status services/clonaltree/base-codes",
+                "step": "sources_check",
+                "cmd": "verify services/clonaltree/base-codes",
                 "ok": False,
                 "out": f"{msg}\nMissing: {', '.join(missing)}",
             }
@@ -329,54 +336,17 @@ def ensure_clonotype_submodule(logs: List[dict]) -> Tuple[bool, str]:
 
     logs.append(
         {
-            "step": "submodule_check",
+            "step": "sources_check",
             "cmd": "verify services/clonaltree/base-codes",
             "ok": True,
-            "out": "Submodule files present.",
+            "out": "Pipeline files present.",
         }
     )
     return True, ""
 
 
 def detect_clonotype_ref() -> Dict[str, Optional[str]]:
-    tag = (os.environ.get("CLONOTYPE_PINNED_TAG") or "").strip() or None
-    commit = (os.environ.get("CLONOTYPE_PINNED_SHA") or "").strip() or None
-
-    if BASE_CODES_DIR.exists():
-        if commit is None:
-            try:
-                commit = (
-                    subprocess.check_output(
-                        ["git", "-C", str(BASE_CODES_DIR), "rev-parse", "HEAD"],
-                        stderr=subprocess.DEVNULL,
-                        text=True,
-                    )
-                    .strip()
-                    or None
-                )
-            except Exception:
-                commit = None
-        if tag is None:
-            try:
-                detected = (
-                    subprocess.check_output(
-                        ["git", "-C", str(BASE_CODES_DIR), "describe", "--tags", "--exact-match"],
-                        stderr=subprocess.DEVNULL,
-                        text=True,
-                    )
-                    .strip()
-                    or None
-                )
-                tag = detected
-            except Exception:
-                tag = None
-
-    ref = tag or commit
-    return {
-        "tag": tag,
-        "commit": commit,
-        "ref": ref,
-    }
+    return dict(CLONOTYPE_UPSTREAM)
 
 
 def parse_repertoire_two_levels(
@@ -716,9 +686,9 @@ async def run_handler(request: Request):
         except Exception as e:
             return err(str(e), logs=logs)
 
-        submodule_ok, submodule_error = ensure_clonotype_submodule(logs)
-        if not submodule_ok:
-            return err(submodule_error, logs=logs)
+        sources_ok, sources_error = ensure_clonaltree_sources(logs)
+        if not sources_ok:
+            return err(sources_error, logs=logs)
 
         validation = validate_clonaltree_input(input_path, params)
         if not validation.ok:
@@ -1113,7 +1083,7 @@ async def run_handler(request: Request):
 
         provenance_ref = detect_clonotype_ref()
         provenance = {
-            "clonotype_submodule": provenance_ref,
+            "clonotype_source": provenance_ref,
             "muscle": {
                 "major": muscle_major,
                 "version_raw": muscle_raw,

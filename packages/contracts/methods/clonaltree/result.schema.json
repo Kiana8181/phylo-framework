@@ -175,7 +175,7 @@
     },
     "provenance": {
       "type": "object",
-      "description": "Run provenance (pinned submodule ref, MUSCLE version, container image ref/digest).",
+      "description": "Run provenance (upstream ClonalTree pipeline version, MUSCLE version, container image ref/digest).",
       "additionalProperties": true
     },
     "stats": {

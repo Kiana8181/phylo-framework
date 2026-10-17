@@ -12,12 +12,11 @@ most recent complete validation.
 
 ## Setup and commands
 
-Use Node 22, Python 3.12, Docker Compose v2 and the initialized ClonalTree submodule.
+Use Node 22, Python 3.12 and Docker Compose v2.
 On Windows run the orchestrator under WSL2. R and scientific Python dependencies
 run in Docker; they need not be installed in the host Python environment.
 
 ```bash
-git submodule update --init --recursive
 npm ci
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements-test.txt
@@ -109,8 +108,8 @@ so the two different `app.py` files cannot be mistaken for each other. Browser
 instrumentation is enabled only by `TEST_BROWSER_COVERAGE=1`, and collected before
 navigation and at test teardown. Source maps remap post-SWC counters to TS/TSX.
 
-The Python denominator excludes tests, migrations, the external ClonalTree
-submodule and GCtree environment bootstrap. Migrations are exercised by building
+The Python denominator excludes tests, migrations, the upstream ClonalTree
+pipeline code (`services/clonaltree/base-codes/`) and GCtree environment bootstrap. Migrations are exercised by building
 the real PostgreSQL schema, including sequences, enums and partial unique indexes.
 R coverage measures service **modules**; executable `plumber.R`/`job_runner.R`
 entrypoints are exercised through real HTTP scientific E2E tests, but their

@@ -17,7 +17,8 @@ import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
-SUBMODULE = "services/clonaltree/base-codes/"
+# Upstream ClonalTree code, kept as it came: its own README is not ours to check.
+UPSTREAM = "services/clonaltree/base-codes/"
 
 
 def tracked(suffix: str) -> list[str]:
@@ -27,7 +28,7 @@ def tracked(suffix: str) -> list[str]:
     if done.returncode != 0:
         pytest.skip("not a git checkout")
     return [p for p in done.stdout.splitlines()
-            if p.endswith(suffix) and not p.startswith(SUBMODULE) and (ROOT / p).is_file()]
+            if p.endswith(suffix) and not p.startswith(UPSTREAM) and (ROOT / p).is_file()]
 
 
 DOCS = tracked(".md")
@@ -344,6 +345,7 @@ STALE = [
     (r"will be connected in a future release|coming soon|not implemented yet", "describe what exists"),
     (r"\banonymous(ly)? (users?|runs?) (can|may)\b", "every run needs a signed-in user"),
     (r"bootstrapped with \[`create-next-app`\]", "framework boilerplate instead of documentation"),
+    (r"submodule", "the ClonalTree pipeline code is part of this repository"),
 ]
 
 

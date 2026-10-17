@@ -222,7 +222,7 @@ git status                                  # anything not pushed?
 git format-patch origin/<branch> -o ../my-patches    # only if you have commits that are not on GitHub
 cp .env ../phylo-framework.env.backup       # your local configuration
 cd .. && mv phylo-framework phylo-framework.old
-git clone --recurse-submodules git@github.com:Kiana8181/phylo-framework.git
+git clone git@github.com:Kiana8181/phylo-framework.git
 cp phylo-framework.env.backup phylo-framework/.env
 cd phylo-framework && git am ../my-patches/*.patch   # only if you made patches
 rm -rf ../phylo-framework.old               # it still contains the old history
@@ -239,7 +239,7 @@ cd /path/to/phylo-framework
 cp .env ~/phylo-framework.env.backup && chmod 600 ~/phylo-framework.env.backup     # first, always
 ./run.sh down                               # stops the containers, keeps the volumes
 cd .. && mv phylo-framework phylo-framework.old
-git clone --recurse-submodules git@github.com:Kiana8181/phylo-framework.git phylo-framework
+git clone git@github.com:Kiana8181/phylo-framework.git phylo-framework
 cp ~/phylo-framework.env.backup phylo-framework/.env && chmod 600 phylo-framework/.env
 [ -d phylo-framework.old/runtime ] && mv phylo-framework.old/runtime phylo-framework/runtime
 cd phylo-framework

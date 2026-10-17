@@ -1,3 +1,0 @@
-[submodule "services/clonaltree/base-codes"]
-	path = services/clonaltree/base-codes
-	url = git@github.com:smhamidi/clonotype.git

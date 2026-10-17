@@ -330,13 +330,18 @@ export type RunTables = {
   [key: string]: any;
 };
 
+/** Which upstream version of the ClonalTree pipeline (smhamidi/clonotype) produced a run. */
+export type ClonotypeRef = {
+  tag?: string | null;
+  commit?: string | null;
+  ref?: string | null;
+  [key: string]: any;
+};
+
 export type RunProvenance = {
-  clonotype_submodule?: {
-    tag?: string | null;
-    commit?: string | null;
-    ref?: string | null;
-    [key: string]: any;
-  };
+  clonotype_source?: ClonotypeRef;
+  /** Same information under its earlier name, in runs stored before the rename. */
+  clonotype_submodule?: ClonotypeRef;
   muscle?: {
     major?: number | null;
     version_raw?: string | null;

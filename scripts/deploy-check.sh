@@ -182,16 +182,6 @@ check_git_dir() {
   fi
 }
 
-check_sources() {
-  # The ClonalTree code is a git submodule; its image cannot be built without it.
-  if [ -f "$ROOT/services/clonaltree/base-codes/main_pipeline.py" ]; then
-    ok "ClonalTree sources are present (git submodule)"
-  else
-    fail "the ClonalTree sources are missing: services/clonaltree/base-codes is an uninitialised git submodule"
-    hint "run: git submodule update --init --recursive   (needs access to that repository)"
-  fi
-}
-
 check_volumes() {
   for volume in $VOLUMES; do
     if docker volume inspect "$volume" >/dev/null 2>&1; then
@@ -264,7 +254,6 @@ if [ "$MODE" = "preflight" ]; then
     check_resource_plan
     check_network
     check_git_dir
-    check_sources
     check_volumes
   fi
 else

@@ -3,7 +3,7 @@
 Python imports a module named ``sitecustomize`` at interpreter start-up when it
 is on the import path. app.py puts this directory on PYTHONPATH for every
 process the ClonalTree pipeline starts, so the patch reaches the pipeline's own
-subprocesses without changing the pipeline (a pinned upstream submodule).
+subprocesses without changing the pipeline (upstream code, kept unchanged in base-codes/).
 
 Why it is needed: the pipeline sizes a ``multiprocessing.Pool`` with
 ``multiprocessing.cpu_count()``. Inside a container that returns the number of

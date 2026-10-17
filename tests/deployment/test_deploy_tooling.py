@@ -73,8 +73,6 @@ class Deployment:
         (self.repo / ".git").mkdir()
         (self.repo / ".git/HEAD").write_text("ref: refs/heads/main\n")
         (self.repo / "config/no-git").mkdir(parents=True)
-        (self.repo / "services/clonaltree/base-codes").mkdir(parents=True)
-        (self.repo / "services/clonaltree/base-codes/main_pipeline.py").write_text("")
         for name in ("run.sh", "docker-compose.yml"):
             shutil.copy(ROOT / name, self.repo / name)
         for name in ("ports.sh", "deploy-check.sh", "resource-plan.sh"):
@@ -327,7 +325,7 @@ def test_a_usable_configuration_is_ready_and_the_check_changes_nothing(deploymen
     before = deployment.env_file.read_bytes()
     done = deployment.check()
     assert done.returncode == 0, done.stdout + done.stderr
-    assert done.stdout.count("  OK    ") == 10 and "FAIL" not in done.stdout
+    assert done.stdout.count("  OK    ") == 9 and "FAIL" not in done.stdout
     assert "Ready to start (0 warning(s)):  docker compose --profile prod up -d --build" in done.stdout
     assert "volume phylo_postgres_data does not exist yet: it will be created empty (fresh installation)" in done.stdout
     assert deployment.env_file.read_bytes() == before
@@ -385,13 +383,6 @@ def test_git_information_missing_unreadable_or_deliberately_absent(deployment):
     chosen = deployment.check()
     assert chosen.returncode == 0 and "WARN  config/no-git holds no git data" in chosen.stdout
     assert "Ready to start (1 warning(s))" in chosen.stdout
-
-
-def test_a_clone_without_its_submodule_is_caught_before_a_long_build(deployment):
-    (deployment.repo / "services/clonaltree/base-codes/main_pipeline.py").unlink()
-    done = deployment.check()
-    assert done.returncode == 1 and "the ClonalTree sources are missing" in done.stdout
-    assert "git submodule update --init --recursive" in done.stdout
 
 
 def test_a_resource_budget_must_be_stored_before_plain_compose_can_honour_it(deployment):

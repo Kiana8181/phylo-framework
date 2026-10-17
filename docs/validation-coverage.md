@@ -65,10 +65,10 @@ input is legitimate for them and a blanket framework-level hard-fail would rejec
 ## Audit decisions (why some cells are intentionally left as-is)
 
 - **ClonalTree strictness.** Incomplete rows are silently dropped inside the base-codes
-  submodule (`dropna`). To avoid breaking currently-working inputs, ClonalTree's new validator
+  pipeline (`dropna`). To avoid breaking currently-working inputs, ClonalTree's new validator
   **warns** on incomplete rows and non-uniform alignment lengths instead of failing. It
   hard-fails only on unreadable input, missing required columns, and empty/duplicate
-  `sequence_id`. The base-codes submodule is not modified.
+  `sequence_id`. The base-codes pipeline code is not modified.
   ClonalTree's validator now **hard-fails on unequal alignment lengths when
   `use_input_alignment` is set**, because the alignment is then consumed as given; without the
   flag it remains a warning, as MUSCLE re-aligns.

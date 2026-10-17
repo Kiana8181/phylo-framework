@@ -149,12 +149,6 @@ npm run storage:check          # round-trips both buckets via the host (localhos
 
 ### 4) Start method services (pick one approach)
 
-Before starting services, ensure submodules are initialized:
-
-```bash
-git submodule update --init --recursive
-```
-
 #### A) Docker methods (uses `method-services.mjs` + config)
 
 ```bash

@@ -75,7 +75,7 @@ def build_run_version_info(
 
     Narrows the deployment-wide capture to the one service that ran, and folds
     in whatever that service reported about itself at run time (ClonalTree, for
-    example, already returns its submodule commit and MUSCLE version). Returns
+    example, already returns its upstream pipeline version and MUSCLE version). Returns
     `None` when there is nothing worth storing.
     """
     captured = load_version_info()

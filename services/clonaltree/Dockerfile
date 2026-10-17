@@ -52,8 +52,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     STRICT_CONTRACT_ROUTES=true \
     QT_QPA_PLATFORM=offscreen \
     MPLBACKEND=agg \
-    CLONOTYPE_PINNED_TAG=1.0.0 \
-    CLONOTYPE_PINNED_SHA=cf731d37ead6c15bcbad2c96ef4c76b6d4f19edf \
     CLONALTREE_IMAGE_REF=phylo-clonaltree:dev
 
 # Pending Debian security updates; no build tools are installed here.
@@ -98,8 +96,6 @@ COPY job_runner.py /srv/clonaltree/job_runner.py
 COPY artifact_manifest.py /srv/clonaltree/artifact_manifest.py
 COPY object_storage.py /srv/clonaltree/object_storage.py
 COPY base-codes /srv/clonaltree/base-codes
-RUN test -f /srv/clonaltree/base-codes/main_pipeline.py || \
-    (echo "Missing clonaltree submodule content. Run: git submodule update --init --recursive" >&2 && exit 1)
 
 EXPOSE 8004
 

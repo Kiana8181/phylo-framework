@@ -33,8 +33,6 @@ random seed and the version of the software that produced it.
 - **Git**.
 - About **30 GB** of free disk space for the images (the two R method images
   are about 13 GB each) and **8 GB** of memory for Docker.
-- Access to the ClonalTree source, a private git submodule
-  (`smhamidi/clonotype`): your GitHub account must be allowed to read it.
 
 Nothing else. Node, Python and R are needed only to develop or to run the
 tests.
@@ -42,7 +40,7 @@ tests.
 ## Quick start on your own machine
 
 ```bash
-git clone --recurse-submodules git@github.com:Kiana8181/phylo-framework.git
+git clone git@github.com:Kiana8181/phylo-framework.git
 cd phylo-framework
 cp .env.example .env
 docker compose --profile dev up -d --build
@@ -54,8 +52,6 @@ Then open **http://localhost:3000**.
   downloaded and several packages are compiled. Later starts take seconds.
 - The example values in `.env` are enough for a local start. They are public,
   so they are refused in production.
-- Already cloned without `--recurse-submodules`? Run
-  `git submodule update --init --recursive`.
 
 **What happens at the first start**, without any further command: the database
 is created and brought to the newest schema, both storage buckets and the
@@ -83,7 +79,7 @@ start with the example secrets. The server needs Docker with Compose 2.17+ and
 nothing else.
 
 ```bash
-git clone --recurse-submodules git@github.com:Kiana8181/phylo-framework.git
+git clone git@github.com:Kiana8181/phylo-framework.git
 cd phylo-framework
 cp .env.example .env     # then set the values listed below
 ./run.sh check           # can it start? changes nothing
@@ -161,7 +157,6 @@ administrator most often decides on:
 | Symptom | Cause and fix |
 |---|---|
 | `required variable … is missing a value` | `.env` is missing or incomplete. `cp .env.example .env`, or set the variable named in the message |
-| The clone or the ClonalTree build fails | The private submodule was not fetched. `git submodule update --init --recursive`, with an account that may read it |
 | A production container keeps restarting; its log says "Refusing to start" | A secret still has its example value, or `JWT_SECRET_KEY` is shorter than 32 characters. The log names the variables |
 | `network proxy_net declared as external, but could not be found` | The reverse proxy's network does not exist. On a server ask whoever runs the proxy; on a test machine `docker network create proxy_net` |
 | `port is already allocated` at a local start | Something else uses 3000 or 8000. Set `WEB_PORT` / `API_PORT` in `.env`, and `NEXT_PUBLIC_API_BASE_URL`, `PUBLIC_API_BASE_URL`, `CORS_ORIGINS` and `FRONTEND_URL` to match, then start again with `--build` |
@@ -237,7 +232,7 @@ image and retains the licence of its upstream project:
 | Component | Upstream project |
 |---|---|
 | GCtree | [matsengrp/gctree](https://github.com/matsengrp/gctree) |
-| ClonalTree | [smhamidi/clonotype](https://github.com/smhamidi/clonotype) (pinned git submodule; publication/access remains an owner action) |
+| ClonalTree | [smhamidi/clonotype](https://github.com/smhamidi/clonotype) (copied unchanged into `services/clonaltree/base-codes/` from upstream commit `1122537`, with its MIT licence) |
 | Dowser | [Immcantation](https://immcantation.readthedocs.io/) suite |
 | BrepPhylo | [Fraternalilab/BrepPhylo](https://github.com/Fraternalilab/BrepPhylo) |
 | PHYLIP (`dnapars`) | [PHYLIP 3.697](https://phylipweb.github.io/phylip/) |
