@@ -31,7 +31,7 @@ PORT_VARIABLES = {
 }
 PROD_SERVICES = ["api-prod", "api-worker-prod", "brepphylo", "clonaltree", "dowser", "gctree", "minio",
                  "minio-init", "postgres", "web-prod"]
-SYSTEM_PATH = "/usr/bin:/bin"          # sh, awk, sed, od, env; neither docker nor node
+SYSTEM_PATH = "/usr/bin:/bin"          # sh, awk, sed, od, env; no node (docker: see run())
 
 STUB_DOCKER = r"""#!/bin/sh
 # Stand-in for docker: records each call, answers from the environment.
@@ -86,8 +86,21 @@ class Deployment:
         (self.stub / "services").write_text("\n".join(PROD_SERVICES) + "\n")
         (self.stub / "inside").write_text(INSIDE_OK)
 
+    def system_path_without_docker(self) -> str:
+        """SYSTEM_PATH with any real docker left out: Linux installs it in
+        /usr/bin itself (GitHub runners do), so that PATH alone does not hide it."""
+        hidden = self.stub / "no-docker-bin"
+        if not hidden.exists():
+            hidden.mkdir()
+            for directory in SYSTEM_PATH.split(":"):
+                for tool in Path(directory).iterdir():
+                    link = hidden / tool.name
+                    if not tool.name.startswith("docker") and not os.path.lexists(link):
+                        link.symlink_to(tool)
+        return str(hidden)
+
     def run(self, *command: str, docker: bool = True, **env: str) -> subprocess.CompletedProcess:
-        path = f"{self.stub / 'bin'}:{SYSTEM_PATH}" if docker else SYSTEM_PATH
+        path = f"{self.stub / 'bin'}:{SYSTEM_PATH}" if docker else self.system_path_without_docker()
         (self.stub / "calls.log").write_text("")
         return subprocess.run(list(command), cwd=self.repo, capture_output=True, text=True, stdin=subprocess.DEVNULL,
                               env={"PATH": path, "STUB_DIR": str(self.stub), "HOME": str(self.stub), **env})

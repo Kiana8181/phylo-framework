@@ -194,6 +194,9 @@ def _fake_cgroup(tmp_path, monkeypatch, *, cpus, memory_mb, in_use_mb, **tunable
     (root / "memory.current").write_text(f"{in_use_mb * MIB}\n")
     (root / "memory.stat").write_text("inactive_file 0\n")
     monkeypatch.setenv("PHYLO_CGROUP_ROOT", str(root))
+    # The faked quota is the limit under test: without this the machine's own
+    # CPU count caps it first (2 on a GitHub runner, so 4 or 2.5 became 2).
+    monkeypatch.setattr(sys.modules["resource_limits"], "host_cpus", lambda: 64)
     for name in ("METHOD_MAX_CONCURRENT_JOBS", "METHOD_THREADS_PER_JOB", "METHOD_JOB_MEMORY_MB",
                  "METHOD_BASELINE_MEMORY_MB", "METHOD_MEMORY_HEADROOM_PERCENT", "METHOD_CPU_LIMIT"):
         monkeypatch.delenv(name, raising=False)
