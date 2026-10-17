@@ -133,6 +133,15 @@ def limits_on(monkeypatch):
     monkeypatch.setenv("AUTH_RATE_LIMITS_ENABLED", "true")
     for name in rate_limit.DEFAULTS:
         monkeypatch.delenv(f"AUTH_LIMIT_{name}", raising=False)
+    # Windows are aligned to the clock, so a test running across a boundary
+    # (19:59:59 -> 20:00:00) got a fresh window mid-test and one event too many.
+    # Start the limiter's clock at the next 00:00 UTC, the start of a window for
+    # every size used here; it still follows time.time, so tests that move the
+    # clock on still reach later windows. Forward, so cleanup keeps live rows.
+    offset = 86400 - time.time() % 86400
+    window = rate_limit._window
+    monkeypatch.setattr(rate_limit, "_window",
+                        lambda seconds, now=None: window(seconds, time.time() + offset if now is None else now))
 
 
 @pytest.fixture
