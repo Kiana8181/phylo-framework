@@ -1,0 +1,49 @@
+# Applied after docker-compose.test.yml by the system tests (tests/system,
+# `npm run test:system`). Still the isolated `phylo-tests` project with its
+# throwaway volumes; what it adds is what makes limits, memory kills and
+# restarts behave as on the server:
+#   - the method services get a restart policy, an init process and container
+#     limits (memory as in docker-compose.yml's default plan, swap disabled);
+#   - the API and the worker come back after a crash.
+# Individual tests tighten single values further through a generated override.
+services:
+  # The plain test stack keeps the database in memory, which a restart would
+  # wipe. Here it lives in a (throwaway) volume, as on a server, so that a
+  # database restart can be tested. `!reset` needs Docker Compose 2.24+.
+  postgres:
+    restart: unless-stopped
+    tmpfs: !reset []
+    volumes:
+      - system-pgdata:/var/lib/postgresql/data
+  api:
+    restart: unless-stopped
+  worker:
+    restart: unless-stopped
+  gctree:
+    restart: unless-stopped
+    init: true
+    cpus: "1.0"
+    mem_limit: 778m
+    memswap_limit: 778m
+    pids_limit: 768
+  clonaltree:
+    restart: unless-stopped
+    init: true
+    cpus: "1.0"
+    mem_limit: 584m
+    memswap_limit: 584m
+    pids_limit: 768
+  dowser:
+    restart: unless-stopped
+    cpus: "1.0"
+    mem_limit: 2448m
+    memswap_limit: 2448m
+    pids_limit: 1024
+  brepphylo:
+    restart: unless-stopped
+    cpus: "1.0"
+    mem_limit: 2448m
+    memswap_limit: 2448m
+    pids_limit: 1024
+volumes:
+  system-pgdata:

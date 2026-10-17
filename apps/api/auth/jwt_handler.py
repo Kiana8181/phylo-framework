@@ -1,14 +1,42 @@
 from __future__ import annotations
 
+import logging
 import os
-from datetime import datetime, timedelta
+import secrets
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import UUID
 
-from jose import JWTError, jwt
+import jwt
+
+from apps.api.config import IS_PRODUCTION
+
+logger = logging.getLogger(__name__)
+
+
+def _load_signing_key() -> str:
+    """Return the JWT signing key; there is deliberately no built-in default.
+
+    A hard-coded fallback would let anyone who has read this repository forge
+    tokens for any deployment that forgot to set the variable. Production
+    refuses to start without a key (see security/production_config.py). Outside
+    production an unset key becomes a random per-process key: everything works,
+    but tokens stop being valid when the process restarts.
+    """
+    key = (os.getenv("JWT_SECRET_KEY") or "").strip()
+    if key:
+        return key
+    if IS_PRODUCTION:
+        raise RuntimeError("JWT_SECRET_KEY must be set in production")
+    logger.warning(
+        "JWT_SECRET_KEY is not set; using a random key for this process only. "
+        "Set it in .env to keep sessions valid across restarts."
+    )
+    return secrets.token_urlsafe(48)
+
 
 # JWT Configuration
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-secret-key-change-in-production")
+JWT_SECRET_KEY = _load_signing_key()
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 JWT_ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
 JWT_REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("JWT_REFRESH_TOKEN_EXPIRE_DAYS", "7"))
@@ -27,11 +55,12 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     """
     to_encode = data.copy()
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = datetime.now(timezone.utc) + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(minutes=JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
+        expire = datetime.now(timezone.utc) + timedelta(minutes=JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
     
-    to_encode.update({"exp": expire, "type": "access"})
+    # iat lets a session be recognised as older than a password reset.
+    to_encode.update({"exp": expire, "iat": datetime.now(timezone.utc), "type": "access"})
     encoded_jwt = jwt.encode(to_encode, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
     return encoded_jwt
 
@@ -47,8 +76,8 @@ def create_refresh_token(data: dict) -> str:
         Encoded JWT refresh token
     """
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(days=JWT_REFRESH_TOKEN_EXPIRE_DAYS)
-    to_encode.update({"exp": expire, "type": "refresh"})
+    expire = datetime.now(timezone.utc) + timedelta(days=JWT_REFRESH_TOKEN_EXPIRE_DAYS)
+    to_encode.update({"exp": expire, "iat": datetime.now(timezone.utc), "type": "refresh"})
     encoded_jwt = jwt.encode(to_encode, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
     return encoded_jwt
 
@@ -64,9 +93,11 @@ def decode_token(token: str) -> Optional[dict]:
         Decoded token payload or None if invalid
     """
     try:
+        # `algorithms` is an explicit allow-list: a token signed with any other
+        # algorithm (including "none") is rejected.
         payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
         return payload
-    except JWTError:
+    except jwt.PyJWTError:
         return None
 
 
@@ -87,3 +118,16 @@ def get_user_id_from_token(token: str) -> Optional[UUID]:
         except (ValueError, TypeError):
             return None
     return None
+
+
+def issued_before(payload: dict, moment: Optional[datetime]) -> bool:
+    """True when the token was issued before ``moment`` (a token without an
+    issue time counts as older than any moment)."""
+    if moment is None:
+        return False
+    issued = payload.get("iat")
+    if not isinstance(issued, (int, float)):
+        return True
+    # JWT times are whole seconds: compare at that precision, or a token issued
+    # in the same second as the cut-off would be refused.
+    return int(issued) < int(moment.timestamp())

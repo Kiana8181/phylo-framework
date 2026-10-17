@@ -4,5 +4,8 @@
   "jobs": "/jobs",
   "jobStatus": "/jobs/{job_id}/status",
   "jobResult": "/jobs/{job_id}/result",
-  "jobCancel": "/jobs/{job_id}/cancel"
+  "jobCancel": "/jobs/{job_id}/cancel",
+  "capacity": "/capacity",
+  "jobLog": "/jobs/{job_id}/log",
+  "job": "/jobs/{job_id}"
 }

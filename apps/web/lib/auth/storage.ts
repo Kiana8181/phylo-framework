@@ -1,8 +1,23 @@
 const AUTH_ACCESS = "phylo_access_token";
 const AUTH_REFRESH = "phylo_refresh_token";
 const AUTH_USER = "phylo_user";
+/** sessionStorage key for the OAuth `state` of a sign-in started in this tab. */
+export const OAUTH_STATE_KEY = "phylo_oauth_state";
 
-export type StoredUser = { id: string; email: string; username: string };
+export type StoredUser = {
+  id: string;
+  email: string;
+  username: string;
+  /** Whether the email address has been confirmed. */
+  email_verified?: boolean;
+  /** Whether this deployment asks for confirmed addresses before uploads and runs. */
+  verification_required?: boolean;
+};
+
+/** True when the account still has to confirm its address before it may upload or run. */
+export function needsEmailVerification(user: StoredUser | null | undefined): boolean {
+  return !!user && user.verification_required === true && user.email_verified === false;
+}
 
 export function getAccessToken(): string | null {
   if (typeof window === "undefined") return null;

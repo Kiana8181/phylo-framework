@@ -29,6 +29,8 @@ async def test_storage_contract(backend, tmp_path):
     try:
         assert await backend.upload(b'ACGT\nACGA', key, 'text/plain') == key
         assert await backend.exists(key)
+        assert (await backend.stat(key)).size_bytes == 9
+        assert await backend.stat(key + '.absent') is None
         assert await backend.download(key) == b'ACGT\nACGA'
         chunks = [c async for c in backend.stream_download(key, chunk_size=3)]
         assert chunks == [b'ACG', b'T\nA', b'CGA']
@@ -72,3 +74,43 @@ async def test_local_storage_rejects_path_escape(tmp_path, key):
     with pytest.raises(ValueError):
         await storage.upload(b'bad', key)
     assert not (tmp_path / 'escape').exists()
+
+
+@pytest.mark.integration
+async def test_delete_prefix_contract(backend):
+    """Retention removes a run's files by prefix: all of them, only them, repeatably."""
+    root = f'prefix-{uuid4()}'
+    mine = [f'{root}/run-1/job/a.zip', f'{root}/run-1/job/b.log', f'{root}/run-1/other/c.png']
+    others = [f'{root}/run-10/job/keep.zip', f'{root}/run-2/job/keep.zip']
+    try:
+        for key in mine + others:
+            await backend.upload(b'x', key)
+        assert await backend.delete_prefix(f'{root}/run-1/') == 3
+        for key in mine:
+            assert not await backend.exists(key)
+        for key in others:
+            assert await backend.exists(key)
+        assert await backend.delete_prefix(f'{root}/run-1/') == 0
+        assert await backend.delete_prefix(f'{root}/never-there/') == 0
+        for empty in ('', '/'):
+            with pytest.raises(ValueError):
+                await backend.delete_prefix(empty)
+    finally:
+        for key in mine + others:
+            await backend.delete(key)
+
+
+@pytest.mark.integration
+async def test_delete_prefix_reports_a_store_that_cannot_be_reached():
+    """Unlike delete(), which answers False: the caller must know the files may still exist."""
+    s3 = S3Storage('phylo-tests', access_key_id='x', secret_access_key='y',
+                   endpoint_url='http://127.0.0.1:59999', force_path_style=True)
+    with pytest.raises(Exception):
+        await s3.delete_prefix('artifacts/some-run/')
+    # The MinIO client cannot even be created without its store, so take a
+    # working one and point it somewhere nothing answers.
+    minio = MinIOStorage('127.0.0.1:59000', 'phylo_test', 'phylo_test_secret', 'phylo-tests', secure=False)
+    from minio import Minio
+    minio.client = Minio('127.0.0.1:59999', access_key='x', secret_key='y', secure=False)
+    with pytest.raises(Exception):
+        await minio.delete_prefix('artifacts/some-run/')

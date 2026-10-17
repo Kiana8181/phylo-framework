@@ -16,12 +16,15 @@ export default function ParametersStep({
   defaults,
   onRun,
   onBack,
+  runBlockedReason,
 }: {
   spec: MethodSpec;
   chosen: ChosenInput;
   defaults?: Record<string, unknown>;
   onRun: (values: Record<string, unknown>) => void | Promise<void>;
   onBack: () => void;
+  /** Set while a run limit is reached: the Run button is disabled and says why. */
+  runBlockedReason?: string | null;
 }) {
   const schema = useMemo(
     () => ({ ...(spec.paramSchema ?? {}), uiHints: spec.uiHints }),
@@ -73,7 +76,14 @@ export default function ParametersStep({
         </Button>
       </div>
 
-      <FormBuilder schema={schema} defaults={defaults} onSubmit={onRun} context={context} />
+      <FormBuilder
+        schema={schema}
+        defaults={defaults}
+        onSubmit={onRun}
+        context={context}
+        submitDisabled={!!runBlockedReason}
+        submitDisabledReason={runBlockedReason ?? undefined}
+      />
     </div>
   );
 }

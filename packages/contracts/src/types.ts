@@ -41,6 +41,43 @@ export type DashboardRunsResponse = {
   };
 };
 
+/** Use of one rolling 60-minute limit. */
+export type RunQuotaWindow = {
+  /** Null when the limit is switched off. */
+  limit: number | null;
+  used: number;
+  remaining: number | null;
+  window_seconds: number;
+  /** Set only while the limit is reached: when one more run becomes possible (ISO 8601). */
+  reset_at: string | null;
+  retry_after_seconds: number | null;
+};
+
+/** Why a new run would be refused right now. */
+export type RunLimitCode = "RUN_QUOTA_EXCEEDED" | "RUN_SUBMISSION_LIMIT_EXCEEDED" | "QUEUE_FULL";
+
+/** GET /runs/quota: where the user stands against the limits on creating runs.
+ *  POST /runs applies the same rules. */
+export type RunQuotaResponse = {
+  can_submit: boolean;
+  blocked_by: RunLimitCode | null;
+  /** Explanation for the user while blocked. */
+  message: string | null;
+  /** Seconds until submitting can work again; null when a run has to finish first (full queue). */
+  retry_after_seconds: number | null;
+  /** Runs that count against the hourly quota (runs that never started do not). */
+  hourly: RunQuotaWindow;
+  /** Every run created in the window, including cancelled ones. */
+  submissions: RunQuotaWindow;
+  queue: {
+    max_queued: number;
+    queued_count: number;
+    unfinished: number;
+    can_add: boolean;
+  };
+  server_time: string;
+};
+
 export type RunParams = Record<string, unknown>;
 
 export type RunDatasetMeta = {
@@ -61,6 +98,12 @@ export type RunSummary = {
   created_at: string | null;
   started_at?: string | null;
   finished_at?: string | null;
+  /** When the stored results (files, trees, logs) are removed; null when they are kept for ever
+   *  or the run has not ended. ISO 8601. */
+  expires_at?: string | null;
+  /** True once the results have been removed. The run itself stays as history. */
+  results_expired?: boolean;
+  results_expired_at?: string | null;
 };
 
 export type FileSummary = {
@@ -102,6 +145,21 @@ export type RunStatus = {
     message?: string;
     details?: Record<string, unknown>;
   };
+  /** When the stored results (files, trees, logs) are removed; null when they are kept for ever
+   *  or the run has not ended. ISO 8601. */
+  expires_at?: string | null;
+  /** True once the results have been removed. The run itself stays as history. */
+  results_expired?: boolean;
+  results_expired_at?: string | null;
+};
+
+/** GET /uploads/limits: what the user may still upload. */
+export type UploadLimitsResponse = {
+  /** Largest single file accepted. */
+  max_upload_bytes: number;
+  quota_bytes: number;
+  used_bytes: number;
+  remaining_bytes: number;
 };
 
 export type UploadInitResponse = {
@@ -272,13 +330,18 @@ export type RunTables = {
   [key: string]: any;
 };
 
+/** Which upstream version of the ClonalTree pipeline (smhamidi/clonotype) produced a run. */
+export type ClonotypeRef = {
+  tag?: string | null;
+  commit?: string | null;
+  ref?: string | null;
+  [key: string]: any;
+};
+
 export type RunProvenance = {
-  clonotype_submodule?: {
-    tag?: string | null;
-    commit?: string | null;
-    ref?: string | null;
-    [key: string]: any;
-  };
+  clonotype_source?: ClonotypeRef;
+  /** Same information under its earlier name, in runs stored before the rename. */
+  clonotype_submodule?: ClonotypeRef;
   muscle?: {
     major?: number | null;
     version_raw?: string | null;
@@ -314,7 +377,7 @@ export type VersionInfoService = {
 /**
  * Environment identity recorded with a run.
  *
- * Written by `scripts/generate-version-info.mjs` at build/deploy time and
+ * Written by `scripts/generate_version_info.py` when the API image is built and
  * copied into the result when the run is persisted. Optional throughout: runs
  * recorded before this feature carry no `version_info`, and any field the
  * deployment could not determine is `null` with a reason in `unavailable`.
@@ -700,4 +763,10 @@ export type RunResult = {
   artifact_count?: number;
   started_at?: string | null;
   finished_at?: string | null;
+  /** When the stored results (files, trees, logs) are removed; null when they are kept for ever
+   *  or the run has not ended. ISO 8601. */
+  expires_at?: string | null;
+  /** True once the results have been removed. The run itself stays as history. */
+  results_expired?: boolean;
+  results_expired_at?: string | null;
 };

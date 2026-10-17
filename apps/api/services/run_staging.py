@@ -116,6 +116,12 @@ async def run_work_dir(run_id: UUID) -> Path:
     return await asyncio.to_thread(_run_work_dir_sync, run_id)
 
 
+def run_work_root(run_id: UUID) -> Path:
+    """Parent of every work directory created for a run. Lets the caller clean
+    up after a preparation that never returned its own directory."""
+    return runtime_shared_root_host() / "runs" / str(run_id) / "work"
+
+
 def _path_is_file(p: Path) -> bool:
     return p.is_file()
 
@@ -150,6 +156,14 @@ def cleanup_workspace(workspace: Path | None, run_id: UUID) -> None:
         return
 
     shutil.rmtree(workspace, ignore_errors=True)
+    # Leave no empty directories behind for the run either.
+    for parent in (allowed_root, allowed_root.parent):
+        try:
+            parent.rmdir()
+        except FileNotFoundError:
+            continue         # already gone (the work root itself was the workspace)
+        except OSError:
+            break            # not empty: another work directory of this run is in use
 
 
 # --------------------------------------------------------------------------- #

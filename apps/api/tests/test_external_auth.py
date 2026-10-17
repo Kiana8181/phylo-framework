@@ -36,8 +36,28 @@ async def test_exchange_uses_access_token_and_maps_identity(google_http):
     responses, requests = google_http
     responses.extend([(200, {'access_token': 'external-access'}), (200, {'sub': '123', 'email': 'test@example.org', 'name': 'Test'})])
     result = await google.exchange_google_code('code')
-    assert result == {'google_id': '123', 'email': 'test@example.org', 'name': 'Test', 'picture': None}
+    # Google said nothing about the address being confirmed: it is not assumed.
+    assert result == {'google_id': '123', 'email': 'test@example.org', 'name': 'Test', 'picture': None,
+                      'email_verified': False}
     assert requests[1].headers['Authorization'] == 'Bearer external-access'
+
+
+@pytest.mark.parametrize('reported,expected', [(True, True), ('true', True), (False, False), ('false', False), (None, False)])
+async def test_google_identity_carries_whether_google_confirmed_the_address(google_http, reported, expected):
+    responses, _ = google_http
+    info = {'sub': '1', 'email': 'a@example.org'}
+    if reported is not None:
+        info['email_verified'] = reported
+    responses.extend([(200, {'access_token': 't'}), (200, info)])
+    assert (await google.exchange_google_code('code'))['email_verified'] is expected
+
+
+def test_authorization_url_carries_the_state(monkeypatch):
+    from urllib.parse import parse_qs, urlparse
+    monkeypatch.setattr(google, 'GOOGLE_CLIENT_ID', 'client')
+    query = parse_qs(urlparse(google.get_google_oauth_url('signed-state-value')).query)
+    assert query['state'] == ['signed-state-value']
+    assert 'state' not in parse_qs(urlparse(google.get_google_oauth_url()).query)
 
 
 @pytest.mark.parametrize('response', [(400, {}), (200, {}), httpx.ConnectError('offline')])

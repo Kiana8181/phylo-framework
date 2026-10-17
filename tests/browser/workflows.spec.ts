@@ -1,17 +1,5 @@
-import { test, expect, type Page } from './fixtures';
-import { randomUUID } from 'node:crypto';
+import { test, expect, signup, runStatus } from './fixtures';
 const api = 'http://127.0.0.1:58000';
-
-async function signup(page: Page) {
-  const tag = randomUUID().replaceAll('-', '');
-  await page.goto('/auth?mode=signup');
-  await page.getByLabel('Email', {exact: true}).fill(`${tag}@example.org`);
-  await page.getByLabel('Username', {exact: true}).fill(tag);
-  await page.getByLabel('Password', {exact: true}).fill('browser-password-123');
-  await page.getByRole('button', {name: 'Sign up', exact: true}).click();
-  await expect(page).toHaveURL(/\/dashboard/);
-  return {email: `${tag}@example.org`, password: 'browser-password-123'};
-}
 
 test('protected dashboard redirects; real signup and login persist across reload', async ({page}) => {
   await page.goto('/dashboard');
@@ -62,10 +50,8 @@ test(`documented ${method} example completes and renders its tree`, async ({page
   expect(response.ok()).toBe(true);
   const {run_id} = await response.json();
   const token = await page.evaluate(() => localStorage.getItem('phylo_access_token'));
-  await expect.poll(async () => {
-    const status = await page.request.get(`${api}/runs/${run_id}/status`, {headers: {Authorization: `Bearer ${token}`}});
-    return (await status.json()).status;
-  }, {timeout: 150_000, intervals: [500, 1000]}).toBe('DONE');
+  await expect.poll(async () => (await runStatus(page.request, run_id, token)).status,
+    {timeout: 150_000, intervals: [500, 1000]}).toBe('DONE');
   await page.goto(`/dashboard?runId=${run_id}`);
   await expect(page.getByRole('heading', {name: 'Results', exact: true})).toBeVisible();
   await expect(page.getByText('Downloads', {exact: true})).toBeVisible();

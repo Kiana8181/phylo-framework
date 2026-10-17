@@ -14,7 +14,16 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.fixture
-async def queued(session, account, monkeypatch):
+def artifact_store(tmp_path, monkeypatch):
+    """The artifact bucket the worker verifies uploads against (on disk here)."""
+    from apps.api.storage.local_storage import LocalStorage
+    store = LocalStorage(str(tmp_path / 'artifact-bucket'))
+    monkeypatch.setattr(worker, '_artifact_storage', store)
+    return store
+
+
+@pytest.fixture
+async def queued(session, account, monkeypatch, artifact_store):
     monkeypatch.setattr(worker, 'AsyncSessionLocal', async_sessionmaker(session.bind, expire_on_commit=False))
     monkeypatch.setattr(worker, 'METHOD_POLL_INTERVAL', 0)
     repo = RunRepository(session)
@@ -38,12 +47,17 @@ async def fresh(session, run_id):
     return await RunRepository(session).get_by_id(run_id)
 
 
-async def test_worker_recovers_transient_poll_failure_persists_trees_and_artifacts(session, queued, monkeypatch):
+async def test_worker_recovers_transient_poll_failure_persists_trees_and_artifacts(session, queued, monkeypatch, artifact_store):
+    await artifact_store.upload(b'(a:1,b:2)root:0;\n\n', 'runs/test/tree.nwk')
+    await artifact_store.upload(b'zip', 'runs/test/bundle.zip')
     mock_jobs(monkeypatch, [RuntimeError('transient network failure'),
         JobStatus(True, 'job-1', 'RUNNING', stage='BUILDING_TREES', progress=50),
         JobStatus(True, 'job-1', 'DONE')], {
         'ok': True, 'trees': ['(a:1,b:2)root:0;'], 'manifest_version': 1,
-        'artifacts': [{'object_key': 'runs/test/tree.nwk', 'filename': 'tree.nwk', 'size_bytes': 18, 'kind': 'newick'}],
+        'logs': [{'step': 'gctree.infer', 'ok': True, 'out': 'done'}],
+        'artifacts': [{'object_key': 'runs/test/tree.nwk', 'filename': 'tree.nwk', 'size_bytes': 18, 'kind': 'newick'},
+                      {'object_key': 'runs/test/bundle.zip', 'filename': 'bundle.zip', 'size_bytes': 3,
+                       'kind': 'zip', 'role': 'clone_bundle_zip'}],
     })
     await worker.process_run(queued, 'test-worker')
     run = await fresh(session, queued)
@@ -54,8 +68,7 @@ async def test_worker_recovers_transient_poll_failure_persists_trees_and_artifac
     assert len(trees) == 1
     assert trees[0].newick == '(a:1,b:2)root:0;'
     artifacts = (await session.execute(select(RunArtifact).where(RunArtifact.run_id == queued))).scalars().all()
-    assert len(artifacts) == 1
-    assert artifacts[0].object_key == 'runs/test/tree.nwk'
+    assert sorted(a.object_key for a in artifacts) == ['runs/test/bundle.zip', 'runs/test/tree.nwk']
     assert 'newick' not in run.result['trees'][0]
 
 
@@ -103,3 +116,23 @@ async def test_missing_method_service_marks_error_and_promotes_next(session, que
     await worker.process_run(queued, 'test-worker')
     assert (await fresh(session, queued)).status == RunStatus.ERROR
     assert (await fresh(session, waiting_id)).dispatch_seq is not None
+
+
+async def test_unexpected_worker_fault_stores_a_reference_not_the_exception(session, queued, monkeypatch, caplog):
+    """An orchestration fault is shown to the run owner, so it must not carry
+    internal detail; the cause stays in the worker log under the same reference."""
+    import logging
+    import re
+
+    internal = 'could not connect to 10.0.0.7:5432 as phylo_app'
+    monkeypatch.setattr(worker.jobs, 'submit_job', AsyncMock(side_effect=RuntimeError(internal)))
+    with caplog.at_level(logging.ERROR, logger='phylo.api.errors'):
+        await worker.process_run(queued, 'test-worker')
+    run = await fresh(session, queued)
+    assert run.status == RunStatus.ERROR
+    stored = ' '.join(str(v) for v in (run.error, run.message, run.stage_message, run.result))
+    assert internal not in stored
+    reference = re.search(r'reference ([0-9a-f]{12})', run.message).group(1)
+    record = next(r for r in caplog.records if reference in r.getMessage())
+    assert internal in str(record.exc_info[1])
+    assert str(queued) in record.getMessage()

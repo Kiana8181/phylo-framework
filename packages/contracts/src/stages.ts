@@ -16,7 +16,13 @@ export type StageNode = {
 };
 
 // Outer orchestration stages owned by the API/worker (common to all methods).
-const QUEUED: StageNode = { id: "QUEUED", label: "Queued" };
+// WAITING_FOR_CAPACITY is a queued run whose method service has no free job
+// slot (or not enough free memory) right now; the status message says why.
+const QUEUED: StageNode = {
+  id: "QUEUED",
+  label: "Queued",
+  aliases: ["WAITING_FOR_CAPACITY"],
+};
 // All the instant setup stages the user never perceives individually collapse
 // into one "Preparing input" step (covers API staging + method-side setup).
 const PREPARING: StageNode = {

@@ -8,3 +8,7 @@ untracked, non-ignored path in bytewise-sorted order as
 `UNTRACKED\0<path>\0<file-bytes>`. This evidence file is excluded from its own
 digest. The stream includes the pre-existing `package-lock.json` modification,
 which was preserved.
+
+Note (2026-10-13): the base commit id above is from before the repository history
+was rewritten and no longer exists. By its position (the first commit after tag
+v2.1.0) it corresponds to 4d8946ef9be57069b06d57f452816485583f04fd.

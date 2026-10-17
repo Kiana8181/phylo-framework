@@ -10,8 +10,9 @@ type RepRow = Record<string, unknown>;
 
 function provenanceFacts(p?: RunProvenance) {
   if (!p) return [];
+  const pipeline = p.clonotype_source ?? p.clonotype_submodule;
   return [
-    { label: "Clonotype submodule", value: p.clonotype_submodule?.tag ?? p.clonotype_submodule?.commit ?? p.clonotype_submodule?.ref },
+    { label: "ClonalTree pipeline", value: pipeline?.tag ?? pipeline?.ref ?? pipeline?.commit },
     { label: "MUSCLE", value: p.muscle?.version_raw ?? p.muscle?.major },
     { label: "Container", value: p.container?.image_ref ?? p.container?.image_digest },
   ];

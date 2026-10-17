@@ -1,6 +1,10 @@
 -r apps/api/requirements.txt
+-c apps/api/requirements.lock
 pytest==8.4.1
 pytest-asyncio==1.1.0
 pytest-cov==6.2.1
 
 coverage==7.10.6
+# Only for tests/deployment/test_history_cleanup.py, which runs the history
+# rewrite script on throwaway repositories. Not used by the application.
+git-filter-repo==2.47.0

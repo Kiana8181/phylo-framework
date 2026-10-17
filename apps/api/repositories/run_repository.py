@@ -1,21 +1,40 @@
 from __future__ import annotations
 
-from typing import Optional, List
-from uuid import UUID
+from typing import Iterable, Optional, List
+from uuid import UUID, uuid4
 from datetime import date, datetime, timezone, timedelta
 
-from sqlalchemy import String, and_, case, cast, exists, func, or_, select, update
+from sqlalchemy import String, and_, case, cast, delete, exists, false, func, or_, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apps.api.database.models import Run, RunStatus, ACTIVE_RUN_STATUSES
+from apps.api.database.models import (
+    ACTIVE_RUN_STATUSES,
+    NotificationOutbox,
+    NotificationStatus,
+    Run,
+    RunStatus,
+    RunTree,
+)
 from apps.api.repositories.base_repository import BaseRepository
+from apps.api.services.retention import retention_period
 from apps.api.utils.datetime_util import utc_now
 
 TERMINAL_RUN_STATUSES = (RunStatus.DONE, RunStatus.ERROR, RunStatus.CANCELLED)
 
 # Postgres sequence backing the global dispatch order (see migration 009).
 DISPATCH_SEQ = "runs_dispatch_seq"
+# Outbox entry written when a run ends by itself (see NotificationOutbox).
+NOTIFICATION_RUN_FINISHED = "run_finished"
+OUTCOME_DONE = "DONE"
+OUTCOME_ERROR = "ERROR"
+OUTCOME_QUEUE_TIMEOUT = "QUEUE_TIMEOUT"
+
+# First key of the advisory lock that serializes one user's run creation
+# (the second key is a hash of the user id). Any fixed number; it only has to
+# differ from other advisory locks this application takes.
+RUN_CREATION_LOCK_NAMESPACE = 7306
 
 
 class RunRepository(BaseRepository[Run]):
@@ -78,6 +97,32 @@ class RunRepository(BaseRepository[Run]):
         )
         return int(result.scalar() or 0)
 
+    async def lock_run_creation(self, user_id: UUID) -> None:
+        """Serialize run creation for one user until this transaction ends.
+
+        Limit checks and the insert that follows must not interleave with
+        another request of the same user, or both could pass a check that only
+        one of them should. Other users are not affected.
+        """
+        await self.session.execute(
+            select(func.pg_advisory_xact_lock(RUN_CREATION_LOCK_NAMESPACE, func.hashtext(str(user_id))))
+        )
+
+    async def recent_run_creations(self, user_id: UUID, since: datetime) -> List[tuple[datetime, bool]]:
+        """Creation time of every run the user created after ``since``, oldest
+        first, each with whether it ended without ever starting (cancelled
+        while queued, or expired in the queue)."""
+        never_started = and_(
+            Run.started_at.is_(None),
+            Run.status.in_((RunStatus.CANCELLED, RunStatus.ERROR)),
+        )
+        result = await self.session.execute(
+            select(Run.created_at, never_started)
+            .where(Run.user_id == user_id, Run.created_at > since)
+            .order_by(Run.created_at.asc(), Run.id.asc())
+        )
+        return [(row[0], bool(row[1])) for row in result.all()]
+
     async def get_active_turn_run_for_user(self, user_id: UUID) -> Optional[Run]:
         """The user's active-turn run: RUNNING, or QUEUED with dispatch_seq assigned."""
         result = await self.session.execute(
@@ -136,7 +181,7 @@ class RunRepository(BaseRepository[Run]):
         stmt = (
             update(Run)
             .where(Run.id == candidate_id)
-            .values(dispatch_seq=func.nextval(DISPATCH_SEQ))
+            .values(dispatch_seq=func.nextval(DISPATCH_SEQ), dispatch_ready_at=func.now())
             .returning(Run)
         )
         run = (await self.session.execute(stmt)).scalar_one_or_none()
@@ -170,7 +215,7 @@ class RunRepository(BaseRepository[Run]):
                 Run.status == RunStatus.QUEUED,
                 Run.dispatch_seq.is_(None),
             )
-            .values(dispatch_seq=func.nextval(DISPATCH_SEQ))
+            .values(dispatch_seq=func.nextval(DISPATCH_SEQ), dispatch_ready_at=func.now())
             .returning(Run)
         )
         run = (await self.session.execute(stmt)).scalar_one_or_none()
@@ -213,19 +258,63 @@ class RunRepository(BaseRepository[Run]):
                 promoted += 1
         return promoted
 
+    @staticmethod
+    def _expiry_values() -> dict:
+        """What to set on a run that ends now: the date until which its results
+        are kept. Fixed here once; later changes of the retention setting do
+        not move it."""
+        period = retention_period()
+        return {"expires_at": func.now() + period} if period is not None else {}
+
+    async def _enqueue_run_notification(self, run_id: UUID, user_id: Optional[UUID], outcome: str) -> None:
+        """Record, in the current transaction, that the owner is owed an email
+        about this run. Does not commit. A run without an owner gets none, and a
+        run that already has one keeps it: the unique (run_id, kind) constraint
+        turns every repeat into a no-op, so no path can queue a second email."""
+        if user_id is None:
+            return
+        await self.session.execute(
+            pg_insert(NotificationOutbox)
+            .values(
+                id=uuid4(),
+                run_id=run_id,
+                user_id=user_id,
+                kind=NOTIFICATION_RUN_FINISHED,
+                outcome=outcome,
+                status=NotificationStatus.PENDING.value,
+            )
+            .on_conflict_do_nothing(index_elements=["run_id", "kind"])
+        )
+
     async def _terminal_update_and_promote(
-        self, run_id: UUID, **values
+        self, run_id: UUID, *, commit: bool = True, **values
     ) -> Optional[Run]:
         """Apply a terminal status update to a run and, atomically, promote the
         owner's next queued run. The promotion runs in a SAVEPOINT so a racing
         partial-unique violation rolls back only the promotion, never the terminal
         flip (durability of the terminal state is the priority).
+
+        ``commit=False`` leaves the transaction open, so the caller can write the
+        rows that belong to the terminal state (trees, artifacts) and make all of
+        it visible to readers in one commit.
         """
         owner_id = await self.session.scalar(
             select(Run.user_id).where(Run.id == run_id)
         )
+        if values.get("status") in TERMINAL_RUN_STATUSES:
+            values = {**self._expiry_values(), **values}
         stmt = update(Run).where(Run.id == run_id).values(**values).returning(Run)
         result = (await self.session.execute(stmt)).scalar_one_or_none()
+
+        # A run that ended by itself owes its owner one email. Written here, in
+        # the transaction of the status change: the two commit or roll back
+        # together. A cancelled run owes none.
+        if result is not None:
+            status = values.get("status")
+            if status == RunStatus.DONE:
+                await self._enqueue_run_notification(run_id, owner_id, OUTCOME_DONE)
+            elif status == RunStatus.ERROR:
+                await self._enqueue_run_notification(run_id, owner_id, OUTCOME_ERROR)
 
         if owner_id is not None:
             try:
@@ -234,7 +323,8 @@ class RunRepository(BaseRepository[Run]):
             except IntegrityError:
                 pass  # already promoted / raced; worker sweep is the backstop
 
-        await self.session.commit()
+        if commit:
+            await self.session.commit()
         return result
 
     async def get_by_user(
@@ -370,10 +460,134 @@ class RunRepository(BaseRepository[Run]):
         claimed = (await self.session.execute(stmt)).scalar_one_or_none()
         return claimed is not None
 
+    async def dispatch_ready_methods(self) -> List[str]:
+        """Method ids that have at least one promoted QUEUED run waiting for a worker."""
+        result = await self.session.execute(
+            select(Run.method_id)
+            .where(Run.status == RunStatus.QUEUED, Run.dispatch_seq.isnot(None))
+            .group_by(Run.method_id)
+        )
+        methods = [row[0] for row in result.all()]
+        await self.session.commit()
+        return methods
+
+    async def mark_waiting_for_capacity(self, reasons: dict[str, str]) -> int:
+        """Tell users why their dispatch-ready run has not started: its method
+        service has no free capacity. Only touches rows whose message changes,
+        so calling it every worker cycle is cheap. Returns rows updated."""
+        updated = 0
+        for method_id, reason in reasons.items():
+            stmt = (
+                update(Run)
+                .where(
+                    Run.status == RunStatus.QUEUED,
+                    Run.dispatch_seq.isnot(None),
+                    Run.method_id == method_id,
+                    or_(
+                        Run.stage.is_distinct_from("WAITING_FOR_CAPACITY"),
+                        Run.stage_message.is_distinct_from(reason),
+                    ),
+                )
+                .values(stage="WAITING_FOR_CAPACITY", stage_message=reason, message=reason)
+            )
+            updated += (await self.session.execute(stmt)).rowcount or 0
+        await self.session.commit()
+        return updated
+
+    async def release_for_capacity(self, run_id: UUID, worker_id: str, reason: str) -> bool:
+        """Hand a claimed run back to the queue because its method service could
+        not start it yet. Nothing was submitted, so nothing has executed: the run
+        keeps its dispatch position and its execution start is cleared."""
+        stmt = (
+            update(Run)
+            .where(
+                Run.id == run_id,
+                Run.worker_id == worker_id,
+                Run.status == RunStatus.RUNNING,
+                Run.method_job_id.is_(None),
+            )
+            .values(
+                status=RunStatus.QUEUED,
+                worker_id=None,
+                worker_lease_until=None,
+                started_at=None,
+                stage="WAITING_FOR_CAPACITY",
+                stage_message=reason,
+                message=reason,
+                progress=0,
+            )
+            .returning(Run.id)
+        )
+        released = (await self.session.execute(stmt)).scalar_one_or_none()
+        await self.session.commit()
+        return released is not None
+
+    async def expire_waiting_runs(
+        self, max_wait_seconds: float, *, error: str, message: str, result: dict
+    ) -> List[UUID]:
+        """Fail runs that have been ready to start for longer than
+        ``max_wait_seconds`` without getting a slot. Nothing has executed for
+        them: they are QUEUED, unclaimed and have no method job.
+
+        Each expired run becomes ERROR and its owner's next run is promoted.
+        Rows a worker is claiming right now are skipped (SKIP LOCKED) and picked
+        up on a later cycle if they are still waiting. Returns the expired ids.
+        """
+        cutoff = utc_now() - timedelta(seconds=max_wait_seconds)
+        candidates = (
+            select(Run.id)
+            .where(
+                Run.status == RunStatus.QUEUED,
+                Run.dispatch_seq.isnot(None),
+                Run.method_job_id.is_(None),
+                Run.worker_lease_until.is_(None),
+                func.coalesce(Run.dispatch_ready_at, Run.created_at) < cutoff,
+            )
+            .order_by(Run.dispatch_seq.asc())
+            .with_for_update(skip_locked=True)
+        )
+        ids = [row[0] for row in (await self.session.execute(candidates)).all()]
+        if not ids:
+            await self.session.commit()
+            return []
+
+        stmt = (
+            update(Run)
+            .where(Run.id.in_(ids), Run.status == RunStatus.QUEUED)
+            .values(
+                status=RunStatus.ERROR,
+                stage="ERROR",
+                error=error,
+                message=message,
+                stage_message=message,
+                progress=100,
+                result=result,
+                finished_at=func.now(),
+                worker_lease_until=None,
+                **self._expiry_values(),
+            )
+            .returning(Run.id, Run.user_id)
+        )
+        expired = (await self.session.execute(stmt)).all()
+        for expired_id, owner_id in expired:
+            # Its own outcome, so the email can say that the run never started.
+            await self._enqueue_run_notification(expired_id, owner_id, OUTCOME_QUEUE_TIMEOUT)
+        for _, owner_id in expired:
+            if owner_id is None:
+                continue
+            try:
+                async with self.session.begin_nested():
+                    await self._promote_next_locked(owner_id)
+            except IntegrityError:
+                pass  # raced; the worker's promotion sweep is the backstop
+        await self.session.commit()
+        return [row[0] for row in expired]
+
     async def claim_next_run(
         self,
         worker_id: str,
         lease_seconds: int = 120,
+        eligible_methods: Optional[Iterable[str]] = None,
     ) -> Optional[Run]:
         """Atomically claim the next runnable run for this worker.
 
@@ -383,26 +597,32 @@ class RunRepository(BaseRepository[Run]):
         order — so the FCFS-over-per-user-sub-queues discipline holds. Uses
         SELECT ... FOR UPDATE SKIP LOCKED so two workers never claim the same run.
 
+        ``eligible_methods`` restricts new work to methods that currently have
+        free capacity: a run for any other method stays QUEUED and is skipped,
+        without blocking runs behind it for methods that can start. A run whose
+        method job was already submitted is always resumable, because it is
+        occupying its slot already. ``None`` means no restriction.
+
         Commits the claim and returns the leased Run, or None when idle.
         """
         now = utc_now()
         lease_until = now + timedelta(seconds=lease_seconds)
 
+        queued = and_(Run.status == RunStatus.QUEUED, Run.dispatch_seq.isnot(None))
+        orphaned = and_(
+            Run.status == RunStatus.RUNNING,
+            Run.worker_lease_until.isnot(None),
+            Run.worker_lease_until < now,
+        )
+        if eligible_methods is not None:
+            eligible = sorted(set(eligible_methods))
+            has_capacity = Run.method_id.in_(eligible) if eligible else false()
+            queued = and_(queued, has_capacity)
+            orphaned = and_(orphaned, or_(Run.method_job_id.isnot(None), has_capacity))
+
         candidate_stmt = (
             select(Run.id)
-            .where(
-                or_(
-                    and_(
-                        Run.status == RunStatus.QUEUED,
-                        Run.dispatch_seq.isnot(None),
-                    ),
-                    and_(
-                        Run.status == RunStatus.RUNNING,
-                        Run.worker_lease_until.isnot(None),
-                        Run.worker_lease_until < now,
-                    ),
-                )
-            )
+            .where(or_(queued, orphaned))
             .order_by(Run.dispatch_seq.asc(), Run.id.asc())
             .limit(1)
             .with_for_update(skip_locked=True)
@@ -511,6 +731,7 @@ class RunRepository(BaseRepository[Run]):
                 cancel_requested_at=now,
                 finished_at=func.now(),
                 worker_lease_until=None,
+                **self._expiry_values(),
             )
             .returning(Run.id, Run.user_id)
         )
@@ -556,6 +777,7 @@ class RunRepository(BaseRepository[Run]):
                 cancel_requested_at=now,
                 finished_at=func.now(),
                 worker_lease_until=None,
+                **self._expiry_values(),
             )
             .returning(Run)
         )
@@ -593,10 +815,17 @@ class RunRepository(BaseRepository[Run]):
         await self.session.commit()
         return result.scalar_one_or_none()
 
-    async def mark_cancelled(self, run_id: UUID, message: Optional[str] = None) -> Optional[Run]:
-        """Finalize a run as CANCELLED, release the lease, and promote the owner's next run."""
-        return await self._terminal_update_and_promote(
-            run_id,
+    async def mark_cancelled(
+        self, run_id: UUID, message: Optional[str] = None, *, never_started: bool = False
+    ) -> Optional[Run]:
+        """Finalize a run as CANCELLED, release the lease, and promote the owner's next run.
+
+        ``never_started``: the run was cancelled after a worker took it but
+        before anything was submitted to its method service. Its execution
+        start is cleared, as it is for a run cancelled while still queued, so
+        the run does not count against the owner's hourly quota.
+        """
+        values: dict[str, object] = dict(
             status=RunStatus.CANCELLED,
             stage="CANCELLED",
             stage_message=message or "Run cancelled",
@@ -604,6 +833,9 @@ class RunRepository(BaseRepository[Run]):
             finished_at=func.now(),
             worker_lease_until=None,
         )
+        if never_started:
+            values["started_at"] = None
+        return await self._terminal_update_and_promote(run_id, **values)
 
     async def update_progress(
         self,
@@ -679,16 +911,46 @@ class RunRepository(BaseRepository[Run]):
         run_id: UUID,
         result: dict,
         status: RunStatus = RunStatus.DONE,
+        *,
+        commit: bool = True,
     ) -> Optional[Run]:
-        """Set run result, mark as done, and promote the owner's next queued run."""
+        """Set run result, mark as done, and promote the owner's next queued run.
+
+        With ``commit=False`` nothing is visible to other sessions until the
+        caller commits (see _terminal_update_and_promote)."""
         return await self._terminal_update_and_promote(
             run_id,
+            commit=commit,
             result=result,
             status=status,
             stage="COMPLETED" if status == RunStatus.DONE else None,
             stage_message="Completed" if status == RunStatus.DONE else None,
             progress=100,
             message="Completed",
+            finished_at=func.now(),
+            worker_lease_until=None,
+        )
+
+    async def fail_run(
+        self,
+        run_id: UUID,
+        *,
+        error: str,
+        message: str,
+        result: Optional[dict] = None,
+    ) -> Optional[Run]:
+        """Finish a run as ERROR with a stored error, a user-facing message and
+        a result payload; promote the owner's next run and queue the owner's
+        notification, all in one transaction."""
+        return await self._terminal_update_and_promote(
+            run_id,
+            status=RunStatus.ERROR,
+            stage="ERROR",
+            error=error,
+            message=message,
+            stage_message=message,
+            progress=100,
+            result=result,
             finished_at=func.now(),
             worker_lease_until=None,
         )
@@ -710,14 +972,70 @@ class RunRepository(BaseRepository[Run]):
             worker_lease_until=None,
         )
 
-    async def get_expired_runs(self) -> List[Run]:
-        """Get all runs that have expired."""
+    # --------------------------------------------------------------------- #
+    # Result retention (services/retention.py, workers/retention.py)
+    # --------------------------------------------------------------------- #
+    async def runs_due_for_expiry(self, limit: int = 50) -> List[UUID]:
+        """Runs that have ended, whose results are past their date and still
+        there. Never a run that is waiting or running."""
         result = await self.session.execute(
-            select(Run)
-            .where(Run.expires_at.isnot(None))
-            .where(Run.expires_at < utc_now())
+            select(Run.id)
+            .where(
+                Run.status.in_(TERMINAL_RUN_STATUSES),
+                Run.expires_at.isnot(None),
+                Run.expires_at < func.now(),
+                Run.results_expired_at.is_(None),
+            )
+            .order_by(Run.expires_at.asc())
+            .limit(limit)
         )
-        return list(result.scalars().all())
+        return [row[0] for row in result.all()]
+
+    async def is_due_for_expiry(self, run_id: UUID) -> bool:
+        """The same rule as :meth:`runs_due_for_expiry`, for one run. Checked
+        again right before anything is deleted."""
+        found = await self.session.execute(
+            select(Run.id).where(
+                Run.id == run_id,
+                Run.status.in_(TERMINAL_RUN_STATUSES),
+                Run.expires_at.isnot(None),
+                Run.expires_at < func.now(),
+                Run.results_expired_at.is_(None),
+            )
+        )
+        return found.scalar_one_or_none() is not None
+
+    async def mark_results_expired(self, run_id: UUID) -> bool:
+        """Remove what the database holds of a run's results (its trees, its
+        stored result and logs, its settled notification) and mark the run as
+        expired. Call only after its files are gone from the object store.
+        Does nothing to a run that is not finished or is already marked."""
+        marked = (
+            await self.session.execute(
+                update(Run)
+                .where(
+                    Run.id == run_id,
+                    Run.status.in_(TERMINAL_RUN_STATUSES),
+                    Run.results_expired_at.is_(None),
+                )
+                .values(result=None, results_expired_at=func.now())
+                .returning(Run.id)
+            )
+        ).scalar_one_or_none()
+        if marked is None:
+            await self.session.rollback()
+            return False
+        await self.session.execute(delete(RunTree).where(RunTree.run_id == run_id))
+        # A notification still waiting to be sent is left alone: it will be
+        # sent, or given up, on its own schedule.
+        await self.session.execute(
+            delete(NotificationOutbox).where(
+                NotificationOutbox.run_id == run_id,
+                NotificationOutbox.status != NotificationStatus.PENDING.value,
+            )
+        )
+        await self.session.commit()
+        return True
 
     async def get_by_same_input_file(
         self,
@@ -752,6 +1070,8 @@ class RunRepository(BaseRepository[Run]):
             .where(Run.input_file_id.in_(input_file_ids))
             .where(Run.id != exclude_run_id)
             .where(Run.status == RunStatus.DONE)
+            # A run whose results have expired has no trees left to compare.
+            .where(Run.results_expired_at.is_(None))
             .order_by(Run.created_at.desc())
             .limit(limit)
         )
@@ -784,6 +1104,7 @@ class RunRepository(BaseRepository[Run]):
             .where(or_(has_input, has_file_for_run))
             .where(Run.id != exclude_run_id)
             .where(Run.status == RunStatus.DONE)
+            .where(Run.results_expired_at.is_(None))
             .order_by(Run.created_at.desc())
             .limit(limit)
         )

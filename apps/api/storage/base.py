@@ -1,8 +1,19 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import AsyncIterator, BinaryIO, Optional
 from uuid import UUID
+
+
+@dataclass(frozen=True)
+class ObjectStat:
+    """What the store itself reports about one stored object."""
+
+    size_bytes: int
+    # SHA-256 the uploader recorded on the object (user metadata "sha256"),
+    # or None when the object carries none.
+    sha256: Optional[str] = None
 
 
 class StorageInterface(ABC):
@@ -84,6 +95,21 @@ class StorageInterface(ABC):
             True if file exists
         """
         pass
+
+    async def stat(self, file_path: str) -> Optional[ObjectStat]:
+        """Size (and recorded checksum) of a stored object, or None if absent.
+
+        Unlike ``exists``, this must not hide a store failure: an unreachable or
+        refusing store raises, so the caller can tell "missing" from "unknown".
+        """
+        raise NotImplementedError
+
+    async def delete_prefix(self, prefix: str) -> int:
+        """Delete every object whose key starts with ``prefix``; return how many
+        were deleted. Nothing there is not an error (0). Unlike ``delete``, a
+        store that cannot be reached or refuses raises, so the caller knows the
+        objects may still exist and tries again later."""
+        raise NotImplementedError
 
     @abstractmethod
     async def move(self, src_path: str, dst_path: str) -> str:

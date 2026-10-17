@@ -9,17 +9,23 @@ Run in the job child process via job_runner after the handler completes.
 Never copies files into the run state dir — that whole shared-volume hop is
 gone. No base64 anywhere in the pipeline.
 
+A file that cannot be uploaded is never dropped silently: it is listed under
+``artifact_upload_failures`` and :func:`storage_failure` turns that into the
+reason the job did not complete. A result whose files are not stored is not a
+finished result.
+
 manifest_version: 1
 """
 from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from object_storage import upload_artifact
 
 MANIFEST_VERSION = 1
+UPLOAD_FAILED_CODE = "ARTIFACT_UPLOAD_FAILED"
 
 # Heavy / source-side keys removed from the payload before persisting.
 _STRIP_KEYS = (
@@ -50,6 +56,7 @@ def materialize_artifacts(payload: Any, *, run_id: str, job_id: str) -> Any:
         raise ValueError("materialize_artifacts: run_id + job_id are required")
 
     artifacts: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
     af = payload.get("artifact_files")
     if isinstance(af, list):
         for entry in af:
@@ -59,11 +66,15 @@ def materialize_artifacts(payload: Any, *, run_id: str, job_id: str) -> Any:
             if not isinstance(src, str) or not src:
                 continue
             src_path = Path(src)
-            if not src_path.is_file():
-                continue
             default_name = src_path.name
             filename = entry.get("filename") or default_name
             safe_name = _sanitize_name(str(filename), default_name)
+            if not src_path.is_file():
+                # The method declared this file as part of its result, but it
+                # is not there: the result is incomplete, not merely smaller.
+                print(f"[artifact_manifest] declared file is missing: {src_path}", flush=True)
+                failures.append({"filename": safe_name, "error": "the file the method declared does not exist"})
+                continue
             content_type = entry.get("content_type")
             try:
                 uploaded = upload_artifact(
@@ -73,10 +84,11 @@ def materialize_artifacts(payload: Any, *, run_id: str, job_id: str) -> Any:
                     filename=safe_name,
                     content_type=content_type if isinstance(content_type, str) else None,
                 )
-            except Exception:
-                # Per-file failures shouldn't abort the whole manifest; skip and
-                # let the rest of the artifacts upload. The job's job.log
-                # (uploaded by job_runner finalize) will carry the error.
+            except Exception as exc:  # noqa: BLE001
+                # Keep uploading the rest, but remember the failure: the job
+                # must not be reported as complete without this file.
+                print(f"[artifact_manifest] upload failed for {safe_name}: {exc}", flush=True)
+                failures.append({"filename": safe_name, "error": f"{type(exc).__name__}: {exc}"[:300]})
                 continue
             desc: dict[str, Any] = {
                 "object_key": uploaded["object_key"],
@@ -104,4 +116,36 @@ def materialize_artifacts(payload: Any, *, run_id: str, job_id: str) -> Any:
         out[k] = v
     out["manifest_version"] = MANIFEST_VERSION
     out["artifacts"] = artifacts
+    if failures:
+        out["artifact_upload_failures"] = failures
+    return out
+
+
+def storage_failure(payload: Any, materialize_error: Optional[str] = None) -> Optional[str]:
+    """Why the job's result files are not all in storage, or None if they are.
+
+    ``materialize_error`` is the message of an exception that stopped
+    :func:`materialize_artifacts` altogether.
+    """
+    if materialize_error:
+        return "The analysis finished, but its result files could not be saved to storage."
+    failures = payload.get("artifact_upload_failures") if isinstance(payload, dict) else None
+    if not isinstance(failures, list) or not failures:
+        return None
+    names = [str(f.get("filename") or "artifact") for f in failures if isinstance(f, dict)]
+    shown = ", ".join(names[:5]) + (f", and {len(names) - 5} more" if len(names) > 5 else "")
+    return (
+        f"The analysis finished, but {len(failures)} result file(s) could not be saved "
+        f"to storage ({shown})."
+    )
+
+
+def mark_storage_failure(payload: Any, message: str) -> dict[str, Any]:
+    """The payload of a job that computed a result but could not store it."""
+    out = dict(payload) if isinstance(payload, dict) else {}
+    out["ok"] = False
+    out["error"] = message
+    out["error_code"] = UPLOAD_FAILED_CODE
+    out.setdefault("manifest_version", MANIFEST_VERSION)
+    out.setdefault("artifacts", [])
     return out

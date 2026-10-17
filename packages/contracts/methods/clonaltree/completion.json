@@ -1,0 +1,5 @@
+{
+  "description": "What a run of this method must have delivered before it may be reported as DONE. Checked by the API worker on top of verifying every declared file in the object store.",
+  "minTrees": 1,
+  "requiredArtifactRoles": ["clone_bundle_zip"]
+}

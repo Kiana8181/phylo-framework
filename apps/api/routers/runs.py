@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import traceback
 from datetime import date
 from typing import Any, Optional
 from uuid import UUID
@@ -10,7 +9,9 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apps.api.auth.dependencies import get_current_user, get_current_user_required
+from apps.api.auth.access import ensure_run_access
+from apps.api.auth.dependencies import get_current_user_required
+from apps.api.auth.verification import require_verified_user
 from apps.api.config import method_service_url
 from apps.api.contracts.loader import get_ui_hints
 from apps.api.database import get_db
@@ -19,19 +20,45 @@ from apps.api.repositories.artifact_repository import ArtifactRepository
 from apps.api.repositories.file_repository import FileRepository
 from apps.api.repositories.run_repository import RunRepository
 from apps.api.repositories.run_tree_repository import RunTreeRepository
+from apps.api.security.errors import internal_error
+from apps.api.services import retention, run_quota
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
 TERMINAL_STATUSES = (RunStatus.DONE, RunStatus.ERROR, RunStatus.CANCELLED)
 
-# A user may have 1 active turn + up to MAX_QUEUED queued behind it (MAX_QUEUED + 1
-# non-terminal runs total).
-MAX_QUEUED = 5
+# Limits on creating runs (hourly quota, queue size, submission ceiling) live in
+# apps/api/services/run_quota.py and are configurable through the environment.
 
 
 # --------------------------------------------------------------------------- #
 # Serialization helpers
 # --------------------------------------------------------------------------- #
+def _retention_fields(run: Run) -> dict[str, Any]:
+    """Until when a run's results are kept, and whether they are gone already."""
+    expires_at = getattr(run, "expires_at", None)
+    expired_at = getattr(run, "results_expired_at", None)
+    return {
+        "expires_at": expires_at.isoformat() if expires_at else None,
+        "results_expired": expired_at is not None,
+        "results_expired_at": expired_at.isoformat() if expired_at else None,
+    }
+
+
+def _ensure_results_available(run: Run) -> None:
+    """410 for a run whose results have been removed by retention."""
+    expired_at = getattr(run, "results_expired_at", None)
+    if expired_at is not None:
+        raise HTTPException(
+            status_code=410,
+            detail={
+                "code": retention.CODE_RESULT_EXPIRED,
+                "message": retention.expired_message(expired_at),
+                "expired_at": expired_at.isoformat(),
+            },
+        )
+
+
 def _normalized_run_params(run: Run) -> dict[str, Any]:
     raw = getattr(run, "params", None)
     return raw if isinstance(raw, dict) else {}
@@ -160,6 +187,7 @@ def _public_status(
         "cancel_requested": getattr(run, "cancel_requested_at", None) is not None,
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+        **_retention_fields(run),
     }
     raw_error = getattr(run, "error", None)
     if raw_error:
@@ -194,13 +222,14 @@ def _run_summary(run) -> dict:
         "created_at": run.created_at.isoformat() if run.created_at else None,
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+        **_retention_fields(run),
     }
 
 
 async def _load_run_with_access(
     run_id: str,
     *,
-    current_user: Optional[User],
+    current_user: User,
     run_repo: RunRepository,
 ) -> Run:
     try:
@@ -212,10 +241,7 @@ async def _load_run_with_access(
     if not run:
         raise HTTPException(404, "Run not found")
 
-    if run.user_id is not None and current_user is None:
-        raise HTTPException(401, "Authentication required", headers={"WWW-Authenticate": "Bearer"})
-    if current_user and not current_user.is_admin and run.user_id != current_user.id:
-        raise HTTPException(403, "Access denied")
+    ensure_run_access(run, current_user)
     return run
 
 
@@ -265,11 +291,41 @@ class CreateRunBody(BaseModel):
     file_id: Optional[str] = None
 
 
+def _limit_error(quota: run_quota.QuotaState) -> HTTPException:
+    """The refusal for a run that may not be created right now.
+
+    A full queue is a conflict with the user's own unfinished runs (409, as
+    before). The two rolling limits are rate limits (429) and say when to try
+    again, in the body and in a Retry-After header.
+    """
+    blocked = quota.blocked_by
+    if blocked == run_quota.CODE_QUEUE_FULL:
+        return HTTPException(
+            status_code=409,
+            detail={"code": blocked, "message": quota.message, "limit": quota.max_queued},
+        )
+    window = quota.hourly if blocked == run_quota.CODE_QUOTA else quota.submissions
+    retry_after = quota.retry_after_seconds or 1
+    return HTTPException(
+        status_code=429,
+        detail={
+            "code": blocked,
+            "message": quota.message,
+            "limit": window.limit,
+            "used": window.used,
+            "reset_at": window.reset_at.isoformat() if window.reset_at else None,
+            "retry_after_seconds": retry_after,
+        },
+        headers={"Retry-After": str(retry_after)},
+    )
+
+
 @router.post("")
 async def create_run(
     method: str = Query(..., description="Method ID (e.g., 'dowser')"),
     body: CreateRunBody = Body(default_factory=CreateRunBody),
-    current_user: Optional[User] = Depends(get_current_user),
+    # Creating a run needs a confirmed email address (when that is required).
+    current_user: User = Depends(require_verified_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Create a new run.
@@ -295,7 +351,9 @@ async def create_run(
     run_repo = RunRepository(db)
     file_repo = FileRepository(db)
 
-    user_id = current_user.id if current_user else None
+    # Run creation always belongs to an authenticated user: every quota and
+    # the per-user queue are keyed on this id.
+    user_id = current_user.id
 
     if requires_file and not file_id:
         raise HTTPException(
@@ -303,28 +361,8 @@ async def create_run(
             "This method requires an input file. Upload a file first and pass its file_id.",
         )
 
-    # Per-user queue quota: 1 active turn + up to MAX_QUEUED queued (MAX_QUEUED+1
-    # non-terminal total). Enforced atomically here; the partial-unique index backs
-    # the "one active turn" half.
-    if user_id:
-        nonterminal = await run_repo.count_nonterminal_for_user(user_id)
-        if nonterminal >= MAX_QUEUED + 1:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "QUEUE_FULL",
-                    "message": (
-                        f"Your run queue is full ({MAX_QUEUED} queued behind your active "
-                        "run). Wait for a run to finish or cancel a queued one."
-                    ),
-                    "limit": MAX_QUEUED,
-                },
-            )
-
     existing_file = None
     if file_id:
-        if not user_id:
-            raise HTTPException(401, "Authentication required to use an uploaded file.")
         try:
             existing_file_id = UUID(file_id)
         except ValueError:
@@ -343,6 +381,15 @@ async def create_run(
                 },
             )
 
+    # Limits, checked and enforced as one step: from here until the new run is
+    # committed no other request of this user can create a run, so concurrent
+    # requests cannot each pass a check that only one of them should.
+    await run_repo.lock_run_creation(user_id)
+    quota = await run_quota.quota_state(run_repo, user_id)
+    if quota.blocked_by is not None:
+        await db.rollback()  # nothing was written; release the lock at once
+        raise _limit_error(quota)
+
     run = await run_repo.create_run(
         method_id=method,
         params=params,
@@ -351,27 +398,29 @@ async def create_run(
         dataset_name=existing_file.original_filename if existing_file else None,
     )
 
-    # Promote so a user with a free turn dispatches immediately. Anonymous runs have
-    # no per-user serialization — promote the specific run so it becomes claimable.
-    if user_id:
-        await run_repo.promote_next_for_user(user_id)
-    else:
-        await run_repo.promote_run(run.id)
+    # The run exists from here on. Its id is taken now: the promotion below may
+    # lose a race with another promotion (a second request of the same user, or
+    # the worker's sweep) and roll this session back, after which `run` itself
+    # can no longer be read. The client must still be told about its run.
+    run_id = run.id
+
+    # Promote so a user with a free turn dispatches immediately.
+    await run_repo.promote_next_for_user(user_id)
 
     # Report whether this run became the active turn or is waiting in the personal
     # queue (and, if waiting, its 1-based position).
-    fresh = await run_repo.get_by_id(run.id)
+    fresh = await run_repo.get_by_id(run_id)
     is_active_turn = fresh is not None and fresh.dispatch_seq is not None
     queue_position: Optional[int] = None
-    if not is_active_turn and user_id:
+    if not is_active_turn:
         personal_queue = await run_repo.get_personal_queue_for_user(user_id)
         for idx, queued_run in enumerate(personal_queue):
-            if queued_run.id == run.id:
+            if queued_run.id == run_id:
                 queue_position = idx + 1
                 break
 
     return {
-        "run_id": str(run.id),
+        "run_id": str(run_id),
         "queued": not is_active_turn,
         "queue_position": queue_position,
     }
@@ -380,7 +429,7 @@ async def create_run(
 @router.post("/{run_id}/cancel")
 async def cancel_run(
     run_id: str,
-    current_user: Optional[User] = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_required),
     db: AsyncSession = Depends(get_db),
 ):
     """Request cancellation of a run. Idempotent.
@@ -418,7 +467,7 @@ async def cancel_run(
 @router.post("/{run_id}/cancel-queued")
 async def cancel_queued_run(
     run_id: str,
-    current_user: Optional[User] = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_required),
     db: AsyncSession = Depends(get_db),
 ):
     """Cancel a QUEUED run the user owns — whether it is the promoted turn or a plain
@@ -428,9 +477,6 @@ async def cancel_queued_run(
     Cancelling a RUNNING run is not handled here — use POST /runs/{run_id}/cancel,
     which drives the graceful worker-cancellation flow.
     """
-    if not current_user:
-        raise HTTPException(status_code=401, detail="Authentication required")
-
     run_repo = RunRepository(db)
     file_repo = FileRepository(db)
     run = await _load_run_with_access(run_id, current_user=current_user, run_repo=run_repo)
@@ -465,13 +511,10 @@ async def cancel_queued_run(
 
 @router.get("/current")
 async def get_current_run(
-    current_user: Optional[User] = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_required),
     db: AsyncSession = Depends(get_db),
 ):
     """Get the current user's active run (PENDING, QUEUED, or RUNNING), if any."""
-    if not current_user:
-        raise HTTPException(status_code=401, detail="Authentication required")
-
     run_repo = RunRepository(db)
     file_repo = FileRepository(db)
     active = await run_repo.get_active_run_for_user(current_user.id)
@@ -489,22 +532,20 @@ async def get_current_run(
 
 @router.get("/dashboard")
 async def get_dashboard(
-    current_user: Optional[User] = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_required),
     db: AsyncSession = Depends(get_db),
 ):
     """Live dashboard payload for the run queue: the active-turn run, the personal
     queue (FIFO), and quota limits. Returns only non-terminal runs — a finished run
     simply drops out of the payload (the client detects completion by diffing ids).
     """
-    if not current_user:
-        raise HTTPException(status_code=401, detail="Authentication required")
-
     run_repo = RunRepository(db)
     file_repo = FileRepository(db)
 
     active = await run_repo.get_active_turn_run_for_user(current_user.id)
     queue = await run_repo.get_personal_queue_for_user(current_user.id)
     nonterminal = await run_repo.count_nonterminal_for_user(current_user.id)
+    max_queued = run_quota.max_queued_runs()
 
     active_payload = None
     if active is not None:
@@ -520,18 +561,32 @@ async def get_dashboard(
         "active": active_payload,
         "queue": [_run_summary(r) for r in queue],
         "limits": {
-            "max_queued": MAX_QUEUED,
+            "max_queued": max_queued,
             "queued_count": len(queue),
-            "can_add": nonterminal < MAX_QUEUED + 1,
+            "can_add": nonterminal < max_queued + 1,
         },
     }
+
+
+@router.get("/quota")
+async def get_run_quota(
+    current_user: User = Depends(get_current_user_required),
+    db: AsyncSession = Depends(get_db),
+):
+    """Where the current user stands against the limits on creating runs: the
+    rolling hourly quota, the submission ceiling and the queue size. The same
+    rules decide POST /runs, so a client can tell beforehand whether a new run
+    would be accepted and, if not, why and until when.
+    """
+    quota = await run_quota.quota_state(RunRepository(db), current_user.id)
+    return quota.as_dict()
 
 
 # Declare same-dataset before other /{run_id}/... routes so the path "same-dataset" is matched
 @router.get("/{run_id}/same-dataset")
 async def list_same_dataset_runs(
     run_id: str,
-    current_user: Optional[User] = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_required),
     db: AsyncSession = Depends(get_db),
 ):
     """List DONE runs that used the same input file (dataset) as the given run."""
@@ -548,26 +603,23 @@ async def list_same_dataset_runs(
             file_ids = [f.id for f in files]
         if not file_ids:
             return []
-        user_id = current_user.id if current_user else None
-        is_admin = getattr(current_user, "is_admin", False) if current_user else False
         same_runs = await run_repo.get_by_same_dataset_file_ids(
             file_ids,
             exclude_run_id=run.id,
-            current_user_id=user_id,
-            is_admin=is_admin,
+            current_user_id=current_user.id,
+            is_admin=bool(current_user.is_admin),
         )
         return [_run_summary(r) for r in same_runs]
     except HTTPException:
         raise
     except Exception as e:
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Same-dataset lookup failed: {e!s}")
+        raise internal_error("Same-dataset lookup failed.", e, context=f"run_id={run_id}")
 
 
 @router.get("/{run_id}/status")
 async def run_status(
     run_id: str,
-    current_user: Optional[User] = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_required),
     db: AsyncSession = Depends(get_db),
 ):
     """Get run status (status, progress, stage, stage_message, method_id, params, dataset, timestamps)."""
@@ -582,7 +634,7 @@ async def run_status(
 @router.get("/{run_id}/result")
 async def run_result(
     run_id: str,
-    current_user: Optional[User] = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_required),
     db: AsyncSession = Depends(get_db),
 ):
     """Get run result."""
@@ -592,6 +644,7 @@ async def run_result(
 
     if run.status not in (RunStatus.DONE, RunStatus.ERROR, RunStatus.CANCELLED):
         raise HTTPException(409, "Run not finished")
+    _ensure_results_available(run)
 
     dataset_name, dataset_files = await _resolve_dataset_meta(run, file_repo)
     if isinstance(run.result, dict):
@@ -634,6 +687,7 @@ async def run_result(
     )
     payload.setdefault("started_at", run.started_at.isoformat() if run.started_at else None)
     payload.setdefault("finished_at", run.finished_at.isoformat() if run.finished_at else None)
+    payload.update(_retention_fields(run))
 
     # Lightweight, base64-free additions: a dataset descriptor (incl. deletion
     # state for history) and an artifact count. Binaries are fetched lazily via
@@ -647,7 +701,7 @@ async def run_result(
 @router.get("/{run_id}/trees")
 async def list_run_trees(
     run_id: str,
-    current_user: Optional[User] = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_required),
     db: AsyncSession = Depends(get_db),
 ):
     """List lightweight tree metadata for a completed run."""
@@ -655,6 +709,7 @@ async def list_run_trees(
     run = await _load_run_with_access(run_id, current_user=current_user, run_repo=run_repo)
     if run.status != RunStatus.DONE:
         raise HTTPException(409, "Run not finished")
+    _ensure_results_available(run)
 
     tree_repo = RunTreeRepository(db)
     trees = await tree_repo.list_for_run(run.id)
@@ -674,7 +729,7 @@ async def list_run_trees(
 async def get_run_tree_payload(
     run_id: str,
     tree_id: str,
-    current_user: Optional[User] = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_required),
     db: AsyncSession = Depends(get_db),
 ):
     """Load full per-tree payload for a completed run."""
@@ -682,6 +737,7 @@ async def get_run_tree_payload(
     run = await _load_run_with_access(run_id, current_user=current_user, run_repo=run_repo)
     if run.status != RunStatus.DONE:
         raise HTTPException(409, "Run not finished")
+    _ensure_results_available(run)
 
     tree_repo = RunTreeRepository(db)
     payload = await tree_repo.get_tree_payload(run.id, tree_id)

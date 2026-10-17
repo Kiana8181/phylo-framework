@@ -8,6 +8,7 @@ export const API_ROUTES = {
   runsList: () => `/runs`,
   runCurrent: () => `/runs/current`,
   runDashboard: () => `/runs/dashboard`,
+  runQuota: () => `/runs/quota`,
   runStatus: (runId: string) => `/runs/${encodeURIComponent(runId)}/status`,
   runResult: (runId: string) => `/runs/${encodeURIComponent(runId)}/result`,
   runCancel: (runId: string) => `/runs/${encodeURIComponent(runId)}/cancel`,
@@ -29,6 +30,7 @@ export const API_ROUTES = {
   datasetDownload: (id: string) => `/datasets/${encodeURIComponent(id)}/download`,
   datasetFastaIdStyle: (id: string) => `/datasets/${encodeURIComponent(id)}/fasta-id-style`,
   uploadInit: () => `/uploads/init`,
+  uploadLimits: () => `/uploads/limits`,
   uploadContent: (uploadId: string) => `/uploads/${encodeURIComponent(uploadId)}/content`,
   uploadCancel: (uploadId: string) => `/uploads/${encodeURIComponent(uploadId)}`,
   authLogin: () => `/auth/login`,
@@ -39,6 +41,9 @@ export const API_ROUTES = {
   authMe: () => `/auth/me`,
   authLogout: () => `/auth/logout`,
   authGoogle: () => `/auth/google`,
+  authChallenge: () => `/auth/challenge`,
+  authVerifyEmail: () => `/auth/verify-email`,
+  authResendVerification: () => `/auth/resend-verification`,
 } as const;
 
 /**

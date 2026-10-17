@@ -5,14 +5,18 @@ React, the API, PostgreSQL, storage, the worker, Python/R method services and th
 browser. Missing required infrastructure fails the run; it does not silently skip
 integration tests. CI uses the same command.
 
+A second, separate entry point, `npm run test:system`, puts the real stack under
+pressure (memory limits, crashed containers, restarts, a mail outage). It is
+described in [VALIDATION.md](./VALIDATION.md), together with the result of the
+most recent complete validation.
+
 ## Setup and commands
 
-Use Node 22, Python 3.12, Docker Compose v2 and the initialized ClonalTree submodule.
+Use Node 22, Python 3.12 and Docker Compose v2.
 On Windows run the orchestrator under WSL2. R and scientific Python dependencies
 run in Docker; they need not be installed in the host Python environment.
 
 ```bash
-git submodule update --init --recursive
 npm ci
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements-test.txt
@@ -55,6 +59,11 @@ docker compose -f docker-compose.test.yml up -d --wait postgres minio
 # With the full stack started (see docker-compose.test.yml):
 npm run test:e2e
 npm run test:r
+
+# The real stack under pressure. Starts and removes its own stack; needs
+# Docker Compose 2.24+. Never at the same time as test:all.
+npm run test:system
+npm run test:system -- -k memory      # extra arguments go to pytest
 ```
 
 The R coverage dependency volume `phylo-tests-r-library` is retained as a cache.
@@ -99,8 +108,8 @@ so the two different `app.py` files cannot be mistaken for each other. Browser
 instrumentation is enabled only by `TEST_BROWSER_COVERAGE=1`, and collected before
 navigation and at test teardown. Source maps remap post-SWC counters to TS/TSX.
 
-The Python denominator excludes tests, migrations, the external ClonalTree
-submodule and GCtree environment bootstrap. Migrations are exercised by building
+The Python denominator excludes tests, migrations, the upstream ClonalTree
+pipeline code (`services/clonaltree/base-codes/`) and GCtree environment bootstrap. Migrations are exercised by building
 the real PostgreSQL schema, including sequences, enums and partial unique indexes.
 R coverage measures service **modules**; executable `plumber.R`/`job_runner.R`
 entrypoints are exercised through real HTTP scientific E2E tests, but their
@@ -123,7 +132,14 @@ percentages use different instrumentation denominators; compare like with like.
 | Python methods | Existing scientific helper tests; lifecycle tests parameterized over both implementations; real artifact upload/checksum and manifest failure paths |
 | R methods | Existing validators and Dowser scientific orchestration; both methods' disk state, manifests, real child completion and process-group cancellation |
 | React/frontend | Existing scientific tree/layout/trace tests; actual upload hook progress/abort/cleanup, stop-run interaction, confirmation locking/cleanup, auth storage, HTTP failures and multipart conversion |
-| Scientific E2E | All four methods run the documented ExampleAirr clone through API → database → worker → real method → MinIO → tree/artifact downloads; graph invariants/checksums/history, plus malformed dataset failure for each method |
+| Scientific E2E | All four methods run the documented ExampleAirr clone through API → database → worker → real method → MinIO → tree/artifact downloads; graph invariants/checksums/history, the deployed commit recorded in the result, plus malformed dataset failure for each method |
+| Limits and quotas | Rolling hourly quota, submission ceiling and queue limit under concurrent requests; capacity-aware dispatch, waiting and time limits; lost jobs, restarts and artifact verification before `DONE` |
+| Sign-in protection | Proof-of-work CAPTCHA (single use, expiry), rate limits per address and per account, proxy-header trust, email verification, hashed one-time tokens, session invalidation |
+| Email | SMTP delivery against a local test server (STARTTLS, authentication, outages), the notification outbox, retries, exactly one email per finished run, none for cancelled runs |
+| Storage lifecycle | Expiry dates, removal order and retries, 410 for expired results, upload size limit, abandoned-upload clean-up, per-job scratch data and logs in all four services |
+| Deployment tooling | The compose file's limits, networks, secret isolation and ports; the resource plan, port tool, pre-start and post-start checks and `run.sh`, run against a stand-in `docker`; the version-information generator; the history rewrite on throwaway repositories; the secret scanner |
+| Documentation | Every relative link, every `npm run` and `./run.sh` command, every script path and every setting named in the documentation exists; the configuration reference and `.env.example` cover the same settings |
+| System under pressure | `npm run test:system`: see [VALIDATION.md](./VALIDATION.md) |
 | Browser E2E | Protected navigation, signup/login/reload, actual dataset deletion, each method's documented example, and zero-abundance persistence through API and node details |
 
 The initial audit found that `npm test` ran only TS suites, 13 PostgreSQL tests
@@ -164,7 +180,13 @@ Google and email boundaries are simulated; no real accounts or mail are used.
 The browser suite currently covers Chromium, not Firefox/WebKit/mobile. Remaining
 uncovered branches and UI flows stay visible in the reports.
 
-## Verified working-tree run (2026-10-05)
+## Earlier verified run (2026-10-05, historical)
+
+This section records a run made before the production hardening. The current
+figures are in [VALIDATION.md](./VALIDATION.md). The commit id below is from
+before the repository history was rewritten on 2026-10-13 and no longer exists;
+by its position (the first commit after tag `v2.1.0`) it corresponds to
+`4d8946ef9be5`.
 
 The revised checkout at base commit
 `a596dbf0a01fd066d396be39a77f8cbb82e8c491` passed `npm run test:all` after a

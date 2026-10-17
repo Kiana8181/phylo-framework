@@ -3,6 +3,9 @@ set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="$ROOT/.env"
+# docker-compose.yml publishes no host ports; the dev override adds the Postgres
+# and MinIO ports that the host-run API, worker and method containers need.
+COMPOSE_DEV=(docker compose -f "$ROOT/docker-compose.yml" -f "$ROOT/docker-compose.dev.yml" --profile dev)
 
 RED=$'\033[31m'; GRN=$'\033[32m'; YLW=$'\033[33m'; BLU=$'\033[34m'; CLR=$'\033[0m'
 die(){ echo "${RED}ERROR:${CLR} $*" >&2; exit 1; }
@@ -114,22 +117,10 @@ resolve_storage_abs(){
   fi
 }
 
-ensure_clonotype_submodule(){
-  local marker="$ROOT/services/clonaltree/base-codes/main_pipeline.py"
-  if [[ -f "$marker" ]]; then
-    return 0
-  fi
-  echo "${BLU}==> Initializing clonaltree submodule${CLR}"
-  git -C "$ROOT" submodule update --init --recursive services/clonaltree/base-codes || \
-    die "Failed to initialize services/clonaltree/base-codes submodule"
-  [[ -f "$marker" ]] || die "Missing clonaltree submodule files. Run: git submodule update --init --recursive"
-}
-
 echo "${BLU}==> Checking prerequisites${CLR}"
-need_cmd docker; need_cmd node; need_cmd npm; need_cmd python3; need_cmd curl; need_cmd git
+need_cmd docker; need_cmd node; need_cmd npm; need_cmd python3; need_cmd curl
 
 cd "$ROOT"
-ensure_clonotype_submodule
 
 echo "${BLU}==> Syncing method-service env from config${CLR}"
 node "$ROOT/scripts/method-services.mjs" sync-env >/dev/null
@@ -165,17 +156,17 @@ cleanup(){
   if [[ -n "${WORKER_PID:-}" ]]; then kill "$WORKER_PID" 2>/dev/null || true; fi
   if [[ -n "${API_PID:-}" ]]; then kill "$API_PID" 2>/dev/null || true; fi
   node "$ROOT/scripts/method-services.mjs" stop >/dev/null 2>&1 || true
-  docker compose --profile dev stop postgres minio minio-init >/dev/null 2>&1 || true
+  "${COMPOSE_DEV[@]}" stop postgres minio minio-init >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
 echo "${BLU}==> Starting PostgreSQL (Docker Compose, profile=dev)${CLR}"
-docker compose --profile dev up -d postgres
+"${COMPOSE_DEV[@]}" up -d postgres
 wait_postgres || die "PostgreSQL did not become healthy"
 echo "${GRN}PostgreSQL is healthy.${CLR}"
 
 echo "${BLU}==> Starting MinIO object storage + creating buckets${CLR}"
-docker compose --profile dev up -d minio minio-init
+"${COMPOSE_DEV[@]}" up -d minio minio-init
 docker wait phylo-minio-init >/dev/null 2>&1 || true
 echo "${GRN}MinIO is up; dataset/artifact buckets ready.${CLR}"
 

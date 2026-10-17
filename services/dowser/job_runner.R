@@ -15,6 +15,19 @@ job_id <- get_arg("--job-id")
 state_dir <- get_arg("--state-dir")
 if (is.na(job_id) || is.na(state_dir)) quit(status = 2)
 
+# Before the method's packages are loaded and memory use starts to grow: if the
+# container runs out of memory, this job is what the kernel should stop, not
+# the service that started it (see rl_prefer_as_oom_victim).
+if (identical(Sys.getenv("PHYLO_JOB_CHILD", ""), "1")) {
+  for (base in c("/srv", getwd())) {
+    limits <- file.path(base, "resource_limits.R")
+    if (file.exists(limits)) {
+      tryCatch({ source(limits, local = FALSE); rl_prefer_as_oom_victim() }, error = function(e) NULL)
+      break
+    }
+  }
+}
+
 status_path <- file.path(state_dir, "status.json")
 result_path <- file.path(state_dir, "result.json")
 request_path <- file.path(state_dir, "request.json")
@@ -57,9 +70,19 @@ finalize_with_log <- function(result) {
     TRUE
   }, error = function(e) FALSE)
   if (!isTRUE(src_loaded) || !exists("upload_artifact", mode = "function")) return(result)
+  # Logs are stored in bounded form: a very long one keeps its beginning and
+  # its end (METHOD_JOB_LOG_MAX_MB).
+  upload_path <- log_path
+  if (exists("job_bounded_log", mode = "function")) {
+    bounded <- tryCatch(job_bounded_log(log_path), error = function(e) NULL)
+    if (!is.null(bounded) && isTRUE(bounded$truncated)) {
+      upload_path <- file.path(state_dir, "job.log.bounded")
+      writeBin(bounded$content, upload_path)
+    }
+  }
   uploaded <- tryCatch(
     upload_artifact(
-      local_path = log_path,
+      local_path = upload_path,
       run_id = run_id, job_id = job_id,
       filename = "job.log", content_type = "text/plain"
     ),
@@ -68,7 +91,10 @@ finalize_with_log <- function(result) {
       NULL
     }
   )
-  if (is.null(uploaded)) return(result)
+  if (is.null(uploaded)) {
+    result$log_upload_failed <- TRUE
+    return(result)
+  }
   result$artifacts[[length(result$artifacts) + 1L]] <- list(
     object_key = uploaded$object_key,
     size_bytes = uploaded$size_bytes,
@@ -96,7 +122,28 @@ st <- list(
   message = "Running method", progress = 45, pid = Sys.getpid(), run_id = run_id,
   started_at = now_iso(), finished_at = NULL, error = NULL
 )
+# Keep what the job manager recorded at submit.
+for (kept in c("threads", "timeout_seconds")) {
+  if (!is.null(pre) && !is.null(pre[[kept]])) st[[kept]] <- pre[[kept]]
+}
 write_json_atomic(status_path, st)
+
+# TRUE when the kernel killed a process of this container for lack of memory
+# since this job started (the job manager passes the count at start).
+out_of_memory_during_job <- function() {
+  baseline <- suppressWarnings(as.numeric(Sys.getenv("PHYLO_JOB_OOM_BASELINE", "")))
+  if (length(baseline) != 1 || is.na(baseline)) return(FALSE)
+  if (!exists("rl_oom_kill_count", mode = "function")) return(FALSE)
+  current <- tryCatch(rl_oom_kill_count(), error = function(e) NA_real_)
+  !is.na(current) && current > baseline
+}
+out_of_memory_message <- function(original) {
+  paste0(
+    "The analysis ran out of memory and could not finish. Try a smaller dataset, or ask ",
+    "the administrator to raise the memory limit of this method. ",
+    "(Reported by the method: ", as.character(original), ")"
+  )
+}
 
 finish_error <- function(msg, payload = NULL) {
   body <- if (!is.null(payload)) payload else list(ok = FALSE, error = as.character(msg), logs = list())
@@ -138,14 +185,29 @@ for (base in c("/srv", getwd())) {
   am <- file.path(base, "artifact_manifest.R")
   if (file.exists(am)) { source(am, local = FALSE); break }
 }
+materialize_error <- NULL
 if (exists("materialize_artifacts", mode = "function")) {
   result <- tryCatch(
     materialize_artifacts(result, run_id = run_id, job_id = job_id),
     error = function(e) {
+      materialize_error <<- conditionMessage(e)
       message(sprintf("materialize_artifacts failed: %s", conditionMessage(e)))
       result
     }
   )
+} else if (ok_flag) {
+  materialize_error <- "artifact_manifest.R not found"
+}
+
+# A successful analysis whose files are not in storage is not a finished job:
+# report it as a failure instead of as DONE.
+if (ok_flag && exists("storage_failure", mode = "function")) {
+  not_stored <- storage_failure(result, materialize_error)
+  if (!is.null(not_stored)) {
+    message(not_stored)
+    result <- mark_storage_failure(result, not_stored)
+    ok_flag <- FALSE
+  }
 }
 
 result <- finalize_with_log(result)
@@ -155,8 +217,14 @@ if (ok_flag) {
   st$status <- "DONE"; st$stage <- "COMPLETED"; st$message <- "Completed"
   st$progress <- 100; st$finished_at <- now_iso(); st$ok <- TRUE; st$error <- NULL
 } else {
-  err_msg <- result$error %||% sprintf("Method returned HTTP %d", status_code)
-  st$status <- "ERROR"; st$stage <- "ERROR"; st$message <- as.character(err_msg)
+  err_msg <- as.character(result$error %||% sprintf("Method returned HTTP %d", status_code))[1]
+  error_code <- if (is.null(result$error_code)) NULL else as.character(result$error_code)[1]
+  if (is.null(error_code) && out_of_memory_during_job()) {
+    err_msg <- out_of_memory_message(err_msg)
+    error_code <- "OUT_OF_MEMORY"
+  }
+  st$status <- "ERROR"; st$stage <- "ERROR"; st$message <- err_msg
   st$error <- result; st$progress <- 100; st$finished_at <- now_iso(); st$ok <- FALSE
+  if (!is.null(error_code)) st$error_code <- error_code
 }
 write_json_atomic(status_path, st)

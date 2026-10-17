@@ -7,9 +7,21 @@ dist/
 build/
 venv/
 
-# Secrets: never commit the real .env (ship .env.example instead).
-# .env
+# Configuration with secrets is never committed, in any directory. The only
+# env files in the repository are examples (.env.example), which hold
+# placeholders. See docs/HISTORY-CLEANUP.md.
+.env
+.env.*
 !.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+
+# macOS folder metadata
+.DS_Store
 
 runtime/
 

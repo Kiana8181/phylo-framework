@@ -64,6 +64,8 @@ export function isAuthRequestUrl(url: string | undefined): boolean {
     url.includes("/auth/register") ||
     url.includes("/auth/forgot-password") ||
     url.includes("/auth/reset-password") ||
+    url.includes("/auth/verify-email") ||
+    url.includes("/auth/challenge") ||
     url.includes("/auth/google")
   );
 }

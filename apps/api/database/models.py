@@ -98,8 +98,18 @@ class User(Base):
     email = Column(String(255), unique=True, nullable=False, index=True)
     username = Column(String(100), unique=True, nullable=False, index=True)
     password_hash = Column(String(255), nullable=False)
+    # SHA-256 of the emailed reset token (never the token itself).
     password_reset_token = Column(String(255), nullable=True)
     password_reset_expires = Column(DateTime(timezone=True), nullable=True)
+    # When the address was proven to belong to the account holder (a link sent
+    # to it was used, or Google vouched for it). NULL = not proven.
+    email_verified_at = Column(DateTime(timezone=True), nullable=True)
+    # SHA-256 of the emailed verification token, and when it stops working.
+    email_verification_token = Column(String(64), nullable=True)
+    email_verification_expires = Column(DateTime(timezone=True), nullable=True)
+    # Sessions issued before this moment are no longer accepted. Set when the
+    # password is reset or the account changes hands to its verified owner.
+    tokens_valid_after = Column(DateTime(timezone=True), nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
     is_admin = Column(Boolean, default=False, nullable=False)
     created_at = Column(
@@ -181,6 +191,9 @@ class Run(Base):
     # the global dispatch order. This single column is BOTH the "promoted?" marker
     # and the FCFS sort key (readiness order, independent of created_at).
     dispatch_seq = Column(BigInteger, nullable=True)
+    # When dispatch_seq was assigned, i.e. since when the run has been ready to
+    # start. Bounds how long it may wait for a free method slot.
+    dispatch_ready_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -189,7 +202,11 @@ class Run(Base):
     )
     started_at = Column(DateTime(timezone=True), nullable=True)
     finished_at = Column(DateTime(timezone=True), nullable=True)
+    # Until when this run's results are kept; fixed when the run ends
+    # (services/retention.py). NULL = no expiry.
     expires_at = Column(DateTime(timezone=True), nullable=True)
+    # When the results were removed. The run row itself stays as history.
+    results_expired_at = Column(DateTime(timezone=True), nullable=True)
 
     # Relationships
     user = relationship("User", back_populates="runs")
@@ -210,6 +227,8 @@ class Run(Base):
         Index("idx_runs_status", "status"),
         Index("idx_runs_created_at", "created_at"),
         Index("idx_runs_method_id", "method_id"),
+        # Per-user rolling quota: "this user's runs of the last hour".
+        Index("idx_runs_user_created_at", "user_id", "created_at"),
         # Drives the dispatcher claim query (ORDER BY dispatch_seq over promoted rows).
         Index("idx_runs_status_dispatch_seq", "status", "dispatch_seq"),
     )
@@ -380,6 +399,55 @@ class RunArtifact(Base):
         Index("idx_run_artifacts_run_id", "run_id"),
         Index("idx_run_artifacts_run_tree", "run_id", "tree_id"),
         Index("idx_run_artifacts_run_role", "run_id", "artifact_role"),
+    )
+
+
+class NotificationStatus(str, enum.Enum):
+    """Delivery state of one outbox entry."""
+    PENDING = "PENDING"    # waiting for its first or next attempt
+    SENT = "SENT"          # accepted by the mail server
+    FAILED = "FAILED"      # given up: attempts exhausted, or refused for good
+    SKIPPED = "SKIPPED"    # not sent on purpose (email switched off, no recipient)
+
+
+class NotificationOutbox(Base):
+    """One email owed to a user about one run.
+
+    A row is written in the same database transaction that gives the run its
+    final status, so a run cannot finish without its notification being
+    recorded, and a rolled-back finish leaves no notification behind. The
+    worker's sender loop delivers rows later, independently of run processing;
+    whatever happens to the email, the run's status never changes.
+
+    ``UNIQUE (run_id, kind)`` is what makes duplicates impossible at the source:
+    however often a terminal state is written, polled or replayed after a
+    restart, there is at most one row per run and kind.
+    """
+    __tablename__ = "notification_outbox"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id = Column(UUID(as_uuid=True), ForeignKey("runs.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    # What the email is about. Today only "run_finished".
+    kind = Column(String(40), nullable=False)
+    # How the run ended, fixed when the row is written: DONE, ERROR or QUEUE_TIMEOUT.
+    outcome = Column(String(20), nullable=False)
+    status = Column(String(20), nullable=False, default=NotificationStatus.PENDING.value,
+                    server_default=NotificationStatus.PENDING.value)
+    attempts = Column(Integer, nullable=False, default=0, server_default="0")
+    next_attempt_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    # Set while a sender is working on the row, so two senders never take it at once.
+    locked_until = Column(DateTime(timezone=True), nullable=True)
+    # Why the last attempt failed (or why the row was skipped). Never a credential.
+    last_error = Column(Text, nullable=True)
+    # Address the email went to, recorded when it is sent.
+    recipient = Column(String(320), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    sent_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("run_id", "kind", name="uq_notification_outbox_run_kind"),
+        Index("idx_notification_outbox_due", "status", "next_attempt_at"),
     )
 
 

@@ -5,10 +5,10 @@
 #
 # Design constraints (see plan):
 #   * Read-only inspection of the staged AIRR table. Never mutates input.
-#   * Nothing here touches the base-codes/ submodule.
+#   * Nothing here touches the base-codes/ pipeline code.
 #   * Hard-fail ONLY on genuinely fatal issues (unreadable/empty file, missing
 #     truly-required columns, empty/duplicate sequence_id). Everything the
-#     downstream submodule currently tolerates (rows it silently drops via
+#     downstream pipeline currently tolerates (rows it silently drops via
 #     dropna, non-uniform alignment lengths that MUSCLE re-aligns, etc.) is a
 #     WARNING so currently-working inputs keep running.
 from __future__ import annotations
@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 # Provably-required for the pipeline to produce any output. Missing any of
 # these means the run cannot succeed, so we reject up front with a clear
-# message instead of failing opaquely deep in the submodule.
+# message instead of failing opaquely deep in the pipeline.
 # Mirrors apps/api/preprocess/column_requirements.py::CLONALTREE_BASE_REQUIRED_KEYS
 # (the subset the pipeline genuinely depends on).
 REQUIRED_COLUMNS: Tuple[str, ...] = (
@@ -40,7 +40,7 @@ RECOMMENDED_BASE_COLUMNS: Tuple[str, ...] = (
 )
 
 # Used only when refinement runs (use_refinement, default True). Absence
-# degrades/skips refinement inside the submodule rather than aborting -> warn.
+# degrades/skips refinement inside the pipeline rather than aborting -> warn.
 REFINEMENT_COLUMNS: Tuple[str, ...] = (
     "j_sequence_alignment",
     "v_sequence_alignment",

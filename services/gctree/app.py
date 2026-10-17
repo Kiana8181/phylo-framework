@@ -15,13 +15,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
+import resource_limits
 from fastapi import FastAPI, Request
 from dotenv import load_dotenv
 
 load_dotenv()
 
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 # ---------- Constants & contracts ----------
 METHOD_ID = "gctree"
@@ -63,6 +64,9 @@ _DEFAULT_ROUTES = {
     "jobStatus": "/jobs/{job_id}/status",
     "jobResult": "/jobs/{job_id}/result",
     "jobCancel": "/jobs/{job_id}/cancel",
+    "jobLog": "/jobs/{job_id}/log",
+    "job": "/jobs/{job_id}",
+    "capacity": "/capacity",
 }
 ROUTES = {**_DEFAULT_ROUTES, **(_read_json(ROUTES_JSON_PATH, {}) or {})}
 STRICT_CONTRACT_ROUTES = os.environ.get("STRICT_CONTRACT_ROUTES", "true").lower() in (
@@ -193,6 +197,10 @@ def validate_ranking(raw: Optional[str]) -> str:
 def _env(extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     env = os.environ.copy()
     env.update(DEFAULT_ENV)
+    # CPU budget of this job for every tool it starts (BLAS/OpenMP threads).
+    # Inside a job this repeats what the job manager already set; for a direct
+    # /run call it applies the container's plan.
+    env.update(resource_limits.job_environment(METHOD_ID, resource_limits.job_threads(env, METHOD_ID)))
     if extra:
         env.update(extra)
     try:
@@ -3123,9 +3131,46 @@ if not STRICT_CONTRACT_ROUTES:
 
 
 # ---------- Async job execution (/jobs contract) ----------
-from job_manager import JobManager  # noqa: E402
+from job_manager import JobManager, JobRejected  # noqa: E402
 
 job_manager = JobManager(METHOD_ID)
+
+
+@app.on_event("startup")
+async def _recover_interrupted_jobs() -> None:
+    """Jobs that were running when this service last stopped can never finish:
+    report them as failed so their runs do not wait for ever. Runs only when
+    the web server starts, not when a job's own process imports this module."""
+    if os.environ.get("PHYLO_JOB_CHILD") == "1":
+        return
+    closed = job_manager.recover_interrupted_jobs()
+    if closed:
+        print(f"[{METHOD_ID}] closed {closed} job(s) interrupted by a restart", flush=True)
+
+
+def _rejection_response(exc: JobRejected) -> JSONResponse:
+    """A job that was not started: 429 when waiting will help (the caller keeps
+    it queued and retries), 507 when it cannot fit in this container at all."""
+    decision = exc.admission
+    retryable = decision.code == resource_limits.BUSY
+    headers = {"Retry-After": str(decision.retry_after_seconds)} if retryable else None
+    return JSONResponse(
+        status_code=429 if retryable else 507,
+        headers=headers,
+        content={
+            "ok": False,
+            "code": decision.code,
+            "error": decision.reason,
+            "retry_after_seconds": decision.retry_after_seconds,
+            "capacity": job_manager.capacity_report(),
+        },
+    )
+
+
+@app.get(ROUTES["capacity"])
+async def capacity_endpoint():
+    """What this service may use and how much of it is free right now."""
+    return ok(job_manager.capacity_report())
 
 
 def run_job_sync(file_path, params) -> Tuple[int, Any]:
@@ -3185,8 +3230,16 @@ async def submit_job_endpoint(request: Request):
     file_path = body.get("file_path")
     params = body.get("params") or {}
     run_id = body.get("run_id")
+    # Optional time limit for this job, set by the worker from the run's limit.
+    timeout_seconds = body.get("timeout_seconds")
+    if not isinstance(timeout_seconds, (int, float)) or isinstance(timeout_seconds, bool) or timeout_seconds <= 0:
+        timeout_seconds = None
     try:
-        job_id = job_manager.submit(file_path=file_path, params=params, run_id=run_id)
+        job_id = job_manager.submit(
+            file_path=file_path, params=params, run_id=run_id, timeout_seconds=timeout_seconds
+        )
+    except JobRejected as rejected:
+        return _rejection_response(rejected)
     except Exception as e:  # noqa: BLE001
         return err(f"Failed to start job: {e}", 500)
     return ok({"ok": True, "job_id": job_id, "status": "QUEUED"})
@@ -3224,3 +3277,28 @@ async def job_cancel_delete_endpoint(job_id: str):
     if st is None:
         return err("Job not found", 404)
     return ok(st)
+
+
+@app.get(ROUTES["jobLog"])
+async def job_log_endpoint(job_id: str):
+    """The job's log as text, cut to the configured size (beginning and end
+    kept). Used by the worker to keep a log for jobs that could not upload
+    their own (stopped, timed out, crashed)."""
+    found = job_manager.log(job_id)
+    if found is None:
+        return err("Job not found", 404)
+    content, was_cut = found
+    return Response(content=content, media_type="text/plain; charset=utf-8",
+                    headers={"X-Log-Truncated": "true" if was_cut else "false"})
+
+
+@app.delete(ROUTES["job"])
+async def job_delete_endpoint(job_id: str):
+    """Forget a finished job: the worker calls this once it has taken the
+    result, so nothing of the job stays on this container's disk."""
+    code = job_manager.delete(job_id)
+    if code == 404:
+        return err("Job not found", 404)
+    if code == 409:
+        return err("Job is still running", 409)
+    return ok({"ok": True, "job_id": job_id, "deleted": True})

@@ -99,7 +99,13 @@
     },
 
     "minseq": { "type": "integer", "default": 3, "title": "Min seq/clone" },
-    "nproc": { "type": "integer", "default": 1, "title": "Threads" },
+    "nproc": {
+      "type": "integer",
+      "default": 1,
+      "minimum": 1,
+      "title": "Threads",
+      "description": "Parallel workers requested for tree building. The server reduces this to the CPU cores it allows one Dowser job and reports the value it used."
+    },
     "seed": {
       "type": "integer",
       "title": "Random seed",

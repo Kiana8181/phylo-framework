@@ -8,7 +8,7 @@ import boto3
 from botocore.exceptions import ClientError
 from botocore.config import Config
 
-from apps.api.storage.base import StorageInterface
+from apps.api.storage.base import ObjectStat, StorageInterface
 
 
 class S3Storage(StorageInterface):
@@ -186,6 +186,43 @@ class S3Storage(StorageInterface):
             return True
         except ClientError:
             return False
+
+    async def stat(self, file_path: str) -> Optional[ObjectStat]:
+        """Size and recorded checksum of an object; None only when it is absent."""
+        key = file_path.lstrip("/")
+        try:
+            head = await asyncio.to_thread(
+                self.s3_client.head_object, Bucket=self.bucket_name, Key=key
+            )
+        except ClientError as e:
+            status = (e.response.get("ResponseMetadata") or {}).get("HTTPStatusCode")
+            code = str((e.response.get("Error") or {}).get("Code") or "")
+            if status == 404 or code in {"404", "NoSuchKey", "NotFound"}:
+                return None
+            raise
+        metadata = {str(k).lower(): v for k, v in (head.get("Metadata") or {}).items()}
+        sha256 = metadata.get("sha256")
+        return ObjectStat(
+            size_bytes=int(head.get("ContentLength") or 0),
+            sha256=str(sha256).strip().lower() if sha256 else None,
+        )
+
+    async def delete_prefix(self, prefix: str) -> int:
+        """Delete every object under ``prefix``. Raises if the store fails."""
+        key = prefix.lstrip("/")
+        if not key:
+            raise ValueError("refusing to delete with an empty prefix")
+
+        def _delete_all() -> int:
+            deleted = 0
+            paginator = self.s3_client.get_paginator("list_objects_v2")
+            for page in paginator.paginate(Bucket=self.bucket_name, Prefix=key):
+                for obj in page.get("Contents") or []:
+                    self.s3_client.delete_object(Bucket=self.bucket_name, Key=obj["Key"])
+                    deleted += 1
+            return deleted
+
+        return await asyncio.to_thread(_delete_all)
 
     async def move(self, src_path: str, dst_path: str) -> str:
         """Move within S3 via copy + delete."""

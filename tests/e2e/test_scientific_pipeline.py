@@ -7,12 +7,15 @@ import asyncio
 import hashlib
 import json
 import os
+import subprocess
 import time
 from pathlib import Path
 from uuid import uuid4
 import httpx
 import pytest
 from jsonschema import Draft7Validator
+
+from tests.support.accounts import register_verified
 
 ROOT = Path(__file__).resolve().parents[2]
 PARAMS = json.loads((ROOT / 'tests/fixtures/scientific-params.json').read_text())
@@ -30,9 +33,8 @@ def unwrap(response):
 async def test_scientific_pipeline(method, tmp_path):
     async with httpx.AsyncClient(base_url='http://127.0.0.1:58000', timeout=60, trust_env=False) as api:
         tag = uuid4().hex
-        account = unwrap(await api.post('/auth/register', json={
-            'email': f'{tag}@example.org', 'username': tag, 'password': 'e2e-password'}))
-        api.headers['Authorization'] = f"Bearer {account['access_token']}"
+        # Sign up as a person does: sign-up check, then the emailed confirmation link.
+        await register_verified(api, f'{tag}@example.org', tag, 'e2e-password')
         init = unwrap(await api.post('/uploads/init', json={'original_filename': SAMPLE.name, 'mime_type': 'text/tab-separated-values'}))
         uploaded = unwrap(await api.put(init['content_url'], content=SAMPLE.read_bytes()))
         created = unwrap(await api.post(f'/runs?method={method}', json={'file_id': uploaded['file_id'], 'params': PARAMS[method]}))
@@ -76,6 +78,18 @@ async def test_scientific_pipeline(method, tmp_path):
             assert all(e['source'] in ids and e['target'] in ids for e in edges)
             assert any(node['isLeaf'] for node in nodes)
             assert 'data:image' not in json.dumps(result)
+            # Every result says which version produced it: the API image recorded
+            # the commit it was built from, with no step on the host.
+            version = result['version_info']
+            assert version['method_id'] == method
+            assert version['service']['image_name'] == f'phylo-{method}:latest' and version['service']['base_image']
+            commit = version['framework']['git_commit']
+            assert commit and len(commit) == 40, version['framework']
+            # A commit of this repository, at or before the checkout under test
+            # (equal after a fresh build).
+            known = subprocess.run(['git', 'merge-base', '--is-ancestor', commit, 'HEAD'], cwd=ROOT, capture_output=True)
+            assert known.returncode == 0, f'{commit} is not a commit of this checkout'
+            assert version['framework']['version'] and version['captured_at']
             artifacts = unwrap(await api.get(f'/runs/{run_id}/artifacts'))
             if isinstance(artifacts, dict):
                 artifacts = artifacts['artifacts']
@@ -103,9 +117,8 @@ async def test_scientific_pipeline(method, tmp_path):
 async def test_malformed_dataset_fails_with_diagnostic_and_preserves_history(method):
     async with httpx.AsyncClient(base_url='http://127.0.0.1:58000', timeout=30, trust_env=False) as api:
         tag = uuid4().hex
-        account = unwrap(await api.post('/auth/register', json={
-            'email': f'{tag}@example.org', 'username': tag, 'password': 'e2e-password'}))
-        api.headers['Authorization'] = f"Bearer {account['access_token']}"
+        # Sign up as a person does: sign-up check, then the emailed confirmation link.
+        await register_verified(api, f'{tag}@example.org', tag, 'e2e-password')
         init = unwrap(await api.post('/uploads/init', json={'original_filename': 'invalid.tsv'}))
         uploaded = unwrap(await api.put(init['content_url'], content=b'sequence_id\tsequence_alignment\n'))
         run_id = unwrap(await api.post(f'/runs?method={method}', json={

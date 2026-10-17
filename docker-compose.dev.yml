@@ -1,0 +1,31 @@
+# Local-development override. NEVER load this on the server.
+#
+# docker-compose.yml publishes no host ports for Postgres or MinIO. The host-run
+# development modes (`./run.sh` options 1 and 2) run the API and worker directly
+# on the host, so they need both reachable from the host:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile dev up -d postgres minio minio-init
+#
+# The dev scripts already pass both files; you only need this command by hand.
+
+# Postgres and MinIO normally sit only on the internal network, which has no
+# route from the host. Publishing a port needs a regular network as well, so
+# this file also attaches both to phylo_egress.
+
+services:
+  postgres:
+    networks:
+      - phylo_egress
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5440}:${PHYLO_PORT_POSTGRES:-5432}"
+
+  minio:
+    networks:
+      - phylo_egress
+    ports:
+      # The S3 API is also reached by method containers started with plain
+      # `docker run` (scripts/method-services.mjs) through host.docker.internal,
+      # which on Linux is the bridge gateway, not loopback. Narrow it with
+      # DEV_MINIO_BIND=127.0.0.1 if you are on Docker Desktop.
+      - "${DEV_MINIO_BIND:-0.0.0.0}:${MINIO_API_PORT:-9000}:${PHYLO_PORT_MINIO:-9000}"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:${PHYLO_PORT_MINIO_CONSOLE:-9001}"

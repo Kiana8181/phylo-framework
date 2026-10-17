@@ -16,9 +16,20 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from job_manager import atomic_write_json, now_iso, read_json  # noqa: E402
+import resource_limits  # noqa: E402
+
+# Before the method's libraries are loaded and its memory use starts to grow.
+if os.environ.get("PHYLO_JOB_CHILD") == "1":
+    resource_limits.prefer_as_oom_victim()
+
+from job_manager import CODE_OUT_OF_MEMORY, atomic_write_json, bounded_log, now_iso, read_json  # noqa: E402
 from app import run_job_sync  # noqa: E402
-from artifact_manifest import materialize_artifacts  # noqa: E402
+from artifact_manifest import (  # noqa: E402
+    UPLOAD_FAILED_CODE,
+    mark_storage_failure,
+    materialize_artifacts,
+    storage_failure,
+)
 from object_storage import upload_artifact  # noqa: E402
 
 
@@ -57,8 +68,15 @@ def _append_log_artifact(payload: Any, run_id: str, job_id: str, log_path: Path)
     except Exception:
         pass
     try:
+        # Logs are stored in bounded form: a very long one keeps its beginning
+        # and its end (METHOD_JOB_LOG_MAX_MB).
+        content, was_cut = bounded_log(log_path)
+        source = log_path
+        if was_cut:
+            source = log_path.with_name("job.log.bounded")
+            source.write_bytes(content)
         uploaded = upload_artifact(
-            log_path,
+            source,
             run_id=run_id,
             job_id=job_id,
             filename="job.log",
@@ -66,6 +84,7 @@ def _append_log_artifact(payload: Any, run_id: str, job_id: str, log_path: Path)
         )
     except Exception as exc:  # noqa: BLE001
         print(f"[job_runner] job.log upload failed: {exc}", flush=True)
+        payload["log_upload_failed"] = True
         return payload
     payload["artifacts"].append(
         {
@@ -80,6 +99,22 @@ def _append_log_artifact(payload: Any, run_id: str, job_id: str, log_path: Path)
         }
     )
     return payload
+
+
+def _out_of_memory_during_job() -> bool:
+    """True when the kernel killed a process of this container for lack of
+    memory since this job started (the job manager passes the count at start)."""
+    baseline = (os.environ.get("PHYLO_JOB_OOM_BASELINE") or "").strip()
+    current = resource_limits.oom_kill_count()
+    return baseline.isdigit() and current is not None and current > int(baseline)
+
+
+def _out_of_memory_message(original: str) -> str:
+    return (
+        "The analysis ran out of memory and could not finish. Try a smaller dataset, or ask "
+        "the administrator to raise the memory limit of this method. "
+        f"(Reported by the method: {original})"
+    )
 
 
 def main() -> None:
@@ -129,10 +164,19 @@ def main() -> None:
         # artifact_files list with a {object_key, size_bytes, checksum_sha256,
         # ...} manifest. Nothing crosses the service -> API boundary via a
         # shared volume.
+        materialize_error = None
         try:
             payload = materialize_artifacts(payload, run_id=run_id, job_id=args.job_id)
         except Exception as exc:  # noqa: BLE001
+            materialize_error = f"{type(exc).__name__}: {exc}"
             print(f"[gctree.job_runner] materialize_artifacts failed: {exc}", flush=True)
+        # A successful analysis whose files are not in storage is not a
+        # finished job: report it as a failure instead of as DONE.
+        not_stored = storage_failure(payload, materialize_error) if ok_flag else None
+        if not_stored:
+            print(f"[gctree.job_runner] {not_stored}", flush=True)
+            payload = mark_storage_failure(payload, not_stored)
+            ok_flag = False
         payload = _append_log_artifact(payload, run_id, args.job_id, log_path)
         atomic_write_json(result_path, payload)
         if ok_flag:
@@ -152,11 +196,16 @@ def main() -> None:
             if isinstance(payload, dict) and isinstance(payload.get("error"), str):
                 err_msg = payload["error"]
             err_msg = err_msg or f"Method returned HTTP {status_code}"
+            error_code = payload.get("error_code") if isinstance(payload, dict) else None
+            if error_code != UPLOAD_FAILED_CODE and _out_of_memory_during_job():
+                err_msg = _out_of_memory_message(err_msg)
+                error_code = CODE_OUT_OF_MEMORY
             status.update(
                 {
                     "status": "ERROR",
                     "stage": "ERROR",
                     "message": err_msg,
+                    "error_code": error_code,
                     "error": payload if isinstance(payload, dict) else err_msg,
                     "progress": 100,
                     "finished_at": now_iso(),
@@ -173,11 +222,13 @@ def main() -> None:
         }
         err_payload = _append_log_artifact(err_payload, run_id, args.job_id, log_path)
         atomic_write_json(result_path, err_payload)
+        oom = isinstance(exc, MemoryError) or _out_of_memory_during_job()
         status.update(
             {
                 "status": "ERROR",
                 "stage": "ERROR",
-                "message": str(exc),
+                "message": _out_of_memory_message(str(exc)) if oom else str(exc),
+                "error_code": CODE_OUT_OF_MEMORY if oom else None,
                 "error": err_payload,
                 "progress": 100,
                 "finished_at": now_iso(),
@@ -187,5 +238,20 @@ def main() -> None:
         atomic_write_json(status_path, status)
 
 
+def _remove_scratch_data() -> None:
+    """Delete this job's temporary directory (its TMPDIR, set by the job
+    manager). By now every result file has been uploaded."""
+    import shutil
+    import tempfile
+
+    work_dir = os.environ.get("TMPDIR") or ""
+    if os.environ.get("PHYLO_JOB_CHILD") == "1" and work_dir and Path(work_dir).name == "tmp":
+        shutil.rmtree(work_dir, ignore_errors=True)
+    tempfile.tempdir = None
+
+
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        _remove_scratch_data()

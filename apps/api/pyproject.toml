@@ -3,7 +3,8 @@ name = "phylo-api"
 version = "0.1.0"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-dependencies = ["fastapi", "uvicorn[standard]", "pydantic-settings", "python-multipart", "redis", "rq"]
+# Pinned versions live in requirements.txt (direct) and requirements.lock (full set).
+dependencies = ["fastapi", "uvicorn[standard]", "pydantic[email]", "sqlalchemy[asyncio]", "asyncpg", "alembic", "PyJWT", "passlib[bcrypt]", "httpx"]
 
 [project.optional-dependencies]
 test = ["pytest>=8.4", "pytest-asyncio>=0.23", "httpx>=0.28"]

@@ -1,16 +1,6 @@
-import Link from "next/link";
-import { Button } from "@/components/ui/button";
+import { redirect } from "next/navigation";
 
+// The sign-in form lives at /auth. This address is kept for old links.
 export default function LoginPage() {
-  return (
-    <main className="mx-auto max-w-md p-4 sm:p-6 space-y-6">
-      <h1 className="text-xl font-semibold sm:text-2xl">Log in</h1>
-      <p className="text-muted-foreground text-sm">
-        Log in page. Authentication will be connected in a future release.
-      </p>
-      <Link href="/">
-        <Button variant="outline">Back to Home</Button>
-      </Link>
-    </main>
-  );
+  redirect("/auth?mode=login");
 }

@@ -15,11 +15,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import ClientDisconnect
 
 from apps.api.auth.dependencies import get_current_user_required
+from apps.api.auth.verification import require_verified_user
 from apps.api.config import STORAGE_QUOTA_PER_USER_BYTES
 from apps.api.database import get_db
 from apps.api.database.models import StorageType, UploadSessionStatus, User
 from apps.api.repositories.file_repository import FileRepository
 from apps.api.repositories.upload_session_repository import UploadSessionRepository
+from apps.api.security.errors import internal_error
+from apps.api.services import retention
 from apps.api.storage import get_dataset_storage
 
 router = APIRouter(prefix="/uploads", tags=["uploads"])
@@ -37,6 +40,43 @@ def storage():
 
 class _QuotaExceeded(Exception):
     pass
+
+
+class _TooLarge(Exception):
+    pass
+
+
+def _megabytes(size: int) -> str:
+    return f"{size / (1024 * 1024):g} MB"
+
+
+def _too_large_error() -> HTTPException:
+    limit = retention.max_upload_bytes()
+    return HTTPException(
+        status_code=413,
+        detail={
+            "code": retention.CODE_UPLOAD_TOO_LARGE,
+            "message": f"This file is larger than the {_megabytes(limit)} allowed for one upload.",
+            "max_upload_bytes": limit,
+        },
+    )
+
+
+@router.get("/limits")
+async def upload_limits(
+    current_user: User = Depends(get_current_user_required),
+    db: AsyncSession = Depends(get_db),
+):
+    """What the signed-in user may upload: the largest single file, and how
+    much of the storage quota is left. Lets a client refuse a file before
+    sending it."""
+    used = await FileRepository(db).get_total_size_by_user(current_user.id)
+    return {
+        "max_upload_bytes": retention.max_upload_bytes(),
+        "quota_bytes": STORAGE_QUOTA_PER_USER_BYTES,
+        "used_bytes": used,
+        "remaining_bytes": max(0, STORAGE_QUOTA_PER_USER_BYTES - used),
+    }
 
 
 class InitUploadBody(BaseModel):
@@ -86,11 +126,16 @@ def _safe_unlink(path: Optional[str]) -> None:
 @router.post("/init")
 async def init_upload(
     body: InitUploadBody,
-    current_user: User = Depends(get_current_user_required),
+    # Uploading needs a confirmed email address (when that is required).
+    current_user: User = Depends(require_verified_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Create an upload session. Returns upload_id + the content upload endpoint."""
     filename = (body.original_filename or "").strip() or "unknown"
+    # Refused here, before a byte is sent, when the client says how large it is;
+    # enforced again while the bytes arrive, whatever the client said.
+    if body.expected_size is not None and body.expected_size > retention.max_upload_bytes():
+        raise _too_large_error()
     if body.expected_size is not None and body.expected_size > STORAGE_QUOTA_PER_USER_BYTES:
         raise HTTPException(413, "File exceeds your storage quota.")
 
@@ -112,7 +157,7 @@ async def init_upload(
 async def upload_content(
     upload_id: UUID,
     request: Request,
-    current_user: User = Depends(get_current_user_required),
+    current_user: User = Depends(require_verified_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Receive the raw file body, persist to storage and create the File record."""
@@ -132,6 +177,7 @@ async def upload_content(
 
     used = await file_repo.get_total_size_by_user(current_user.id)
     quota = STORAGE_QUOTA_PER_USER_BYTES
+    max_bytes = retention.max_upload_bytes()
     bytes_received = 0
     hasher = hashlib.sha256()
 
@@ -141,10 +187,16 @@ async def upload_content(
                 if not chunk:
                     continue
                 bytes_received += len(chunk)
+                if bytes_received > max_bytes:
+                    raise _TooLarge()
                 if used + bytes_received > quota:
                     raise _QuotaExceeded()
                 hasher.update(chunk)
                 await f.write(chunk)
+    except _TooLarge:
+        _safe_unlink(str(tmp_path))
+        await repo.mark_error(upload_id, "File larger than the upload limit")
+        raise _too_large_error()
     except _QuotaExceeded:
         _safe_unlink(str(tmp_path))
         await repo.mark_error(upload_id, "Storage quota exceeded")
@@ -157,7 +209,7 @@ async def upload_content(
     except Exception as exc:
         _safe_unlink(str(tmp_path))
         await repo.mark_error(upload_id, f"Upload failed: {exc!s}")
-        raise HTTPException(500, f"Upload failed: {exc!s}")
+        raise internal_error("Upload failed.", exc, context=f"upload_id={upload_id}")
 
     if bytes_received == 0:
         _safe_unlink(str(tmp_path))
@@ -180,7 +232,7 @@ async def upload_content(
     except Exception as exc:
         _safe_unlink(str(tmp_path))
         await repo.mark_error(upload_id, f"Failed to store upload: {exc!s}")
-        raise HTTPException(500, f"Failed to store upload: {exc!s}")
+        raise internal_error("Failed to store upload.", exc, context=f"upload_id={upload_id}")
 
     storage_url = await storage().get_url(final_storage_path)
     file_record = await file_repo.create_file(

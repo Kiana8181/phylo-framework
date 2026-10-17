@@ -6,9 +6,13 @@ import type {
   CreateRunResponse,
   RunSummary,
   DashboardRunsResponse,
+  RunQuotaResponse,
 } from "@phylo/contracts";
 import { notify } from "@/lib/notify";
 import { useEffect, useRef } from "react";
+import { blockingResetAt, runLimitCode, runLimitTitle } from "./quota";
+
+export const RUN_QUOTA_QUERY_KEY = ["runQuota"] as const;
 
 type CreateRunVars = {
   methodId: string;
@@ -22,20 +26,54 @@ function truncateForToast(msg: string, max = 100): string {
 }
 
 export function useCreateRun() {
+  const queryClient = useQueryClient();
   return useMutation<CreateRunResponse, any, CreateRunVars>({
     mutationFn: ({ methodId, params, fileId }) =>
       RunsApi.create(methodId, { params, file_id: fileId }),
     onSuccess: () => notify.success("Run created"),
-    onError: (e: any) =>
-      notify.error("Failed to create run", truncateForToast(e?.message ?? "Unknown error")),
+    onError: (e: any) => {
+      // A limit is not a malfunction: say which one, in the server's own words.
+      const limit = runLimitCode(e);
+      if (limit) notify.error(runLimitTitle(limit), e?.message);
+      else notify.error("Failed to create run", truncateForToast(e?.message ?? "Unknown error"));
+    },
+    // Either way the allowance may have changed.
+    onSettled: () => queryClient.invalidateQueries({ queryKey: RUN_QUOTA_QUERY_KEY }),
   });
 }
 
 export function useCancelRun() {
+  const queryClient = useQueryClient();
   return useMutation<RunStatus, any, string>({
     mutationFn: (runId: string) => RunsApi.cancel(runId),
+    // Cancelling a run that had not started gives its allowance back.
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: RUN_QUOTA_QUERY_KEY }),
     onError: (e: any) =>
       notify.error("Failed to cancel run", truncateForToast(e?.message ?? "Unknown error")),
+  });
+}
+
+/** Longest the quota is left unchecked while nothing prompts a refresh. */
+const QUOTA_REFRESH_MS = 60_000;
+
+/**
+ * The user's standing against the limits on creating runs. Refreshed after a
+ * run is created or cancelled, when the window regains focus, once a minute,
+ * and at the moment a reached limit is due to lift.
+ */
+export function useRunQuota(enabled = true) {
+  return useQuery<RunQuotaResponse>({
+    queryKey: RUN_QUOTA_QUERY_KEY,
+    queryFn: () => RunsApi.quota(),
+    enabled,
+    refetchOnWindowFocus: true,
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      const resetAt = blockingResetAt(data);
+      if (!data || !resetAt) return QUOTA_REFRESH_MS;
+      const wait = (data.retry_after_seconds ?? 0) * 1000 + 1000;
+      return Math.min(QUOTA_REFRESH_MS, Math.max(1000, wait));
+    },
   });
 }
 
@@ -60,7 +98,10 @@ export function useCancelQueuedRun() {
   const queryClient = useQueryClient();
   return useMutation<RunStatus, any, string>({
     mutationFn: (runId: string) => RunsApi.cancelQueued(runId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["dashboardRuns"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["dashboardRuns"] });
+      queryClient.invalidateQueries({ queryKey: RUN_QUOTA_QUERY_KEY });
+    },
     onError: (e: any) =>
       notify.error("Failed to cancel run", truncateForToast(e?.message ?? "Unknown error")),
   });

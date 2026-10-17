@@ -12,7 +12,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     CONTRACTS_DIR=/contracts
 
 # System deps: PHYLIP provides dnapars; plus fonts for matplotlib SVG.
+# `apt-get upgrade` applies the security updates the distribution has published
+# since the base image was built (operating-system packages only; every
+# scientific package below stays pinned).
 RUN apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 \
+    && apt-get -y upgrade -o Acquire::Retries=5 \
     && apt-get install -y --no-install-recommends -o Acquire::Retries=5 \
     phylip ca-certificates curl tini fonts-dejavu-core \
     python3-pyqt5 python3-pyqt5.qtsvg python3-pyqt5.qtopengl libqt5svg5 libqt5opengl5 libgl1 libxcb-xinerama0 \
@@ -20,9 +24,13 @@ RUN apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire
 
 WORKDIR /srv
 
-COPY requirements.txt ./requirements.txt
-RUN grep -vE '^[[:space:]]*PyQt5([<>=!~].*)?$' requirements.txt > /tmp/requirements.docker.txt \
-    && pip install -r /tmp/requirements.docker.txt
+# requirements.lock pins the complete dependency set (direct + indirect), so
+# every build installs exactly the versions that were tested and audited.
+# Regenerate it with scripts/update-python-locks.sh.
+COPY requirements.txt requirements.lock ./
+RUN pip install --upgrade pip==26.2.1 setuptools==84.0.0 wheel==0.48.0 \
+    && grep -vE '^[[:space:]]*PyQt5([<>=!~].*)?$' requirements.txt > /tmp/requirements.docker.txt \
+    && pip install -r /tmp/requirements.docker.txt -c requirements.lock
 
 COPY sitecustomize.py /tmp/sitecustomize.py
 RUN python - <<'PY'
@@ -73,6 +81,7 @@ if not out.exists() or out.stat().st_size <= 0:
 print(f"ETE smoke render OK: {out}")
 PY
 COPY app.py /srv/app.py
+COPY resource_limits.py /srv/resource_limits.py
 COPY job_manager.py /srv/job_manager.py
 COPY job_runner.py /srv/job_runner.py
 COPY artifact_manifest.py /srv/artifact_manifest.py

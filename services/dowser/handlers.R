@@ -9,7 +9,16 @@ parse_dowser_params <- function(raw) {
   }
 
   p$minseq <- as.integer(p$minseq %||% 3L)
-  p$nproc <- as.integer(p$nproc %||% 1L)
+  # nproc is a request, not an entitlement. Dowser turns it into forked worker
+  # processes (parallel::mclapply over clones) and, for IgPhyML, into OpenMP
+  # threads, so an unchecked value would let one user claim every core of a
+  # shared server. It is clamped to this job's CPU budget, which comes from the
+  # container's effective CPU limit and the number of job slots. The value the
+  # user asked for is kept so the result can say what was changed.
+  nproc_clamp <- rl_clamp_parallelism(p$nproc %||% 1L, rl_job_threads("dowser"))
+  p$nproc_requested <- nproc_clamp$requested
+  p$nproc <- nproc_clamp$effective
+  p$nproc_reduced <- isTRUE(nproc_clamp$reduced)
   p$seed <- as.integer(p$seed %||% 42L)
   p$analysis_mode <- normalize_col(p$analysis_mode, "tree_only")
   mode_err <- validate_analysis_mode(p$analysis_mode)
@@ -160,6 +169,19 @@ run_handler_impl <- function(req, res) {
       "analysis_mode=%s, tree_build=%s, minseq=%d",
       p$analysis_mode, p$tree_build, p$minseq
     ))
+    add_log("dowser.params.nproc", TRUE, sprintf(
+      "nproc requested=%d, effective=%d (CPU budget of this job: %d)",
+      p$nproc_requested, p$nproc, rl_job_threads("dowser")
+    ))
+    if (isTRUE(p$nproc_reduced)) {
+      warnings <- c(warnings, sprintf(
+        paste0(
+          "nproc was reduced from %d to %d: this deployment allows a Dowser job %d CPU core(s). ",
+          "The analysis is unchanged; it uses fewer parallel workers."
+        ),
+        p$nproc_requested, p$nproc, p$nproc
+      ))
+    }
 
     db_original <- read_airr_from_path(file_path)
     add_log("dowser.input.read", TRUE, sprintf("Loaded %d rows.", nrow(db_original)))

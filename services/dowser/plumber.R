@@ -49,7 +49,10 @@ ROUTES <- modifyList(
     spec = "/spec", run = "/run", jobs = "/jobs",
     jobStatus = "/jobs/{job_id}/status",
     jobResult = "/jobs/{job_id}/result",
-    jobCancel = "/jobs/{job_id}/cancel"
+    jobCancel = "/jobs/{job_id}/cancel",
+    jobLog = "/jobs/{job_id}/log",
+    job = "/jobs/{job_id}",
+    capacity = "/capacity"
   ),
   ROUTES
 )
@@ -84,6 +87,7 @@ get_content_type <- function(req) {
 source_dowser_modules <- function() {
   mod_env <- parent.frame()
   modules <- c(
+    "resource_limits.R",
     "validators.R", "data_io.R", "format_clones.R", "tree_build.R",
     "dta.R", "time_evolution.R", "internal_seqs.R", "exports.R", "handlers.R"
   )
@@ -136,6 +140,16 @@ source_job_manager <- function() {
 }
 source_job_manager()
 JOB_MGR <- job_manager_new("dowser")
+# Jobs that were running when this service last stopped can never finish: report
+# them as failed so their runs do not wait for ever. Only the service does this;
+# a job's own process (job_runner.R loads this file too) must not.
+if (!identical(Sys.getenv("PHYLO_JOB_CHILD", ""), "1")) {
+  closed <- tryCatch(job_manager_recover(JOB_MGR), error = function(e) {
+    message(sprintf("[dowser] recovery of interrupted jobs failed: %s", conditionMessage(e)))
+    0L
+  })
+  if (closed > 0L) message(sprintf("[dowser] closed %d job(s) interrupted by a restart", closed))
+}
 to_plumber_path <- function(p) gsub("\\{job_id\\}", "<job_id>", p, perl = TRUE)
 
 #* @plumber
@@ -154,12 +168,32 @@ function(pr) {
     body <- tryCatch(jsonlite::fromJSON(body_raw, simplifyVector = FALSE), error = function(e) NULL)
     if (is.null(body) || !is.list(body)) { res$status <- 400; return(list(ok = FALSE, error = "JSON body required")) }
     job_id <- tryCatch(
-      job_manager_submit(JOB_MGR, body$file_path %||% NULL, body$params %||% list(), body$run_id %||% NULL),
+      # timeout_seconds: optional time limit for this job, set by the worker
+      # from the run's limit.
+      job_manager_submit(
+        JOB_MGR, body$file_path %||% NULL, body$params %||% list(), body$run_id %||% NULL,
+        timeout_seconds = body$timeout_seconds
+      ),
       error = function(e) e
     )
     if (inherits(job_id, "error")) { res$status <- 500; return(list(ok = FALSE, error = conditionMessage(job_id))) }
+    if (is.list(job_id) && isTRUE(job_id$rejected)) {
+      # Not started: 429 when waiting will help (the caller keeps the job
+      # queued and retries), 507 when it cannot fit in this container at all.
+      decision <- job_id$admission
+      retryable <- identical(decision$code, RL_BUSY)
+      res$status <- if (retryable) 429L else 507L
+      if (retryable) res$setHeader("Retry-After", as.character(decision$retry_after_seconds))
+      return(list(
+        ok = FALSE, code = decision$code, error = decision$reason,
+        retry_after_seconds = decision$retry_after_seconds,
+        capacity = job_manager_capacity(JOB_MGR)
+      ))
+    }
     list(ok = TRUE, job_id = job_id, status = "QUEUED")
   })
+  # What this service may use and how much of it is free right now.
+  pr$handle("GET", ROUTES$capacity, serializer = SER, function(req, res) job_manager_capacity(JOB_MGR))
   pr$handle("GET", to_plumber_path(ROUTES$jobStatus), serializer = SER, function(req, res, job_id) {
     st <- job_manager_status(JOB_MGR, job_id)
     if (is.null(st)) { res$status <- 404; return(list(ok = FALSE, error = "Job not found")) }
@@ -179,6 +213,23 @@ function(pr) {
   }
   pr$handle("POST", to_plumber_path(ROUTES$jobCancel), serializer = SER, cancel_fn)
   pr$handle("DELETE", to_plumber_path(ROUTES$jobCancel), serializer = SER, cancel_fn)
+  # The job's log as text, cut to the configured size (beginning and end kept).
+  # Used by the worker to keep a log for jobs that could not upload their own.
+  pr$handle("GET", to_plumber_path(ROUTES$jobLog), serializer = plumber::serializer_content_type("text/plain; charset=utf-8"),
+    function(req, res, job_id) {
+      found <- job_manager_log(JOB_MGR, job_id)
+      if (is.null(found)) { res$status <- 404; return("Job not found") }
+      res$setHeader("X-Log-Truncated", if (isTRUE(found$truncated)) "true" else "false")
+      found$content
+    })
+  # Forget a finished job: the worker calls this once it has taken the result,
+  # so nothing of the job stays on this container's disk.
+  pr$handle("DELETE", to_plumber_path(ROUTES$job), serializer = SER, function(req, res, job_id) {
+    code <- job_manager_delete(JOB_MGR, job_id)
+    if (code == 404L) { res$status <- 404; return(list(ok = FALSE, error = "Job not found")) }
+    if (code == 409L) { res$status <- 409; return(list(ok = FALSE, error = "Job is still running")) }
+    list(ok = TRUE, job_id = job_id, deleted = TRUE)
+  })
 
   pr_set_error(pr, function(req, res, err) {
     res$status <- 500

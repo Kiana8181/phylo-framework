@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { select } from "d3-selection";
+// Adds selection.transition(), used for the animated zoom below.
+import "d3-transition";
 import { zoom, zoomIdentity, type ZoomBehavior, type ZoomTransform } from "d3-zoom";
 import { clamp } from "@/components/phylo/tree/core";
 

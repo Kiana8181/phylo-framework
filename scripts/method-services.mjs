@@ -19,8 +19,6 @@ const ROOT = path.resolve(SCRIPT_DIR, "..");
 const CONFIG_PATH = path.join(ROOT, "config", "method-services.json");
 const ROOT_ENV_PATH = path.join(ROOT, ".env");
 const LEGACY_API_ENV_PATH = path.join(ROOT, "apps", "api", ".env");
-const CLONALTREE_SUBMODULE_REL = path.join("services", "clonaltree", "base-codes");
-const CLONALTREE_SUBMODULE_MARKER = path.join(ROOT, CLONALTREE_SUBMODULE_REL, "main_pipeline.py");
 const DOCKER_BUILD_RETRIES = Math.max(1, Number(process.env.PHYLO_DOCKER_BUILD_RETRIES || "3"));
 
 function sleep(ms) {
@@ -213,23 +211,6 @@ function containerName(id) {
   return `phylo-method-${id}`;
 }
 
-async function ensureServicePrereqs(services) {
-  const needsClonaltree = services.some((s) => String(s.id).toLowerCase() === "clonaltree");
-  if (!needsClonaltree) return;
-  if (fs.existsSync(CLONALTREE_SUBMODULE_MARKER)) return;
-  console.log("Initializing clonaltree submodule ...");
-  await spawnWithPromise(
-    "git",
-    ["submodule", "update", "--init", "--recursive", CLONALTREE_SUBMODULE_REL],
-    { cwd: ROOT },
-  );
-  if (!fs.existsSync(CLONALTREE_SUBMODULE_MARKER)) {
-    throw new Error(
-      "Missing services/clonaltree/base-codes submodule files. Run: git submodule update --init --recursive",
-    );
-  }
-}
-
 function servicePlatform(service) {
   const raw = typeof service.platform === "string" ? service.platform.trim() : "";
   return raw || null;
@@ -389,8 +370,6 @@ async function start(requestedIds) {
     console.log("No matching services. Available:", config.services.map((s) => s.id).join(", "));
     process.exit(1);
   }
-
-  await ensureServicePrereqs(toStart);
 
   const envMap = loadEnvMap();
   const storagePath = resolveFromRoot(envMap.get("STORAGE_LOCAL_PATH"), "runtime/storage");

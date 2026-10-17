@@ -436,6 +436,8 @@ export default function FormBuilder({
   defaults,
   footer,
   disabled: formDisabled = false,
+  submitDisabled = false,
+  submitDisabledReason,
   context,
 }: {
   schema: JSONSchema;
@@ -443,6 +445,11 @@ export default function FormBuilder({
   onSubmit: (values: FormValues) => void | Promise<void>;
   footer?: ReactNode;
   disabled?: boolean;
+  /** Blocks submitting only; the fields stay editable (e.g. a run limit is
+   *  reached, but the user may keep preparing the parameters). */
+  submitDisabled?: boolean;
+  /** Shown as the button's tooltip while `submitDisabled`. */
+  submitDisabledReason?: string;
   /** Extra read-only values (e.g. `$inputFormat`) merged in for visibility
    *  evaluation only. Never submitted. Use `$`-prefixed reserved keys. */
   context?: Record<string, unknown>;
@@ -719,6 +726,8 @@ export default function FormBuilder({
       ref={formRef}
       onSubmit={handleSubmit(
         async (data) => {
+          // The button is disabled too, but a form can be submitted without it.
+          if (submitDisabled) return;
           await onSubmit(filterVisibleValues(data));
         },
         (errors) => scrollToFirstError(errors),
@@ -745,7 +754,11 @@ export default function FormBuilder({
       )}
       {footer}
       <div className="col-span-full flex justify-end">
-        <Button type="submit" disabled={disabled}>
+        <Button
+          type="submit"
+          disabled={disabled || submitDisabled}
+          title={submitDisabled ? submitDisabledReason : undefined}
+        >
           {formState.isSubmitting ? (
             <>
               <Spinner className="mr-2" />

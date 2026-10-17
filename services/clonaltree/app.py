@@ -17,8 +17,9 @@ from typing import Any, Dict, List, Optional, Tuple
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
+import resource_limits
 from validators import validate_clonaltree_input
 
 load_dotenv()
@@ -26,7 +27,14 @@ load_dotenv()
 # ---------- constants ----------
 METHOD_ID = "clonaltree"
 ROOT_DIR = Path(__file__).resolve().parent
+# The ClonalTree pipeline itself. A copy of smhamidi/clonotype kept in this
+# repository, taken unchanged at the upstream version below.
 BASE_CODES_DIR = ROOT_DIR / "base-codes"
+CLONOTYPE_UPSTREAM = {
+    "tag": None,
+    "commit": "11225378d106a437137dd4f042a0eb8b412bcae8",
+    "ref": "1.0.0-3-g1122537",
+}
 
 CONTRACTS_DIR = Path(os.environ.get("CONTRACTS_DIR", "/contracts"))
 METHOD_DIR = CONTRACTS_DIR / "methods" / METHOD_ID
@@ -54,6 +62,9 @@ _DEFAULT_ROUTES = {
     "jobStatus": "/jobs/{job_id}/status",
     "jobResult": "/jobs/{job_id}/result",
     "jobCancel": "/jobs/{job_id}/cancel",
+    "jobLog": "/jobs/{job_id}/log",
+    "job": "/jobs/{job_id}",
+    "capacity": "/capacity",
 }
 ROUTES = {**_DEFAULT_ROUTES, **(_read_json(ROUTES_JSON_PATH, {}) or {})}
 STRICT_CONTRACT_ROUTES = os.environ.get("STRICT_CONTRACT_ROUTES", "true").lower() in (
@@ -122,6 +133,18 @@ def err(
 def _env(extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     env = os.environ.copy()
     env.update(DEFAULT_ENV)
+    # CPU budget of this job for every tool it starts. The pipeline sizes a
+    # process pool with multiprocessing.cpu_count() and MUSCLE picks its thread
+    # count from the host's cores; neither knows about the container's CPU
+    # limit. The thread variables cap MUSCLE and BLAS, and sitecustomize.py
+    # (found through PYTHONPATH by every Python the pipeline starts) makes
+    # cpu_count() report the budget. Inside a job this repeats what the job
+    # manager already set; for a direct /run call it applies the container's plan.
+    env.update(resource_limits.job_environment(METHOD_ID, resource_limits.job_threads(env, METHOD_ID)))
+    service_dir = str(Path(__file__).resolve().parent)
+    existing = env.get("PYTHONPATH", "")
+    if service_dir not in existing.split(os.pathsep):
+        env["PYTHONPATH"] = service_dir + (os.pathsep + existing if existing else "")
     if extra:
         env.update(extra)
     return env
@@ -284,7 +307,7 @@ def clamp_choice_str(val: Any, default: str, allowed: set[str]) -> str:
     return default
 
 
-def ensure_clonotype_submodule(logs: List[dict]) -> Tuple[bool, str]:
+def ensure_clonaltree_sources(logs: List[dict]) -> Tuple[bool, str]:
     required_paths = [
         BASE_CODES_DIR / "main_pipeline.py",
         BASE_CODES_DIR / "src/format/format_labeling_imgt_airr.py",
@@ -298,13 +321,13 @@ def ensure_clonotype_submodule(logs: List[dict]) -> Tuple[bool, str]:
     missing = [str(p.relative_to(ROOT_DIR)) for p in required_paths if not p.exists()]
     if missing:
         msg = (
-            "ClonalTree base-codes submodule is missing/uninitialized. "
-            "Run: git submodule update --init --recursive"
+            "ClonalTree pipeline files are missing from services/clonaltree/base-codes. "
+            "Restore them from the repository."
         )
         logs.append(
             {
-                "step": "submodule_check",
-                "cmd": "git submodule status services/clonaltree/base-codes",
+                "step": "sources_check",
+                "cmd": "verify services/clonaltree/base-codes",
                 "ok": False,
                 "out": f"{msg}\nMissing: {', '.join(missing)}",
             }
@@ -313,54 +336,17 @@ def ensure_clonotype_submodule(logs: List[dict]) -> Tuple[bool, str]:
 
     logs.append(
         {
-            "step": "submodule_check",
+            "step": "sources_check",
             "cmd": "verify services/clonaltree/base-codes",
             "ok": True,
-            "out": "Submodule files present.",
+            "out": "Pipeline files present.",
         }
     )
     return True, ""
 
 
 def detect_clonotype_ref() -> Dict[str, Optional[str]]:
-    tag = (os.environ.get("CLONOTYPE_PINNED_TAG") or "").strip() or None
-    commit = (os.environ.get("CLONOTYPE_PINNED_SHA") or "").strip() or None
-
-    if BASE_CODES_DIR.exists():
-        if commit is None:
-            try:
-                commit = (
-                    subprocess.check_output(
-                        ["git", "-C", str(BASE_CODES_DIR), "rev-parse", "HEAD"],
-                        stderr=subprocess.DEVNULL,
-                        text=True,
-                    )
-                    .strip()
-                    or None
-                )
-            except Exception:
-                commit = None
-        if tag is None:
-            try:
-                detected = (
-                    subprocess.check_output(
-                        ["git", "-C", str(BASE_CODES_DIR), "describe", "--tags", "--exact-match"],
-                        stderr=subprocess.DEVNULL,
-                        text=True,
-                    )
-                    .strip()
-                    or None
-                )
-                tag = detected
-            except Exception:
-                tag = None
-
-    ref = tag or commit
-    return {
-        "tag": tag,
-        "commit": commit,
-        "ref": ref,
-    }
+    return dict(CLONOTYPE_UPSTREAM)
 
 
 def parse_repertoire_two_levels(
@@ -700,9 +686,9 @@ async def run_handler(request: Request):
         except Exception as e:
             return err(str(e), logs=logs)
 
-        submodule_ok, submodule_error = ensure_clonotype_submodule(logs)
-        if not submodule_ok:
-            return err(submodule_error, logs=logs)
+        sources_ok, sources_error = ensure_clonaltree_sources(logs)
+        if not sources_ok:
+            return err(sources_error, logs=logs)
 
         validation = validate_clonaltree_input(input_path, params)
         if not validation.ok:
@@ -1097,7 +1083,7 @@ async def run_handler(request: Request):
 
         provenance_ref = detect_clonotype_ref()
         provenance = {
-            "clonotype_submodule": provenance_ref,
+            "clonotype_source": provenance_ref,
             "muscle": {
                 "major": muscle_major,
                 "version_raw": muscle_raw,
@@ -1216,9 +1202,46 @@ if not STRICT_CONTRACT_ROUTES:
 
 
 # ---------- Async job execution (/jobs contract) ----------
-from job_manager import JobManager  # noqa: E402
+from job_manager import JobManager, JobRejected  # noqa: E402
 
 job_manager = JobManager(METHOD_ID)
+
+
+@app.on_event("startup")
+async def _recover_interrupted_jobs() -> None:
+    """Jobs that were running when this service last stopped can never finish:
+    report them as failed so their runs do not wait for ever. Runs only when
+    the web server starts, not when a job's own process imports this module."""
+    if os.environ.get("PHYLO_JOB_CHILD") == "1":
+        return
+    closed = job_manager.recover_interrupted_jobs()
+    if closed:
+        print(f"[{METHOD_ID}] closed {closed} job(s) interrupted by a restart", flush=True)
+
+
+def _rejection_response(exc: JobRejected) -> JSONResponse:
+    """A job that was not started: 429 when waiting will help (the caller keeps
+    it queued and retries), 507 when it cannot fit in this container at all."""
+    decision = exc.admission
+    retryable = decision.code == resource_limits.BUSY
+    headers = {"Retry-After": str(decision.retry_after_seconds)} if retryable else None
+    return JSONResponse(
+        status_code=429 if retryable else 507,
+        headers=headers,
+        content={
+            "ok": False,
+            "code": decision.code,
+            "error": decision.reason,
+            "retry_after_seconds": decision.retry_after_seconds,
+            "capacity": job_manager.capacity_report(),
+        },
+    )
+
+
+@app.get(ROUTES["capacity"])
+async def capacity_endpoint():
+    """What this service may use and how much of it is free right now."""
+    return ok(job_manager.capacity_report())
 
 
 def run_job_sync(file_path, params) -> Tuple[int, Any]:
@@ -1274,8 +1297,16 @@ async def submit_job_endpoint(request: Request):
     file_path = body.get("file_path")
     params = body.get("params") or {}
     run_id = body.get("run_id")
+    # Optional time limit for this job, set by the worker from the run's limit.
+    timeout_seconds = body.get("timeout_seconds")
+    if not isinstance(timeout_seconds, (int, float)) or isinstance(timeout_seconds, bool) or timeout_seconds <= 0:
+        timeout_seconds = None
     try:
-        job_id = job_manager.submit(file_path=file_path, params=params, run_id=run_id)
+        job_id = job_manager.submit(
+            file_path=file_path, params=params, run_id=run_id, timeout_seconds=timeout_seconds
+        )
+    except JobRejected as rejected:
+        return _rejection_response(rejected)
     except Exception as e:  # noqa: BLE001
         return err(f"Failed to start job: {e}", 500)
     return ok({"ok": True, "job_id": job_id, "status": "QUEUED"})
@@ -1313,3 +1344,28 @@ async def job_cancel_delete_endpoint(job_id: str):
     if st is None:
         return err("Job not found", 404)
     return ok(st)
+
+
+@app.get(ROUTES["jobLog"])
+async def job_log_endpoint(job_id: str):
+    """The job's log as text, cut to the configured size (beginning and end
+    kept). Used by the worker to keep a log for jobs that could not upload
+    their own (stopped, timed out, crashed)."""
+    found = job_manager.log(job_id)
+    if found is None:
+        return err("Job not found", 404)
+    content, was_cut = found
+    return Response(content=content, media_type="text/plain; charset=utf-8",
+                    headers={"X-Log-Truncated": "true" if was_cut else "false"})
+
+
+@app.delete(ROUTES["job"])
+async def job_delete_endpoint(job_id: str):
+    """Forget a finished job: the worker calls this once it has taken the
+    result, so nothing of the job stays on this container's disk."""
+    code = job_manager.delete(job_id)
+    if code == 404:
+        return err("Job not found", 404)
+    if code == 409:
+        return err("Job is still running", 409)
+    return ok({"ok": True, "job_id": job_id, "deleted": True})

@@ -86,11 +86,24 @@ upload_artifact <- function(local_path, run_id, job_id,
   checksum <- digest::digest(file = local_path, algo = "sha256")
 
   body <- readBin(local_path, what = "raw", n = size_bytes)
-  put_args <- list(Bucket = st$bucket, Key = object_key, Body = body)
+  # The checksum travels with the object, so the worker can compare what is
+  # stored with what the manifest declares without downloading the file.
+  put_args <- list(
+    Bucket = st$bucket, Key = object_key, Body = body,
+    Metadata = list(sha256 = checksum)
+  )
   if (!is.null(content_type) && nzchar(content_type)) {
     put_args$ContentType <- content_type
   }
-  do.call(st$svc$put_object, put_args)
+  # A brief hiccup of the store must not cost the run its result: try again a
+  # few times before giving up (the caller reports a failure that remains).
+  attempts <- 3L
+  for (attempt in seq_len(attempts)) {
+    err <- tryCatch({ do.call(st$svc$put_object, put_args); NULL }, error = function(e) e)
+    if (is.null(err)) break
+    if (attempt == attempts) stop(err)
+    Sys.sleep(attempt)
+  }
 
   list(
     object_key = object_key,

@@ -17,6 +17,7 @@ import { ExternalLink, ChevronLeft, ChevronRight, Copy, GitCompare } from "lucid
 import { Loading } from "@/components/ui/loading";
 import { useState } from "react";
 import { notify } from "@/lib/notify";
+import { retentionDate } from "@/features/runs/retention";
 
 const PAGE_SIZE = 10;
 
@@ -160,6 +161,24 @@ export default function RunHistoryPage() {
                                 {run.progress}%
                               </span>
                             )}
+                            {run.results_expired ? (
+                              <span
+                                data-testid="run-results-expired"
+                                className="ml-2 inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground"
+                                title="The results of this run were removed at the end of the retention period. The run itself stays in your history."
+                              >
+                                Results expired
+                              </span>
+                            ) : (
+                              run.status === "DONE" && retentionDate(run.expires_at) && (
+                                <span
+                                  data-testid="run-results-kept-until"
+                                  className="mt-1 block text-xs text-muted-foreground"
+                                >
+                                  kept until {retentionDate(run.expires_at)}
+                                </span>
+                              )
+                            )}
                           </td>
                           <td className="py-3 px-2 text-muted-foreground">
                             {durationLabel ?? "—"}
@@ -175,7 +194,7 @@ export default function RunHistoryPage() {
                                   <ExternalLink className="h-3 w-3" />
                                 </Button>
                               </Link>
-                              {run.status === "DONE" && (
+                              {run.status === "DONE" && !run.results_expired && (
                                 <Link href={`/dashboard/comparison?baseRunId=${encodeURIComponent(run.id)}`}>
                                   <Button variant="ghost" size="sm" className="gap-1" title="Open Sequence Trace with other runs on the same dataset">
                                     <GitCompare className="h-3 w-3" />
