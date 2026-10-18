@@ -544,12 +544,10 @@ class JobManager:
         )
         self._procs[job_id] = proc
         self._meta[job_id] = meta
-        # The runner records its own pid as soon as it is up; until then this
-        # gives cancel something to signal. Never overwrite what it has written.
-        current = read_json(self._status_path(job_id)) or status
-        if current.get("status") == "QUEUED" and not current.get("pid"):
-            current["pid"] = proc.pid
-            atomic_write_json(self._status_path(job_id), current)
+        # From here status.json belongs to the runner, which records its own pid
+        # as soon as it is up; cancel falls back to proc.pid until then. Writing
+        # the pid in here would race the runner: a quick one could already have
+        # written DONE, and putting QUEUED back made it look lost.
         if limit:
             timer = threading.Timer(limit, self._on_deadline, args=(job_id,))
             timer.daemon = True
@@ -617,7 +615,8 @@ class JobManager:
             if st.get("status") in TERMINAL:
                 return st
 
-            pid = st.get("pid")
+            proc = self._procs.get(job_id)
+            pid = st.get("pid") or (proc.pid if proc is not None and proc.poll() is None else None)
             st["status"] = "CANCELLING"
             st["stage"] = "CANCELLING"
             st["message"] = "Cancelling..."
