@@ -184,6 +184,7 @@ job_manager_new <- function(method_id) {
   state$active <- character(0)
   state$submitted <- list()
   state$runs <- list()   # job id -> run id, for jobs that are still active
+  state$exiting <- character(0)   # finished, process not gone yet: scratch still to remove
   # Limits are fixed for the lifetime of the container, so plan once.
   list(method_id = method_id, root = root, capacity = rl_plan_capacity(method_id), state = state)
 }
@@ -328,21 +329,34 @@ job_manager_new <- function(method_id) {
   .job_write_failure(mgr, job_id, st, failure$code, failure$message)
 }
 
+# Whether a finished job's recorded process is still alive (on its way out).
+.job_process_exiting <- function(st) {
+  pid <- if (is.null(st)) NULL else st$pid
+  !(is.null(pid) || length(pid) == 0 || is.na(pid)) && .job_pid_running(pid)
+}
+
 # Number of jobs that are still running. Finished ones drop out of the registry;
 # one that ended without reporting a result is recorded as failed first.
 job_manager_running <- function(mgr) {
+  # Finished jobs whose process was still exiting when they dropped out: their
+  # scratch data goes as soon as the process is gone.
+  exiting <- character(0)
+  for (id in mgr$state$exiting) {
+    st <- .job_read_json(file.path(.job_state_dir(mgr, id), "status.json"))
+    if (.job_process_exiting(st)) exiting <- c(exiting, id) else .job_remove_work_dir(mgr, id)
+  }
   keep <- character(0)
   for (id in mgr$state$active) {
     st <- .job_settle(mgr, id)
     if (is.null(st) || .job_status_of(st) %in% .job_terminal) {
-      # Over, and its process has exited or will not be waited for: the
-      # scratch data is no longer needed by anyone.
-      pid <- if (is.null(st)) NULL else st$pid
-      if (is.null(pid) || length(pid) == 0 || is.na(pid) || !.job_pid_running(pid)) .job_remove_work_dir(mgr, id)
+      # Over: the scratch data is no longer needed by anyone once its process
+      # has exited. A runner that has just written DONE may still be exiting.
+      if (.job_process_exiting(st)) exiting <- union(exiting, id) else .job_remove_work_dir(mgr, id)
       next
     }
     keep <- c(keep, id)
   }
+  mgr$state$exiting <- exiting
   mgr$state$active <- keep
   for (id in setdiff(names(mgr$state$submitted), keep)) mgr$state$submitted[[id]] <- NULL
   for (id in setdiff(names(mgr$state$runs), keep)) mgr$state$runs[[id]] <- NULL

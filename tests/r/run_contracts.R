@@ -699,7 +699,9 @@ testthat::test_that('scratch data is removed after a timeout and after a normal 
     fast <- job_manager_submit(mgr, NULL, list(mode = "fast"), 'run-fast', timeout_seconds = 300)
     wait_status(mgr, fast, 'DONE')
     testthat::expect_true(wait_for(function() job_manager_running(mgr) == 0L))
-    testthat::expect_false(dir.exists(.job_work_dir(mgr, fast)))
+    # The runner may still be exiting after writing DONE (it was, on a busy
+    # machine): the scratch data goes once it is gone, without a new submit.
+    testthat::expect_true(wait_for(function() { job_manager_running(mgr); !dir.exists(.job_work_dir(mgr, fast)) }))
     testthat::expect_equal(job_manager_result(mgr, fast)$code, 200)         # the result is not scratch data
     finish_recovery_test(mgr)
   })
