@@ -318,8 +318,10 @@ class JobManager:
                 "ok": False,
             }
         )
-        atomic_write_json(self._status_path(job_id), st)
+        # Scratch first: status() reads without the lock, so whoever sees the
+        # terminal status must find the scratch data already gone.
         self._remove_work_dir(job_id)
+        atomic_write_json(self._status_path(job_id), st)
         print(f"[job_manager] job {job_id} failed: {code}: {message}", flush=True)
         return st
 
@@ -337,8 +339,8 @@ class JobManager:
         tail = self._log_tail(job_id)
         if tail:
             st["log_tail"] = tail
+        self._remove_work_dir(job_id)                # before the status, as in _write_failure
         atomic_write_json(self._status_path(job_id), st)
-        self._remove_work_dir(job_id)
         return st
 
     def _exit_failure(self, job_id: str, returncode: Optional[int]) -> tuple[str, str]:
@@ -544,12 +546,10 @@ class JobManager:
         )
         self._procs[job_id] = proc
         self._meta[job_id] = meta
-        # The runner records its own pid as soon as it is up; until then this
-        # gives cancel something to signal. Never overwrite what it has written.
-        current = read_json(self._status_path(job_id)) or status
-        if current.get("status") == "QUEUED" and not current.get("pid"):
-            current["pid"] = proc.pid
-            atomic_write_json(self._status_path(job_id), current)
+        # From here status.json belongs to the runner, which records its own pid
+        # as soon as it is up; cancel falls back to proc.pid until then. Writing
+        # the pid in here would race the runner: a quick one could already have
+        # written DONE, and putting QUEUED back made it look lost.
         if limit:
             timer = threading.Timer(limit, self._on_deadline, args=(job_id,))
             timer.daemon = True
@@ -617,7 +617,8 @@ class JobManager:
             if st.get("status") in TERMINAL:
                 return st
 
-            pid = st.get("pid")
+            proc = self._procs.get(job_id)
+            pid = st.get("pid") or (proc.pid if proc is not None and proc.poll() is None else None)
             st["status"] = "CANCELLING"
             st["stage"] = "CANCELLING"
             st["message"] = "Cancelling..."

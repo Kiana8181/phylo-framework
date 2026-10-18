@@ -72,6 +72,10 @@ RUN dnf -y upgrade --security --setopt=install_weak_deps=False \
     && dnf clean all \
     && rm -rf /var/cache/dnf
 
+# The base image's Python ships pyarrow 19.0.1 (CVE-2026-25087). Nothing here
+# depends on it; raise it to the first fixed release, touching nothing else.
+RUN python3 -m pip install --no-cache-dir --no-deps pyarrow==23.0.1
+
 WORKDIR /srv
 COPY validators.R /srv/validators.R
 COPY plumber.R /srv/plumber.R

@@ -66,6 +66,17 @@ jobs:
     timeout-minutes: 120
     needs: unit-integration
     steps:
+      # Every runtime image (two on the large immcantation/suite R image) plus
+      # the instrumented ones do not fit in the space a runner leaves free: the
+      # disk filled during the browser tests (ENOSPC, Chromium "Page crashed").
+      # Remove preinstalled toolchains this job never uses (~25 GB).
+      - name: Free disk space for the image builds
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/share/swift /usr/local/share/powershell
+          docker image prune --all --force
+          df -h /
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
@@ -82,7 +93,13 @@ jobs:
       - run: python -m pip install -r requirements-test.txt
       - run: npx playwright install --with-deps chromium
       - run: npm run test:all -- --build
-      # The job above has just built every runtime image, so scan them here
+      # The browser tests use the web dev server, so test:all builds every
+      # runtime image except the web one. Build it as web-prod does (same
+      # Dockerfile, context, tag and default API URL). Plain docker build:
+      # compose would demand the .env credentials, which the web image needs none of.
+      - name: Build the web image for the scan
+        run: docker build -f apps/web/Dockerfile -t phylo-web:latest .
+      # The job above has just built the other runtime images, so scan them here
       # instead of building them a second time. Runs on every push and on the
       # weekly schedule. Reports land in coverage/security/ and are uploaded
       # with the other artifacts below, also when the gate fails.
@@ -100,4 +117,7 @@ jobs:
           if-no-files-found: error
       - name: Remove only test infrastructure
         if: always()
-        run: docker compose -f docker-compose.test.yml --profile full down -v
+        run: |
+          df -h /
+          docker system df
+          docker compose -f docker-compose.test.yml --profile full down -v

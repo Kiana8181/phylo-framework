@@ -194,6 +194,9 @@ def _fake_cgroup(tmp_path, monkeypatch, *, cpus, memory_mb, in_use_mb, **tunable
     (root / "memory.current").write_text(f"{in_use_mb * MIB}\n")
     (root / "memory.stat").write_text("inactive_file 0\n")
     monkeypatch.setenv("PHYLO_CGROUP_ROOT", str(root))
+    # The faked quota is the limit under test: without this the machine's own
+    # CPU count caps it first (2 on a GitHub runner, so 4 or 2.5 became 2).
+    monkeypatch.setattr(sys.modules["resource_limits"], "host_cpus", lambda: 64)
     for name in ("METHOD_MAX_CONCURRENT_JOBS", "METHOD_THREADS_PER_JOB", "METHOD_JOB_MEMORY_MB",
                  "METHOD_BASELINE_MEMORY_MB", "METHOD_MEMORY_HEADROOM_PERCENT", "METHOD_CPU_LIMIT"):
         monkeypatch.delenv(name, raising=False)
@@ -540,7 +543,10 @@ def test_cancel_keeps_the_end_of_the_jobs_output(tmp_path, manager_module, monke
     mgr = _manager(manager_module, tmp_path, CHATTY_LONG_RUNNER)
     job_id = mgr.submit(file_path=None, params={}, run_id="run-cancel")
     _wait_for_status(mgr, job_id, {"RUNNING"})
-    time.sleep(0.3)
+    log = mgr._state_dir(job_id) / "job.log"                    # written just after RUNNING: wait for it
+    deadline = time.time() + 10
+    while time.time() < deadline and "step 2 started" not in (log.read_text() if log.exists() else ""):
+        time.sleep(0.05)
     final = mgr.cancel(job_id)
     assert final["status"] == "CANCELLED" and "step 2 started" in final["log_tail"]
     assert mgr.status(job_id)["status"] == "CANCELLED"      # a later status request does not change it

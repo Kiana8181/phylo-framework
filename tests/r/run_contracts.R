@@ -699,7 +699,9 @@ testthat::test_that('scratch data is removed after a timeout and after a normal 
     fast <- job_manager_submit(mgr, NULL, list(mode = "fast"), 'run-fast', timeout_seconds = 300)
     wait_status(mgr, fast, 'DONE')
     testthat::expect_true(wait_for(function() job_manager_running(mgr) == 0L))
-    testthat::expect_false(dir.exists(.job_work_dir(mgr, fast)))
+    # The runner may still be exiting after writing DONE (it was, on a busy
+    # machine): the scratch data goes once it is gone, without a new submit.
+    testthat::expect_true(wait_for(function() { job_manager_running(mgr); !dir.exists(.job_work_dir(mgr, fast)) }))
     testthat::expect_equal(job_manager_result(mgr, fast)$code, 200)         # the result is not scratch data
     finish_recovery_test(mgr)
   })
@@ -740,6 +742,9 @@ testthat::test_that('records nobody collected are removed after the retention ti
     testthat::expect_equal(job_manager_purge_expired(mgr, Sys.time() + 25 * 3600), 0L)
 
     job_manager_cancel(mgr, active)
+    # Cancel signals and returns; purge rightly skips a job whose process is
+    # still exiting, which on a slow CI runner it still was at this point.
+    testthat::expect_true(wait_for(function() !proc_alive(running$pid)))
     testthat::expect_equal(job_manager_purge_expired(mgr, Sys.time() + 25 * 3600), 1L)
     testthat::expect_equal(length(list.dirs(mgr$root, recursive = FALSE)), 0L)   # the service's disk is back to empty
     Sys.unsetenv("METHOD_JOB_RETENTION_HOURS")
