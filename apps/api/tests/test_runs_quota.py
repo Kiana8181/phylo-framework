@@ -472,12 +472,14 @@ async def test_simultaneous_requests_of_different_users_do_not_wait_for_each_oth
         async with maker() as s:
             repo = RunRepository(s)
             await repo.lock_run_creation(user.id)
-            await asyncio.sleep(0.2)                                          # all four hold "their" lock at once
+            await asyncio.sleep(0.5)                                          # all four hold "their" lock at once
             await s.commit()
 
     started = asyncio.get_running_loop().time()
     await asyncio.gather(*(one(u) for u in users))
-    assert asyncio.get_running_loop().time() - started < 0.7                 # in parallel, not 4 x 0.2 in a row
+    # In parallel (~0.6 s), not 4 x 0.5 in a row (2 s): wide enough apart that
+    # four connections on a busy 2-CPU runner cannot blur the two.
+    assert asyncio.get_running_loop().time() - started < 1.5
 
 
 @pytestmark_db
