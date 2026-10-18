@@ -93,7 +93,13 @@ jobs:
       - run: python -m pip install -r requirements-test.txt
       - run: npx playwright install --with-deps chromium
       - run: npm run test:all -- --build
-      # The job above has just built every runtime image, so scan them here
+      # The browser tests use the web dev server, so test:all builds every
+      # runtime image except the web one. Build it as web-prod does (same
+      # Dockerfile, context, tag and default API URL). Plain docker build:
+      # compose would demand the .env credentials, which the web image needs none of.
+      - name: Build the web image for the scan
+        run: docker build -f apps/web/Dockerfile -t phylo-web:latest .
+      # The job above has just built the other runtime images, so scan them here
       # instead of building them a second time. Runs on every push and on the
       # weekly schedule. Reports land in coverage/security/ and are uploaded
       # with the other artifacts below, also when the gate fails.
