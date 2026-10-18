@@ -543,7 +543,10 @@ def test_cancel_keeps_the_end_of_the_jobs_output(tmp_path, manager_module, monke
     mgr = _manager(manager_module, tmp_path, CHATTY_LONG_RUNNER)
     job_id = mgr.submit(file_path=None, params={}, run_id="run-cancel")
     _wait_for_status(mgr, job_id, {"RUNNING"})
-    time.sleep(0.3)
+    log = mgr._state_dir(job_id) / "job.log"                    # written just after RUNNING: wait for it
+    deadline = time.time() + 10
+    while time.time() < deadline and "step 2 started" not in (log.read_text() if log.exists() else ""):
+        time.sleep(0.05)
     final = mgr.cancel(job_id)
     assert final["status"] == "CANCELLED" and "step 2 started" in final["log_tail"]
     assert mgr.status(job_id)["status"] == "CANCELLED"      # a later status request does not change it

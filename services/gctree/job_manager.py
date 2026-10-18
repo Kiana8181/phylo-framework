@@ -318,8 +318,10 @@ class JobManager:
                 "ok": False,
             }
         )
-        atomic_write_json(self._status_path(job_id), st)
+        # Scratch first: status() reads without the lock, so whoever sees the
+        # terminal status must find the scratch data already gone.
         self._remove_work_dir(job_id)
+        atomic_write_json(self._status_path(job_id), st)
         print(f"[job_manager] job {job_id} failed: {code}: {message}", flush=True)
         return st
 
@@ -337,8 +339,8 @@ class JobManager:
         tail = self._log_tail(job_id)
         if tail:
             st["log_tail"] = tail
+        self._remove_work_dir(job_id)                # before the status, as in _write_failure
         atomic_write_json(self._status_path(job_id), st)
-        self._remove_work_dir(job_id)
         return st
 
     def _exit_failure(self, job_id: str, returncode: Optional[int]) -> tuple[str, str]:
