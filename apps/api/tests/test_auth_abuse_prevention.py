@@ -337,7 +337,10 @@ async def test_registrations_and_reset_requests_are_limited(client, limits_on, m
 @db_test
 async def test_a_limit_resets_with_its_window_and_refused_attempts_still_count(session, limits_on, monkeypatch):
     monkeypatch.setenv("AUTH_LIMIT_LOGIN_IP", "2/100")
-    now = 1_000_000.0
+    # The start of the next 100 s window: in the future, so the rows are not
+    # already expired. A fixed 1970 time made them so, and the cleanup that
+    # hit() runs now and then (1 in 200) removed them mid-test.
+    now = float((int(time.time()) // 100 + 1) * 100)
     await rate_limit.hit(session, "LOGIN_IP", "10.0.0.1", now=now)
     await rate_limit.hit(session, "LOGIN_IP", "10.0.0.1", now=now + 1)
     with pytest.raises(rate_limit.RateLimited) as refused:
