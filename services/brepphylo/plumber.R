@@ -1178,6 +1178,14 @@ run_handler_impl <- function(req, res) {
         )
         warnings <- c(warnings, ar$warnings)
 
+        # A requested analysis that fails must be visible on the run, not only
+        # inside analysis$per_clone_status.
+        if (identical(ar$status, "failed")) {
+          warnings <- c(warnings, sprintf(
+            "Class-switch analysis failed for clone %s: %s", cid, ar$skip_reason
+          ))
+        }
+
         if (!is.null(ar$skip_reason)) {
           analysis$skipped_clones[[length(analysis$skipped_clones) + 1L]] <- list(
             clone_id = cid,

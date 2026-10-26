@@ -220,8 +220,9 @@ run.sh               entry point for deployment and development
 Phylo-Framework is released under the **MIT License** — see [LICENSE](LICENSE).
 
 The datasets and run outputs archived alongside the paper are released
-separately under **CC-BY-4.0**, and are deposited on Zenodo at
-[10.5281/zenodo.22233538](https://doi.org/10.5281/zenodo.22233538).
+separately under **CC-BY-4.0**, and are deposited on Zenodo: version v3.0.0 at
+[10.5281/zenodo.23484075](https://doi.org/10.5281/zenodo.23484075)
+(all versions: [10.5281/zenodo.22233537](https://doi.org/10.5281/zenodo.22233537)).
 
 ### Third-party components
 
