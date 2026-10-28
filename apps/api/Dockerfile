@@ -39,7 +39,7 @@ WORKDIR /srv
 # every build installs exactly the versions that were tested and audited.
 # Regenerate it with scripts/update-python-locks.sh.
 COPY apps/api/requirements.txt apps/api/requirements.lock ./
-RUN pip install --no-cache-dir --upgrade pip==26.2.1 \
+RUN pip install --no-cache-dir --upgrade pip==26.2.2 \
     && pip install --no-cache-dir -r requirements.txt -c requirements.lock
 
 # Copy repo

@@ -28,7 +28,7 @@ WORKDIR /srv
 # every build installs exactly the versions that were tested and audited.
 # Regenerate it with scripts/update-python-locks.sh.
 COPY requirements.txt requirements.lock ./
-RUN pip install --upgrade pip==26.2.1 setuptools==84.0.0 wheel==0.48.0 \
+RUN pip install --upgrade pip==26.2.2 setuptools==84.0.0 wheel==0.48.0 \
     && grep -vE '^[[:space:]]*PyQt5([<>=!~].*)?$' requirements.txt > /tmp/requirements.docker.txt \
     && pip install -r /tmp/requirements.docker.txt -c requirements.lock
 

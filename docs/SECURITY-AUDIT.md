@@ -111,9 +111,9 @@ files or a Dockerfile stops using its lock.
 | Before | After |
 |---|---|
 | Production: 16 advisories (3 critical, 7 high) | Production: **0** |
-| All: 40 advisories (7 critical, 23 high) | All: 9 (2 critical, 5 high), development tooling only |
+| All: 40 advisories (7 critical, 23 high) | All: 4 (2 critical, 2 moderate), development tooling only |
 
-- `next` 15.4.10 → 15.5.27 (same major); `eslint-config-next` to match.
+- `next` 15.4.10 → 15.5.28 (same major); `eslint-config-next` to match.
 - `axios` 1.11.0 → 1.20.0.
 - `next-auth` removed: no import, configuration or environment reference
   anywhere in the repository. This also removed `@auth/core`.
@@ -147,10 +147,12 @@ files or a Dockerfile stops using its lock.
 - API: `python-dotenv` 1.1.1 → 1.2.2.
 - GCtree: `python-multipart` 0.0.9 → 0.0.32.
 - All three: `urllib3` 2.7.0 → 2.8.0 through the lock files.
+- API and ClonalTree: `certifi` 2026.7.22 → 2026.10.19; API: `Mako`
+  1.4.1 → 1.4.2; GCtree and ClonalTree: `Pillow` 12.3.0 → 13.0.0.
 - API: `rq`, `redis`, `psycopg2-binary` and `python-multipart` removed. None is
   imported; the queue is the Postgres-backed worker, migrations use `asyncpg`,
   and the API parses no form bodies.
-- All three images: `pip` → 26.2.1; GCtree and ClonalTree: `setuptools` →
+- All three images: `pip` → 26.2.2; GCtree and ClonalTree: `setuptools` →
   84.0.0 and `wheel` → 0.48.0.
 
 Scientific pins (`gctree`, `ete3`, `numpy`, `scipy`, `biopython`, `pandas`,
@@ -239,20 +241,19 @@ with an `immcantation/suite` upgrade.
 a scientific dependency, so it is only changed together with a scientific
 regression run. Ignored in CI through `.github/pip-audit-ignore.txt`.
 
-### 5. Development-only npm advisories (9)
+### 5. Development-only npm advisories (4)
 
 | Chain | Advisories | Why it is open | Exposure |
 |---|---|---|---|
 | `vitest`, `@vitest/mocker`, `@vitest/coverage-v8`, `tinypool` | 2 critical, 2 moderate | The fix is Vitest 5, two major versions ahead; installing it fails peer-dependency resolution and would need `--force` | Test runner only. The file-read advisories need the Vitest UI/API server to be listening; the project only uses `vitest run`. Not in any production image |
-| `eslint-config-next` → `fast-glob` → `micromatch` → `braces` | 5 high | No fixed release of `braces`/`micromatch` exists for this line; npm's only suggestion is a downgrade to `eslint-config-next` 14 | Linter only, run on the project's own files. Not in any production image |
 
-### 6. `pip` bundles vulnerable copies of three libraries
+### 6. `pip` still bundles vulnerable copies of three libraries
 
 Trivy flags `msgpack` 1.1.2, `setuptools` 70.3.0 and `urllib3` 2.7.0 in the
-Python images. They are private copies inside `pip` 26.2.1 (`pip/_vendor`),
-which is the newest `pip` release. `pip` is not run by any service at run time.
-Resolved when a newer `pip` is released and the pin in the Dockerfiles is
-raised.
+Python images. They are private copies inside `pip` 26.2.2 (`pip/_vendor`).
+`pip` is not run by any service at run time. Its bundled `certifi` was updated
+to 2026.10.19 in this release; the remaining copies are resolved when a newer
+`pip` release updates them and the Dockerfile pins are raised.
 
 ### 7. Operating-system packages without a fix
 
