@@ -17,7 +17,7 @@ import {
   ResponsiveTableHeader,
   ResponsiveTableRow,
 } from "@/components/ui/responsive-table";
-import { useDeleteFile, useFilesList } from "@/features/files/hooks";
+import { useDeleteFile, useFilesList, useRenewFile } from "@/features/files/hooks";
 import { notify } from "@/lib/notify";
 import { Trash2 } from "lucide-react";
 import { Loading } from "@/components/ui/loading";
@@ -52,12 +52,22 @@ function formatQuota(bytes: number): string {
 export default function FileManagementPage() {
   const { data, isLoading, error } = useFilesList();
   const deleteFile = useDeleteFile();
+  const renewFile = useRenewFile();
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
 
   const files = data?.files ?? [];
   const totalBytesUsed = data?.total_bytes_used ?? 0;
   const quotaBytes = data?.quota_bytes ?? 0;
   const quotaPct = quotaBytes > 0 ? Math.min(100, (totalBytesUsed / quotaBytes) * 100) : 0;
+
+  const handleRenew = async (id: string, name: string) => {
+    try {
+      await renewFile.mutateAsync(id);
+      notify.success("Dataset renewed", `${name} has a new expiration date.`);
+    } catch (e: unknown) {
+      notify.error("Renewal failed", (e as Error)?.message ?? "Unknown error");
+    }
+  };
 
   const handleConfirmDelete = async () => {
     if (!pendingDelete) return;
@@ -113,21 +123,27 @@ export default function FileManagementPage() {
             </p>
           )}
           {!isLoading && !error && files.length > 0 && (
-            <ResponsiveTable stackBelow="sm" labelPlacement="side">
+            <ResponsiveTable stackBelow="md" labelPlacement="side">
               <ResponsiveTableHeader
                 columns={[
                   "Name",
                   "Size",
                   "Uploaded",
+                  "Expires",
                   "Run ID",
-                  { label: "Actions", className: "w-24 text-right" },
+                  { label: "Actions", className: "w-40 text-right" },
                 ]}
               />
               <ResponsiveTableBody>
-                {files.map((file) => (
-                  <ResponsiveTableRow key={file.id}>
+                {files.map((file) => {
+                  const renewing = renewFile.isPending && renewFile.variables === file.id;
+                  return (
+                  <ResponsiveTableRow
+                    key={file.id}
+                    className={file.renewal_eligible ? "bg-amber-50/80 dark:bg-amber-950/20" : undefined}
+                  >
                     <ResponsiveTableCell label="Name" className="font-medium">
-                      <span className="block @xl:max-w-[12rem] @xl:truncate" title={file.original_filename}>
+                      <span className="block @2xl:max-w-[12rem] @2xl:truncate" title={file.original_filename}>
                         {file.original_filename}
                       </span>
                     </ResponsiveTableCell>
@@ -137,28 +153,50 @@ export default function FileManagementPage() {
                     <ResponsiveTableCell label="Uploaded" className="text-muted-foreground">
                       {formatDate(file.uploaded_at)}
                     </ResponsiveTableCell>
+                    <ResponsiveTableCell label="Expires" className="text-muted-foreground">
+                      <span className={file.renewal_eligible ? "font-medium text-amber-800 dark:text-amber-200" : undefined}>
+                        {file.expires_at ? formatDate(file.expires_at ?? null) : "—"}
+                      </span>
+                      {file.renewal_eligible && (
+                        <span className="mt-0.5 block text-xs text-amber-700 dark:text-amber-300">Expires soon</span>
+                      )}
+                    </ResponsiveTableCell>
                     <ResponsiveTableCell label="Run ID" className="font-mono text-xs">
-                      <span className="block @xl:max-w-[8rem] @xl:truncate">{file.run_id ?? "—"}</span>
+                      <span className="block @2xl:max-w-[8rem] @2xl:truncate">{file.run_id ?? "—"}</span>
                     </ResponsiveTableCell>
                     <ResponsiveTableCell className="text-right">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="text-destructive hover:text-destructive"
-                        onClick={() =>
-                          setPendingDelete({
-                            id: file.id,
-                            name: file.original_filename,
-                          })
-                        }
-                        disabled={deleteFile.isPending}
-                        aria-label={`Delete ${file.original_filename}`}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                      <div className="flex flex-wrap items-center justify-end gap-2">
+                        {file.renewal_eligible && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleRenew(file.id, file.original_filename)}
+                            disabled={renewFile.isPending || deleteFile.isPending}
+                            aria-label={`Renew ${file.original_filename}`}
+                          >
+                            {renewing ? "Renewing…" : "Renew"}
+                          </Button>
+                        )}
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="text-destructive hover:text-destructive"
+                          onClick={() =>
+                            setPendingDelete({
+                              id: file.id,
+                              name: file.original_filename,
+                            })
+                          }
+                          disabled={deleteFile.isPending || renewFile.isPending}
+                          aria-label={`Delete ${file.original_filename}`}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
                     </ResponsiveTableCell>
                   </ResponsiveTableRow>
-                ))}
+                  );
+                })}
               </ResponsiveTableBody>
             </ResponsiveTable>
           )}

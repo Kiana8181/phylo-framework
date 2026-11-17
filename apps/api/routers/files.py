@@ -11,7 +11,15 @@ from apps.api.config import STORAGE_QUOTA_PER_USER_BYTES
 from apps.api.database import get_db
 from apps.api.database.models import StorageState, User
 from apps.api.repositories.file_repository import FileRepository
-from apps.api.services.dataset_service import DeleteOutcome, delete_dataset
+from apps.api.services import retention
+from apps.api.services.dataset_service import (
+    APPROACHING_LIMIT,
+    DeleteOutcome,
+    RenewOutcome,
+    delete_dataset,
+    file_public_summary,
+    renew_dataset,
+)
 from apps.api.storage import get_dataset_storage
 
 router = APIRouter(prefix="/files", tags=["files"])
@@ -27,19 +35,37 @@ def storage():
     return _storage_inst
 
 
-def _file_summary(f) -> dict:
-    """Build a file summary for list responses (no internal storage paths)."""
-    state = f.storage_state.value if hasattr(f.storage_state, "value") else str(f.storage_state)
-    return {
-        "id": str(f.id),
-        "original_filename": f.original_filename,
-        "file_size": f.file_size,
-        "mime_type": f.mime_type,
-        "checksum_sha256": f.checksum_sha256,
-        "uploaded_at": f.uploaded_at.isoformat() if f.uploaded_at else None,
-        "run_id": str(f.run_id) if f.run_id else None,
-        "storage_state": state,
-    }
+def _renewal_http(result):
+    """Map a renewal result to an HTTP error, or None when the renewal succeeded."""
+    if result.outcome == RenewOutcome.RENEWED:
+        return None
+    if result.outcome == RenewOutcome.NOT_FOUND:
+        raise HTTPException(404, "Dataset not found or you do not have access to it.")
+    if result.outcome == RenewOutcome.DELETED:
+        raise HTTPException(410, "This dataset has been deleted.")
+    if result.outcome == RenewOutcome.EXPIRED:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "DATASET_EXPIRED",
+                "message": "This dataset has already expired and cannot be renewed.",
+            },
+        )
+    if result.outcome == RenewOutcome.RETENTION_OFF:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "RETENTION_DISABLED",
+                "message": "Dataset retention is off, so there is no expiration date to renew.",
+            },
+        )
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "code": "RENEWAL_NOT_DUE",
+            "message": "This dataset can be renewed only while it is inside the expiration warning window.",
+        },
+    )
 
 
 @router.get("")
@@ -58,8 +84,15 @@ async def list_files(
     files = await file_repo.get_by_user(current_user.id, skip=skip, limit=limit)
     active = [f for f in files if f.storage_state != StorageState.DELETED]
     total_bytes_used = await file_repo.get_total_size_by_user(current_user.id)
+    window = retention.effective_dataset_warning()
+    approaching = (
+        await file_repo.approaching_expiration(current_user.id, window, APPROACHING_LIMIT)
+        if window is not None
+        else []
+    )
     return {
-        "files": [_file_summary(f) for f in active],
+        "files": [file_public_summary(f) for f in active],
+        "approaching": [file_public_summary(f) for f in approaching],
         "total_bytes_used": total_bytes_used,
         "quota_bytes": STORAGE_QUOTA_PER_USER_BYTES,
     }
@@ -93,3 +126,22 @@ async def delete_file(
     if result.outcome == DeleteOutcome.ALREADY_DELETED:
         return JSONResponse(status_code=200, content={"status": "already_deleted"})
     return JSONResponse(status_code=200, content={"status": "deleted"})
+
+
+@router.post("/{file_id}/renew")
+async def renew_file(
+    file_id: UUID,
+    current_user: User = Depends(get_current_user_required),
+    db: AsyncSession = Depends(get_db),
+):
+    """Reset this dataset's expiration to a full retention period from now.
+
+    Ownership and the warning-window rule are enforced here. A dataset that
+    has expired or been deleted is not restored.
+    """
+    result = await renew_dataset(db=db, file_id=file_id, user=current_user)
+    _renewal_http(result)
+    return JSONResponse(
+        status_code=200,
+        content={"status": "renewed", "file": file_public_summary(result.file)},
+    )

@@ -144,7 +144,9 @@ administrator most often decides on:
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `RESULT_RETENTION_DAYS` | `60` | Days a run's results are kept. **They are deleted afterwards**; datasets and the run's history are not |
+| `RESULT_RETENTION_DAYS` | `60` | Days a run's results are kept. **They are deleted afterwards**; the run's history is not. Datasets follow `DATASET_RETENTION_DAYS` |
+| `DATASET_RETENTION_DAYS` | `60` | Days an uploaded dataset is kept. **The file is deleted afterwards** unless the owner renews it. `0` keeps datasets for ever |
+| `DATASET_EXPIRATION_WARNING_HOURS` | `24` | Hours before that deletion when the dashboard warns and renewal is offered. Not fixed at 24 |
 | `MAX_RUNS_PER_USER_PER_HOUR` | `5` | Runs a user may start in any 60 minutes |
 | `MAX_UPLOAD_MB` | `500` | Largest file a user may upload |
 | `RUN_TIMEOUT_SECONDS` | `86400` | Longest a run may execute |

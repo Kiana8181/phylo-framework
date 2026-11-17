@@ -409,7 +409,8 @@ def test_deleting_data_is_never_documented_without_saying_so():
 def test_the_retention_policy_is_documented_as_required():
     guide = TEXT["docs/DEPLOYMENT.md"].split("## Storage lifecycle and retention")[1].split("\n## ")[0]
     for point in ("default 60", "RESULT_RETENTION_DAYS", "fixed at the moment a run ends", "counted from the day of that deployment",
-                  "Uploaded datasets", "Never automatically", "must download", "For ever, marked"):
+                  "Uploaded datasets", "DATASET_RETENTION_DAYS", "DATASET_EXPIRATION_WARNING_HOURS",
+                  "not fixed at 24 hours", "018_dataset_retention", "must download", "For ever, marked"):
         assert point in guide, point
 
 

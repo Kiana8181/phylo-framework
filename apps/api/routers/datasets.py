@@ -11,7 +11,12 @@ from apps.api.auth.dependencies import get_current_user_required
 from apps.api.database import get_db, release_connection
 from apps.api.database.models import StorageState, User
 from apps.api.repositories.file_repository import FileRepository
-from apps.api.services.dataset_service import DeleteOutcome, delete_dataset
+from apps.api.services.dataset_service import (
+    DeleteOutcome,
+    delete_dataset,
+    file_public_summary,
+    renew_dataset,
+)
 from apps.api.services.fasta_id_style import (
     STYLE_PLAIN,
     classify_fasta_headers,
@@ -135,3 +140,20 @@ async def delete_dataset_endpoint(
     if result.outcome == DeleteOutcome.ALREADY_DELETED:
         return JSONResponse(status_code=200, content={"status": "already_deleted"})
     return JSONResponse(status_code=200, content={"status": "deleted"})
+
+
+@router.post("/{dataset_id}/renew")
+async def renew_dataset_endpoint(
+    dataset_id: UUID,
+    current_user: User = Depends(get_current_user_required),
+    db: AsyncSession = Depends(get_db),
+):
+    """Same renewal rule as ``POST /files/{id}/renew``."""
+    from apps.api.routers.files import _renewal_http
+
+    result = await renew_dataset(db=db, file_id=dataset_id, user=current_user)
+    _renewal_http(result)
+    return JSONResponse(
+        status_code=200,
+        content={"status": "renewed", "file": file_public_summary(result.file)},
+    )

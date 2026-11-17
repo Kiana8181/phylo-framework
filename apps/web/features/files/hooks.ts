@@ -32,3 +32,13 @@ export function useDeleteFile() {
     },
   });
 }
+
+export function useRenewFile() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => FilesApi.renewFile(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: FILES_LIST_QUERY_KEY });
+    },
+  });
+}

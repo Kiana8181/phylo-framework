@@ -468,6 +468,8 @@ def _constant(path: str, name: str) -> float:
 def test_documented_retention_settings_match_the_built_in_defaults():
     source = "apps/api/services/retention.py"
     assert float(_documented("RESULT_RETENTION_DAYS")) == _constant(source, "DEFAULT_RESULT_RETENTION_DAYS") == 60
+    assert float(_documented("DATASET_RETENTION_DAYS")) == _constant(source, "DEFAULT_DATASET_RETENTION_DAYS") == 60
+    assert float(_documented("DATASET_EXPIRATION_WARNING_HOURS")) == _constant(source, "DEFAULT_DATASET_WARNING_HOURS") == 24
     assert float(_documented("MAX_UPLOAD_MB")) == _constant(source, "DEFAULT_MAX_UPLOAD_MB")
     assert float(_documented("UPLOAD_SESSION_GRACE_HOURS")) == _constant(source, "DEFAULT_UPLOAD_SESSION_GRACE_HOURS")
     assert float(_documented("RETENTION_SWEEP_SECONDS")) == _constant(source, "DEFAULT_SWEEP_SECONDS")

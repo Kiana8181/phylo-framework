@@ -503,7 +503,7 @@ tested with a simulated kernel counter, not with a real kill).
 Nothing here grows without limit: results expire, unfinished uploads are
 cleaned up, method containers keep nothing of a finished job, and one upload
 has a maximum size. **This section describes automatic, permanent deletion of
-user data. Read it before changing `RESULT_RETENTION_DAYS`.**
+user data. Read it before changing `RESULT_RETENTION_DAYS` or `DATASET_RETENTION_DAYS`.**
 
 ### What is kept and for how long
 
@@ -512,7 +512,7 @@ user data. Read it before changing `RESULT_RETENTION_DAYS`.**
 | A run's result files (bundle, trees, images, tables, log) in the object store | `RESULT_RETENTION_DAYS` after the run ended (default 60) | The worker's retention task |
 | A run's trees, stored result and logs in the database | The same date | The same task, after the files are gone |
 | The run itself: method, parameters, dataset name, status, message, times | For ever, marked "results expired" | Never |
-| Uploaded datasets | Until the owner deletes them (they count against the storage quota) | **Never automatically** |
+| Uploaded datasets (the stored file) | `DATASET_RETENTION_DAYS` after upload or the last renewal (default 60), unless the owner renews again | The worker's dataset retention task |
 | Uploads that were started and never finished | `UPLOAD_SESSION_GRACE_HOURS` (default 24) | The API's upload clean-up |
 | A job's scratch data inside a method container | Until the job ends | The method service |
 | A finished job's record and log inside a method container | Until the worker has collected the result; at most `PHYLO_JOB_RETENTION_HOURS` (default 24) | The worker, or the method service itself |
@@ -525,10 +525,12 @@ that is waiting or running has none and is never touched.
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `RESULT_RETENTION_DAYS` | `60` | Days results are kept after a run ended. `0` = keep for ever (nothing is ever removed) |
+| `RESULT_RETENTION_DAYS` | `60` | Days results are kept after a run ended. `0` = keep for ever (nothing is ever removed). Does not remove datasets |
+| `DATASET_RETENTION_DAYS` | `60` | Days an uploaded dataset is kept after it is uploaded or renewed. `0` = keep datasets for ever, and renewal is unavailable. Does not remove run results |
+| `DATASET_EXPIRATION_WARNING_HOURS` | `24` | Hours before a dataset expires when the owner is warned and may renew it. The warning duration is this value; it is not fixed at 24 hours. `48` and `72` are valid. A value that is not a positive number is ignored and 24 is used. If the window is greater than or equal to the retention period, the effective window is the retention period minus one hour (or half the period when retention is shorter than an hour), so a newly uploaded dataset is not already inside the warning |
 | `MAX_UPLOAD_MB` | `500` | Largest single file a user may upload |
 | `UPLOAD_SESSION_GRACE_HOURS` | `24` | Age after which an unfinished upload is cleaned up |
-| `RETENTION_SWEEP_SECONDS` | `3600` | How often expired results and abandoned uploads are looked for |
+| `RETENTION_SWEEP_SECONDS` | `3600` | How often expired results, expired datasets and abandoned uploads are looked for |
 | `PHYLO_JOB_LOG_MAX_MB` | `5` | Largest execution log kept for a run |
 | `PHYLO_JOB_RETENTION_HOURS` | `24` | How long a method service keeps a finished job nobody collected |
 | `RUN_STAGING_TIMEOUT_SECONDS` | `1800` | See [Time limits](#time-limits) |
@@ -588,6 +590,46 @@ deleted. Running the task twice changes nothing.
 backups.** Removal is permanent. Whoever needs results for longer must download
 them before the date, or the retention period must be chosen accordingly.
 
+### Dataset expiration and renewal
+
+Uploaded datasets follow `DATASET_RETENTION_DAYS`, not `RESULT_RETENTION_DAYS`.
+A finished upload receives `files.expires_at = upload time + DATASET_RETENTION_DAYS`.
+Renewal sets `expires_at = renewal time + DATASET_RETENTION_DAYS` (a full new
+period, not an extension of the previous date). `0` stores no date and the
+worker removes nothing, including datasets whose date has already passed.
+
+The same worker loop that removes expired results also removes expired
+datasets, every `RETENTION_SWEEP_SECONDS`. For each due dataset it locks the
+row and reads the date again, leaves the dataset in place while a run is still
+queued or running, deletes the object, and only then soft-deletes the metadata
+row. The row, the run's link to it, and the run's results stay, so history
+still shows the dataset name, size and checksum. A failure to delete the object
+leaves the row active for the next sweep. Running the task twice changes
+nothing. Renewal and cleanup lock the same row, so a renewal cannot be
+overwritten by a cleanup that listed the dataset under its old date.
+
+**Datasets that already existed when this version was first deployed** and had
+no expiry date got one counted from the day of that deployment (migration
+`018_dataset_retention`), not from the day they were uploaded. No existing
+dataset is removed on upgrade day. The migration reads `DATASET_RETENTION_DAYS`
+from the environment of the container that runs it; with `0` those datasets
+get no date. A date already stored on a row is left as it is.
+
+The warning duration is `DATASET_EXPIRATION_WARNING_HOURS`. It is not fixed at
+24 hours. While `0 < time remaining <= that window`, the file panel shows the
+expiration highlighted and a Renew action, and the dashboard shows a warning
+naming the dataset, its expiration, that it will be deleted, and a link to
+File management. The API returns `renewal_eligible`; the browser does not
+decide the window itself. Outside the window renewal is rejected. An expired
+or deleted dataset cannot be renewed, and renewal does not restore a file that
+was already removed. When the warning window is greater than or equal to the
+retention period, the effective window is shortened as described in the
+settings table above, and the worker logs that it did so.
+
+The owner of a dataset is the only account that can renew it. Dismissing the
+dashboard warning hides it for the rest of that browser session; it is shown
+again on a later visit for as long as the dataset is still inside the window.
+
 ### Uploads
 
 A file larger than `MAX_UPLOAD_MB` is refused with `413` and
@@ -602,7 +644,7 @@ uploads fail at the proxy with an error the application cannot explain.
 An upload that was started and not finished (closed tab, lost connection, API
 restart) leaves a partial file in the API container's temporary directory.
 These are removed once they are older than `UPLOAD_SESSION_GRACE_HOURS`.
-Finished uploads are datasets and are not touched.
+Finished uploads become datasets. This clean-up does not touch them; dataset retention removes them on their own date.
 
 ### Execution logs
 

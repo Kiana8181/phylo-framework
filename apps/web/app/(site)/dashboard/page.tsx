@@ -17,12 +17,13 @@ import {
   type TrySampleIntent,
 } from "@/features/docs/sample";
 import { FilesApi } from "@/features/files/api";
-import { FILES_LIST_QUERY_KEY } from "@/features/files/hooks";
+import { FILES_LIST_QUERY_KEY, useFilesList } from "@/features/files/hooks";
 import { useContractSpec, useMethods } from "@/features/methods/hooks";
 import { RunsApi } from "@/features/runs/api";
 import { useCancelQueuedRun, useDashboardRuns, useRunQuota, useRunResult, useRunStatus } from "@/features/runs/hooks";
 import RunQuotaNotice from "@/components/phylo/RunQuotaNotice";
 import ResultRetentionNotice from "@/components/phylo/ResultRetentionNotice";
+import DatasetExpirationNotice from "@/components/phylo/DatasetExpirationNotice";
 import { useUploadSession } from "@/features/uploads/hooks";
 import { notify } from "@/lib/notify";
 import { formatRunDuration } from "@/lib/runDuration";
@@ -312,6 +313,11 @@ function QueueRow({
 // --------------------------------------------------------------------------- //
 // Live dashboard surface — form-or-list. Never renders inline results.
 // --------------------------------------------------------------------------- //
+function DatasetExpiryBanner() {
+  const { data } = useFilesList({ limit: 1 });
+  return <DatasetExpirationNotice datasets={data?.approaching ?? []} />;
+}
+
 function LiveDashboard({ onViewResults }: { onViewResults: (runId: string) => void }) {
   const { data: methods } = useMethods();
   const methodsById = useMethodsById();
@@ -478,6 +484,7 @@ function LiveDashboard({ onViewResults }: { onViewResults: (runId: string) => vo
     return (
       <main className="mx-auto max-w-6xl w-full p-4 sm:p-6 space-y-6 sm:space-y-8">
         {header}
+        <DatasetExpiryBanner />
         {preparingSample ? (
           preparingSampleCard
         ) : (
@@ -498,6 +505,7 @@ function LiveDashboard({ onViewResults }: { onViewResults: (runId: string) => vo
   return (
     <main className="mx-auto max-w-6xl w-full p-4 sm:p-6 space-y-6 sm:space-y-8">
       {header}
+      <DatasetExpiryBanner />
 
       {/* Active turn */}
       {active && active.status === "RUNNING" && active.run_id && (

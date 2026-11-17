@@ -39,6 +39,8 @@ describe('privacy policy', () => {
   it('promises the retention period the application is configured with', () => {
     const example = fs.readFileSync(path.resolve(__dirname, '../../../../../.env.example'), 'utf8');
     expect(example).toMatch(new RegExp(`^RESULT_RETENTION_DAYS=${LEGAL.resultRetentionDays}$`, 'm'));
+    expect(example).toMatch(new RegExp(`^DATASET_RETENTION_DAYS=${LEGAL.datasetRetentionDays}$`, 'm'));
+    expect(example).toMatch(new RegExp(`^DATASET_EXPIRATION_WARNING_HOURS=${LEGAL.datasetWarningHours}$`, 'm'));
   });
 });
 

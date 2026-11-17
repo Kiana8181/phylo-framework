@@ -24,6 +24,7 @@ from apps.api.repositories.upload_session_repository import UploadSessionReposit
 from apps.api.security.errors import internal_error
 from apps.api.services import retention
 from apps.api.storage import get_dataset_storage
+from apps.api.utils.datetime_util import utc_now
 
 router = APIRouter(prefix="/uploads", tags=["uploads"])
 
@@ -236,6 +237,7 @@ async def upload_content(
         raise internal_error("Failed to store upload.", exc, context=f"upload_id={upload_id}")
 
     storage_url = await storage().get_url(final_storage_path)
+    expires_at = retention.dataset_expires_at(utc_now())
     file_record = await file_repo.create_file(
         user_id=current_user.id,
         original_filename=session.original_filename,
@@ -246,6 +248,7 @@ async def upload_content(
         mime_type=session.mime_type,
         storage_bucket=storage().bucket,
         checksum_sha256=checksum_sha256,
+        expires_at=expires_at,
     )
     await repo.mark_completed(
         upload_id, final_file_id=file_record.id, bytes_received=bytes_received
@@ -258,6 +261,7 @@ async def upload_content(
         "file_size": file_record.file_size,
         "mime_type": file_record.mime_type,
         "storage_url": file_record.storage_url,
+        "expires_at": file_record.expires_at.isoformat() if file_record.expires_at else None,
     }
 
 

@@ -114,10 +114,16 @@ export type FileSummary = {
   uploaded_at: string | null;
   run_id: string | null;
   storage_url?: string | null;
+  /** When the stored file is removed automatically. Null when retention is off. ISO 8601 UTC. */
+  expires_at?: string | null;
+  /** True when the backend says the owner may renew this dataset right now. */
+  renewal_eligible?: boolean;
 };
 
 export type FilesListResponse = {
   files: FileSummary[];
+  /** Datasets inside the warning window, independent of the current page. */
+  approaching?: FileSummary[];
   total_bytes_used: number;
   quota_bytes: number;
 };

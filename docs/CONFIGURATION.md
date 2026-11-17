@@ -192,10 +192,12 @@ before changing it.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `RESULT_RETENTION_DAYS` | `60` | Days a run's result files, trees and logs are kept after it ended. The run itself stays in the history. Datasets are not removed. `0` = keep for ever |
+| `RESULT_RETENTION_DAYS` | `60` | Days a run's result files, trees and logs are kept after it ended. The run itself stays in the history. This setting does not remove datasets. `0` = keep for ever |
+| `DATASET_RETENTION_DAYS` | `60` | Days an uploaded dataset is kept after upload or renewal. The file is removed; the run history keeps the dataset name, size and checksum. `0` = keep for ever. See [Storage lifecycle and retention](./DEPLOYMENT.md#storage-lifecycle-and-retention) |
+| `DATASET_EXPIRATION_WARNING_HOURS` | `24` | Hours before dataset expiration when the dashboard warning and the renewal action appear. Not fixed at 24: any positive number is valid (for example 48 or 72). A non-positive or non-numeric value uses 24. If the window is at least as long as `DATASET_RETENTION_DAYS`, it is shortened to the retention period minus one hour, or to half the period when retention is under an hour. Ignored when dataset retention is off |
 | `MAX_UPLOAD_MB` | `500` | Largest single file a user may upload. The reverse proxy must accept request bodies at least this large |
 | `UPLOAD_SESSION_GRACE_HOURS` | `24` | Age after which an unfinished upload is cleaned up |
-| `RETENTION_SWEEP_SECONDS` | `3600` | How often expired results and abandoned uploads are looked for |
+| `RETENTION_SWEEP_SECONDS` | `3600` | How often expired results, expired datasets and abandoned uploads are looked for |
 | `PHYLO_JOB_LOG_MAX_MB` | `5` | Largest execution log kept for a run |
 | `PHYLO_JOB_RETENTION_HOURS` | `24` | How long a method service keeps a finished job nobody collected |
 

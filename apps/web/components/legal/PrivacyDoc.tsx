@@ -14,7 +14,7 @@ const GOOGLE_CONNECTIONS_URL = "https://myaccount.google.com/permissions";
 const HIGHLIGHTS = [
   "With Google sign-in, we store only your email address. Your name, picture and Google tokens are not kept.",
   "We do not sell your data, show ads, use analytics or tracking tools, or train AI models on your data.",
-  `Run results are deleted ${LEGAL.resultRetentionDays} days after a run ends. Your datasets stay until you delete them.`,
+  `Run results are deleted ${LEGAL.resultRetentionDays} days after a run ends. Datasets are deleted ${LEGAL.datasetRetentionDays} days after upload unless you renew them (you are warned ${LEGAL.datasetWarningHours} hours before, and that warning period is configurable).`,
   "You can ask us to delete your account and all of its data at any time.",
 ];
 
@@ -114,7 +114,7 @@ const SECTIONS: LegalSection[] = [
             [
               "Datasets: the files you upload, with their names, sizes and checksums",
               "To run the methods you choose",
-              "Until you delete them. A deleted file is removed from storage; its name, size and checksum stay in your run history until your account is deleted",
+              `Until you delete them, or ${LEGAL.datasetRetentionDays} days after upload or the last renewal. You are warned ${LEGAL.datasetWarningHours} hours before automatic deletion and can renew the dataset for another full period. A deleted file is removed from storage; its name, size and checksum stay in your run history until your account is deleted`,
             ],
             [
               "Unfinished uploads",

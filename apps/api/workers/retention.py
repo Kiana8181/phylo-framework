@@ -31,6 +31,7 @@ from apps.api.repositories.artifact_repository import ArtifactRepository
 from apps.api.repositories.run_repository import RunRepository
 from apps.api.services import retention
 from apps.api.storage import get_artifact_storage
+from apps.api.workers import dataset_retention
 
 logger = logging.getLogger("phylo.api.retention")
 
@@ -97,9 +98,21 @@ async def retention_loop(stop: Optional[asyncio.Event] = None) -> None:
         logger.info("result retention: %g days after a run ends", days)
     else:
         logger.warning("result retention is off (RESULT_RETENTION_DAYS=0): results are never removed")
+    dataset_days = retention.dataset_retention_days()
+    if dataset_days > 0:
+        window = retention.effective_dataset_warning()
+        logger.info("dataset retention: %g days after upload or renewal, warning %s", dataset_days, window)
+    else:
+        logger.warning("dataset retention is off (DATASET_RETENTION_DAYS=0): datasets are never removed")
     while stop is None or not stop.is_set():
         try:
             await sweep()
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+        try:
+            await dataset_retention.sweep()
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001

@@ -1,6 +1,6 @@
 import { API_ROUTES } from "@phylo/contracts";
 import { serviceHandler, Method } from "@/lib/http/serviceHandler";
-import type { FilesListResponse } from "@phylo/contracts";
+import type { FileSummary, FilesListResponse } from "@phylo/contracts";
 import type { FastaIdStyle } from "@/lib/fastaIdStyle";
 
 export type FastaIdStyleResponse = {
@@ -30,6 +30,13 @@ export const FilesApi = {
     await serviceHandler<void>({
       method: Method.Delete,
       url: API_ROUTES.filesDelete(id),
+    });
+  },
+
+  async renewFile(id: string): Promise<{ status: string; file: FileSummary }> {
+    return serviceHandler({
+      method: Method.Post,
+      url: API_ROUTES.filesRenew(id),
     });
   },
 };

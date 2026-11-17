@@ -8,7 +8,7 @@ const GOOGLE_TERMS_URL = "https://policies.google.com/terms";
 const HIGHLIGHTS = [
   "The service is for research. Do not use its results to make clinical or diagnostic decisions.",
   "Your data stays yours. Upload only data you are allowed to use, and remove anything that directly identifies a person.",
-  `Download what you need: results are deleted ${LEGAL.resultRetentionDays} days after a run ends, and backups are not guaranteed.`,
+  `Download what you need: results are deleted ${LEGAL.resultRetentionDays} days after a run ends, datasets ${LEGAL.datasetRetentionDays} days after upload unless you renew them, and backups are not guaranteed.`,
   "The service is provided as is, on shared computing resources with usage limits.",
 ];
 
@@ -145,9 +145,11 @@ const SECTIONS: LegalSection[] = [
         </p>
         <p>
           <strong>Results are deleted {LEGAL.resultRetentionDays} days after a run ends</strong>; the
-          date is shown with the run. Removal is permanent. Datasets remain until you delete them or
-          your account ends. The service does not guarantee backups, so keep your own copies of
-          anything important.
+          date is shown with the run. <strong>Datasets are deleted {LEGAL.datasetRetentionDays} days
+          after you upload them</strong> unless you renew them from File management. Renewal is
+          offered during the {LEGAL.datasetWarningHours} hours before expiration; that warning period
+          is a deployment setting and is not fixed at 24 hours. Removal is permanent. The service
+          does not guarantee backups, so keep your own copies of anything important.
         </p>
       </>
     ),

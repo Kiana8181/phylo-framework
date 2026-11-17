@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from typing import List, Optional
 from uuid import UUID
 
@@ -35,6 +36,7 @@ class FileRepository(BaseRepository[File]):
         run_id: Optional[UUID] = None,
         storage_bucket: Optional[str] = None,
         checksum_sha256: Optional[str] = None,
+        expires_at: Optional[datetime] = None,
     ) -> File:
         """Create a new file record."""
         return await self.create(
@@ -48,6 +50,7 @@ class FileRepository(BaseRepository[File]):
             mime_type=mime_type,
             storage_bucket=storage_bucket,
             checksum_sha256=checksum_sha256,
+            expires_at=expires_at,
         )
 
     async def get_by_run(self, run_id: UUID) -> List[File]:
@@ -159,3 +162,69 @@ class FileRepository(BaseRepository[File]):
         storage_path = file.storage_path
         await self.delete(file_id)
         return storage_path
+
+    async def datasets_due_for_expiry(self, limit: int) -> List[UUID]:
+        """Active datasets whose expiration timestamp has passed, oldest first."""
+        result = await self.session.execute(
+            select(File.id)
+            .where(
+                File.storage_state == StorageState.ACTIVE,
+                File.expires_at.isnot(None),
+                File.expires_at < func.now(),
+            )
+            .order_by(File.expires_at.asc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    async def lock_due_for_expiry(self, file_id: UUID) -> Optional[File]:
+        """Lock one due dataset. ``None`` if it is no longer due or another worker holds it.
+
+        ``SKIP LOCKED`` lets a concurrent renewal or a second sweep proceed
+        without waiting: the caller treats ``None`` as "try again later" only
+        when the row is locked, and as "not due" when the date has moved.
+        """
+        result = await self.session.execute(
+            select(File)
+            .where(
+                File.id == file_id,
+                File.storage_state == StorageState.ACTIVE,
+                File.expires_at.isnot(None),
+                File.expires_at < func.now(),
+            )
+            .with_for_update(skip_locked=True)
+            .execution_options(populate_existing=True)
+        )
+        return result.scalar_one_or_none()
+
+    async def lock_owned(self, file_id: UUID, user_id: UUID) -> Optional[File]:
+        """Lock a dataset the user owns. Waits if cleanup currently holds the row."""
+        result = await self.session.execute(
+            select(File)
+            .where(File.id == file_id, File.user_id == user_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        return result.scalar_one_or_none()
+
+    async def approaching_expiration(
+        self,
+        user_id: UUID,
+        window: timedelta,
+        limit: int,
+    ) -> List[File]:
+        """Active datasets of ``user_id`` that expire inside ``window`` but not yet."""
+        now = func.now()
+        result = await self.session.execute(
+            select(File)
+            .where(
+                File.user_id == user_id,
+                File.storage_state == StorageState.ACTIVE,
+                File.expires_at.isnot(None),
+                File.expires_at > now,
+                File.expires_at <= now + window,
+            )
+            .order_by(File.expires_at.asc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
